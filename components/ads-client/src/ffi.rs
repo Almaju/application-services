@@ -12,8 +12,7 @@ use crate::client::ad_response::{
     AdCallbacks, AdImage, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking,
 };
 use crate::client::config::{AdsCacheConfig, AdsClientConfig, Environment};
-use crate::client::AdsClient;
-use crate::client::ReportReason;
+use crate::client::{AdsClient, ContextIdProvider, ReportReason};
 use crate::error::ComponentError;
 use crate::ffi::telemetry::MozAdsTelemetryWrapper;
 use crate::http_cache::{CacheMode, RequestCachePolicy};
@@ -32,14 +31,6 @@ pub enum MozAdsClientApiError {
     Other { reason: String },
 }
 
-impl From<context_id::ApiError> for MozAdsClientApiError {
-    fn from(err: context_id::ApiError) -> Self {
-        MozAdsClientApiError::Other {
-            reason: err.to_string(),
-        }
-    }
-}
-
 impl GetErrorHandling for ComponentError {
     type ExternalError = MozAdsClientApiError;
 
@@ -47,6 +38,27 @@ impl GetErrorHandling for ComponentError {
         ErrorHandling::convert(MozAdsClientApiError::Other {
             reason: self.to_string(),
         })
+    }
+}
+
+// TODO: Temporary workaround for HNT requirements — do not use for new integrations.
+// Context ID management should remain internal to the ads client and this interface should be removed.
+#[uniffi::export(with_foreign)]
+pub trait MozAdsContextIdProvider: Send + Sync {
+    fn context_id(&self) -> String;
+}
+
+struct MozAdsContextIdProviderWrapper(Arc<dyn MozAdsContextIdProvider>);
+
+impl MozAdsContextIdProviderWrapper {
+    fn new(provider: Arc<dyn MozAdsContextIdProvider>) -> Box<dyn ContextIdProvider> {
+        Box::new(Self(provider))
+    }
+}
+
+impl ContextIdProvider for MozAdsContextIdProviderWrapper {
+    fn context_id(&self) -> context_id::ApiResult<String> {
+        Ok(self.0.context_id())
     }
 }
 
@@ -97,10 +109,10 @@ pub struct MozAdsClientBuilder(Mutex<MozAdsClientBuilderInner>);
 
 #[derive(Default)]
 struct MozAdsClientBuilderInner {
-    environment: Option<MozAdsEnvironment>,
     cache_config: Option<MozAdsCacheConfig>,
+    context_id_provider: Option<Arc<dyn MozAdsContextIdProvider>>,
+    environment: Option<MozAdsEnvironment>,
     telemetry: Option<Arc<dyn MozAdsTelemetry>>,
-    rotation_days: Option<u8>,
 }
 
 impl Default for MozAdsClientBuilder {
@@ -116,13 +128,21 @@ impl MozAdsClientBuilder {
         Self::default()
     }
 
-    pub fn environment(self: Arc<Self>, environment: MozAdsEnvironment) -> Arc<Self> {
-        self.0.lock().environment = Some(environment);
+    pub fn cache_config(self: Arc<Self>, cache_config: MozAdsCacheConfig) -> Arc<Self> {
+        self.0.lock().cache_config = Some(cache_config);
         self
     }
 
-    pub fn cache_config(self: Arc<Self>, cache_config: MozAdsCacheConfig) -> Arc<Self> {
-        self.0.lock().cache_config = Some(cache_config);
+    pub fn context_id_provider(
+        self: Arc<Self>,
+        provider: Arc<dyn MozAdsContextIdProvider>,
+    ) -> Arc<Self> {
+        self.0.lock().context_id_provider = Some(provider);
+        self
+    }
+
+    pub fn environment(self: Arc<Self>, environment: MozAdsEnvironment) -> Arc<Self> {
+        self.0.lock().environment = Some(environment);
         self
     }
 
@@ -131,22 +151,20 @@ impl MozAdsClientBuilder {
         self
     }
 
-    pub fn rotation_days(self: Arc<Self>, rotation_days: u8) -> Arc<Self> {
-        self.0.lock().rotation_days = Some(rotation_days);
-        self
-    }
-
     pub fn build(&self) -> MozAdsClient {
         let inner = self.0.lock();
         let client_config = AdsClientConfig {
-            environment: inner.environment.unwrap_or_default().into(),
             cache_config: inner.cache_config.clone().map(Into::into),
+            context_id_provider: inner
+                .context_id_provider
+                .clone()
+                .map(MozAdsContextIdProviderWrapper::new),
+            environment: inner.environment.unwrap_or_default().into(),
             telemetry: inner
                 .telemetry
                 .clone()
                 .map(MozAdsTelemetryWrapper::new)
                 .unwrap_or_else(MozAdsTelemetryWrapper::noop),
-            rotation_days: inner.rotation_days,
         };
         let client = AdsClient::new(client_config);
         MozAdsClient {

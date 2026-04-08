@@ -38,6 +38,7 @@ ads_client:
       The string value contains the error message or error type. Errors are
       recorded even if they are propagated to the consumer.
     labels:
+      - context_id
       - record_click
       - record_impression
       - report_ad

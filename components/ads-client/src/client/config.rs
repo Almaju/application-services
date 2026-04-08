@@ -18,10 +18,10 @@ pub struct AdsClientConfig<T>
 where
     T: Telemetry,
 {
-    pub environment: Environment,
     pub cache_config: Option<AdsCacheConfig>,
+    pub context_id_provider: Option<Box<dyn super::ContextIdProvider>>,
+    pub environment: Environment,
     pub telemetry: T,
-    pub rotation_days: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

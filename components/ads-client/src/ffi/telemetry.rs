@@ -115,6 +115,11 @@ impl Telemetry for MozAdsTelemetryWrapper {
                 .record_client_error("request_ads".to_string(), format!("{}", request_ads_error));
             return;
         }
+        if let Some(context_id_error) = event.downcast_ref::<context_id::ApiError>() {
+            self.inner
+                .record_client_error("context_id".to_string(), format!("{}", context_id_error));
+            return;
+        }
         if let Some(json_error) = event.downcast_ref::<serde_json::Error>() {
             self.inner.record_deserialization_error(
                 "invalid_ad_item".to_string(),
