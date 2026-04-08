@@ -51,7 +51,7 @@ pub trait MozAdsContextIdProvider: Send + Sync {
 struct MozAdsContextIdProviderWrapper(Arc<dyn MozAdsContextIdProvider>);
 
 impl MozAdsContextIdProviderWrapper {
-    fn new(provider: Arc<dyn MozAdsContextIdProvider>) -> Box<dyn ContextIdProvider> {
+    fn wrap(provider: Arc<dyn MozAdsContextIdProvider>) -> Box<dyn ContextIdProvider> {
         Box::new(Self(provider))
     }
 }
@@ -158,7 +158,7 @@ impl MozAdsClientBuilder {
             context_id_provider: inner
                 .context_id_provider
                 .clone()
-                .map(MozAdsContextIdProviderWrapper::new),
+                .map(MozAdsContextIdProviderWrapper::wrap),
             environment: inner.environment.unwrap_or_default().into(),
             telemetry: inner
                 .telemetry
