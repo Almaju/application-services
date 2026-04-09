@@ -44,4 +44,10 @@ cargo test -p ads-client-integration-tests --test mars test_contract_image_stagi
 
 ## Usage
 
-Please refer to `./docs/usage.md` for information on using the component.
+Please refer to `./docs/usage.md` for the API reference and type documentation.
+
+Language-specific guides with code examples:
+
+- [Swift](./docs/usage-swift.md)
+- [Kotlin](./docs/usage-kotlin.md)
+- [JavaScript](./docs/usage-javascript.md)

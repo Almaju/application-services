@@ -5,6 +5,14 @@
 This document lists the Rust types and functions exposed via UniFFI by the `ads_client` component.
 It only includes items that are part of the UniFFI surface. This document is aimed at users of the ads-client who want to know what is available to them.
 
+## Language-Specific Guides
+
+For concrete code examples in each supported language, see:
+
+- [Swift](./usage-swift.md)
+- [Kotlin](./usage-kotlin.md)
+- [JavaScript](./usage-javascript.md)
+
 ---
 
 ## `MozAdsClient`
@@ -19,33 +27,7 @@ pub struct MozAdsClient {
 
 #### Creating a Client
 
-Use the `MozAdsClientBuilder` to configure and create the client. The builder provides a fluent API for setting configuration options.
-
-**Swift:**
-```swift
-let client = MozAdsClientBuilder()
-    .environment(environment: .prod)
-    .cacheConfig(cacheConfig: cache)
-    .telemetry(telemetry: telemetry)
-    .build()
-```
-
-**Kotlin:**
-```kotlin
-val client = MozAdsClientBuilder()
-    .environment(MozAdsEnvironment.PROD)
-    .cacheConfig(cache)
-    .telemetry(telemetry)
-    .build()
-```
-
-**Rust:**
-```rust
-let client = MozAdsClientBuilder::new()
-    .environment(MozAdsEnvironment::Prod)
-    .cache_config(cache_config)
-    .build();
-```
+Use the `MozAdsClientBuilder` to configure and create the client. The builder provides a fluent API for setting configuration options. See the language-specific guides linked above for examples.
 
 #### Methods
 
@@ -106,67 +88,7 @@ pub trait MozAdsTelemetry: Send + Sync {
 }
 ```
 
-### Implementing Telemetry
-
-To enable telemetry collection, you need to implement the `MozAdsTelemetry` interface and provide an instance to the `MozAdsClientBuilder` constructor. The following examples show how to bind Glean metrics to the telemetry interface.
-
-#### Swift Example
-
-```swift
-import MozillaRustComponents
-import Glean
-
-public final class AdsClientTelemetry: MozAdsTelemetry {
-    public func recordBuildCacheError(label: String, value: String) {
-        AdsClientMetrics.buildCacheError[label].set(value)
-    }
-
-    public func recordClientError(label: String, value: String) {
-        AdsClientMetrics.clientError[label].set(value)
-    }
-
-    public func recordClientOperationTotal(label: String) {
-        AdsClientMetrics.clientOperationTotal[label].add()
-    }
-
-    public func recordDeserializationError(label: String, value: String) {
-        AdsClientMetrics.deserializationError[label].set(value)
-    }
-
-    public func recordHttpCacheOutcome(label: String, value: String) {
-        AdsClientMetrics.httpCacheOutcome[label].set(value)
-    }
-}
-```
-
-#### Kotlin Example
-
-```kotlin
-import mozilla.appservices.adsclient.MozAdsTelemetry
-import org.mozilla.appservices.ads_client.GleanMetrics.AdsClient
-
-class AdsClientTelemetry : MozAdsTelemetry {
-    override fun recordBuildCacheError(label: String, value: String) {
-        AdsClient.buildCacheError[label].set(value)
-    }
-
-    override fun recordClientError(label: String, value: String) {
-        AdsClient.clientError[label].set(value)
-    }
-
-    override fun recordClientOperationTotal(label: String) {
-        AdsClient.clientOperationTotal[label].add()
-    }
-
-    override fun recordDeserializationError(label: String, value: String) {
-        AdsClient.deserializationError[label].set(value)
-    }
-
-    override fun recordHttpCacheOutcome(label: String, value: String) {
-        AdsClient.httpCacheOutcome[label].set(value)
-    }
-}
-```
+See the language-specific guides for implementation examples.
 
 ---
 
@@ -500,57 +422,13 @@ If the effective TTL resolves to 0 seconds, the response is not cached.
 
 ### Configuring The Cache
 
-#### Example Client Configuration
+See the language-specific guides for full configuration examples:
 
-```swift
-// Swift example
-let cache = MozAdsCacheConfig(
-    dbPath: "/tmp/ads_cache.sqlite",
-    defaultCacheTtlSeconds: 600,   // 10 min
-    maxSizeMib: 20                 // 20 MiB
-)
-
-let telemetry = AdsClientTelemetry()
-
-let client = MozAdsClientBuilder()
-    .environment(environment: .prod)
-    .cacheConfig(cacheConfig: cache)
-    .telemetry(telemetry: telemetry)
-    .build()
-```
-
-```kotlin
-// Kotlin example
-val cache = MozAdsCacheConfig(
-    dbPath = "/tmp/ads_cache.sqlite",
-    defaultCacheTtlSeconds = 600L,   // 10 min
-    maxSizeMib = 20L                 // 20 MiB
-)
-
-val telemetry = AdsClientTelemetry()
-
-val client = MozAdsClientBuilder()
-    .environment(MozAdsEnvironment.PROD)
-    .cacheConfig(cache)
-    .telemetry(telemetry)
-    .build()
-```
+- [Swift](./usage-swift.md)
+- [Kotlin](./usage-kotlin.md)
+- [JavaScript](./usage-javascript.md)
 
 Where `db_path` represents the location of the SQLite file. This must be a file that the client has permission to write to.
-
-#### Example Request Policy Override
-
-Assuming you have at least initialized the client with a `db_path`, individual requests can override caching behavior. However, recall the minimum TTL is always respected. So this override will only provide a new ttl floor.
-
-```rust
-// Always fetch from network but only cache for 60 seconds
-let options = MozAdsRequestOptions(
-    cachePolicy: MozAdsRequestCachePolicy(mode: .networkFirst, ttlSeconds: 60)
-)
-
-// Use it when requesting ads
-let placements = client.requestImageAds(configs, options: options)
-```
 
 ### Cache Invalidation
 
@@ -559,13 +437,7 @@ let placements = client.requestImageAds(configs, options: options)
 At the start of each send, the cache computes a cutoff from chrono::Utc::now() - ttl and deletes rows older than that. This is a coarse, global freshness window that bounds how long entries can live.
 
 **Size-based trimming (automatic):**
-After storing a cacheable miss, the cache enforces max_size by deleting the oldest rows until the total stored size is ≤ the maximum allowed size of the cache. Due to the small size of items in the cache and the relatively short TTL, this behavior should be rare.
+After storing a cacheable miss, the cache enforces max_size by deleting the oldest rows until the total stored size is <= the maximum allowed size of the cache. Due to the small size of items in the cache and the relatively short TTL, this behavior should be rare.
 
 **Manual clearing (explicit):**
 The cache can be manually cleared by the client using the exposed `client.clear_cache()` method. This clears _all_ objects in the cache.
-
----
-
-### Example Usage
-
-Under construction

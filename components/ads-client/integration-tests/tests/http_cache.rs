@@ -6,7 +6,7 @@
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use ads_client::http_cache::{ByteSize, CacheMode, CacheOutcome, HttpCache, RequestCachePolicy};
+use ads_client::http_cache::{ByteSize, CacheOutcome, CachePolicy, HttpCache};
 use mockito::mock;
 use viaduct::Request;
 
@@ -62,9 +62,8 @@ fn test_cache_works_using_real_timeouts() {
     let (_, outcomes) = cache
         .send_with_policy(
             req.clone(),
-            &RequestCachePolicy {
-                mode: CacheMode::CacheFirst,
-                ttl_seconds: Some(test_ttl),
+            &CachePolicy::CacheFirst {
+                ttl: Some(Duration::from_secs(test_ttl)),
             },
         )
         .unwrap();
@@ -72,7 +71,7 @@ fn test_cache_works_using_real_timeouts() {
 
     // Second call: hit (no extra HTTP due to expect(1))
     let (response, outcomes) = cache
-        .send_with_policy(req.clone(), &RequestCachePolicy::default())
+        .send_with_policy(req.clone(), &CachePolicy::default())
         .unwrap();
     assert!(matches!(outcomes.last().unwrap(), CacheOutcome::Hit));
     assert_eq!(response.status, 200);
@@ -87,7 +86,7 @@ fn test_cache_works_using_real_timeouts() {
     // Third call: Miss due to timeout for the test_ttl duration
     std::thread::sleep(Duration::from_secs(test_ttl));
     let (response, outcomes) = cache
-        .send_with_policy(req, &RequestCachePolicy::default())
+        .send_with_policy(req, &CachePolicy::default())
         .unwrap();
     assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
     assert_eq!(response.status, 200);

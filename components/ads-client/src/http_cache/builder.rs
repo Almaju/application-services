@@ -12,7 +12,7 @@ use sql_support::open_database;
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::time::Duration;
-use viaduct::Request;
+use viaduct::{Client, ClientSettings, Request};
 
 const DEFAULT_MAX_SIZE: ByteSize = ByteSize::mib(10);
 const DEFAULT_TTL: Duration = Duration::from_secs(300);
@@ -118,9 +118,10 @@ impl<T: Hash + Into<Request>> HttpCacheBuilder<T> {
         let default_ttl = self.default_ttl.unwrap_or(DEFAULT_TTL);
 
         Ok(HttpCache {
+            client: Client::new(ClientSettings::default()),
+            default_ttl,
             max_size,
             store,
-            default_ttl,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -135,9 +136,10 @@ impl<T: Hash + Into<Request>> HttpCacheBuilder<T> {
         let default_ttl = self.default_ttl.unwrap_or(DEFAULT_TTL);
 
         Ok(HttpCache {
+            client: Client::new(ClientSettings::default()),
+            default_ttl,
             max_size,
             store,
-            default_ttl,
             _phantom: std::marker::PhantomData,
         })
     }
