@@ -44,10 +44,10 @@ cargo test -p ads-client-integration-tests --test mars test_contract_image_stagi
 
 ## Usage
 
-Please refer to `./docs/usage.md` for the API reference and type documentation.
-
-Language-specific guides with code examples:
+Full API reference and usage guides for each supported language:
 
 - [Swift](./docs/usage-swift.md)
 - [Kotlin](./docs/usage-kotlin.md)
 - [JavaScript](./docs/usage-javascript.md)
+
+Each guide is a complete standalone document containing all type definitions, API tables, cache behavior documentation, and code examples in that language.
