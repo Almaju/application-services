@@ -39,6 +39,7 @@ android {
 
 dependencies {
     implementation libs.mozilla.glean
+    implementation libs.kotlinx.coroutines
 
     testImplementation libs.mozilla.glean.forUnitTests
 }

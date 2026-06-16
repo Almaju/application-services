@@ -4,6 +4,10 @@
 */
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use client::error::ComponentError;
 use error_support::handle_error;
@@ -14,12 +18,14 @@ use url::Url as AdsClientUrl;
 use client::AdsClient;
 use http_cache::CachePolicy;
 use mars::ad_request::AdPlacementRequest;
+use worker::Command;
 
 mod client;
 mod ffi;
 pub mod http_cache;
 mod mars;
 pub mod telemetry;
+mod worker;
 
 pub use ffi::*;
 
@@ -38,11 +44,79 @@ uniffi::custom_type!(AdsClientUrl, String, {
 
 #[derive(uniffi::Object)]
 pub struct MozAdsClient {
-    inner: Mutex<AdsClient<MozAdsTelemetryWrapper>>,
+    inner: Arc<Mutex<AdsClient<MozAdsTelemetryWrapper>>>,
+    command_tx: Mutex<Sender<Command>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    next_sub_id: AtomicU64,
+}
+
+impl MozAdsClient {
+    /// Build a client around an already-constructed `AdsClient` and start its
+    /// background worker thread.
+    pub(crate) fn spawn(inner: Arc<Mutex<AdsClient<MozAdsTelemetryWrapper>>>) -> Self {
+        let (command_tx, handle) = worker::spawn(inner.clone());
+        Self {
+            inner,
+            command_tx: Mutex::new(command_tx),
+            worker: Mutex::new(Some(handle)),
+            next_sub_id: AtomicU64::new(0),
+        }
+    }
+
+    fn subscribe(&self, placement_id: String, sink: worker::Sink) -> Arc<MozAdsSubscription> {
+        let id = self.next_sub_id.fetch_add(1, Ordering::Relaxed);
+        let command_tx = self.command_tx.lock().clone();
+        let _ = command_tx.send(Command::Subscribe {
+            id,
+            placement_id,
+            sink,
+        });
+        Arc::new(MozAdsSubscription::new(id, command_tx))
+    }
+}
+
+impl Drop for MozAdsClient {
+    fn drop(&mut self) {
+        let _ = self.command_tx.lock().send(Command::Shutdown);
+        if let Some(handle) = self.worker.lock().take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[uniffi::export]
 impl MozAdsClient {
+    /// Subscribe to a placement's tile ad and receive a live stream of updates.
+    ///
+    /// The returned [`MozAdsSubscription`] is the teardown handle the native
+    /// `Flow` / `AsyncStream` wrappers drive; surfaces use those wrappers rather
+    /// than calling this directly.
+    pub fn subscribe_tile_ad(
+        &self,
+        placement_id: String,
+        subscriber: Arc<dyn MozAdsTileSubscriber>,
+    ) -> Arc<MozAdsSubscription> {
+        self.subscribe(placement_id, worker::Sink::Tile(subscriber))
+    }
+
+    /// Subscribe to a placement's image ad. See [`Self::subscribe_tile_ad`].
+    pub fn subscribe_image_ad(
+        &self,
+        placement_id: String,
+        subscriber: Arc<dyn MozAdsImageSubscriber>,
+    ) -> Arc<MozAdsSubscription> {
+        self.subscribe(placement_id, worker::Sink::Image(subscriber))
+    }
+
+    /// Subscribe to a placement's spoc ads. See [`Self::subscribe_tile_ad`].
+    pub fn subscribe_spoc_ads(
+        &self,
+        placement_id: String,
+        subscriber: Arc<dyn MozAdsSpocSubscriber>,
+    ) -> Arc<MozAdsSubscription> {
+        self.subscribe(placement_id, worker::Sink::Spoc(subscriber))
+    }
+
     pub fn clear_cache(&self) -> AdsClientApiResult<()> {
         let inner = self.inner.lock();
         inner

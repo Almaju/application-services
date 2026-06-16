@@ -1,5 +1,10 @@
 # v153.0 (In progress)
 
+## ✨ What's New ✨
+
+### Ads Client
+* (Experimental, POC) Reactive subscribe API: `subscribe_tile_ad` / `subscribe_image_ad` / `subscribe_spoc_ads` deliver a placement's ad on a background `ads-client.worker` thread — the cached value immediately (if any) then the fresh value once MARS responds. Near-simultaneous subscribes are coalesced into one batched request per ad type. Idiomatic `Flow` (Kotlin) and `AsyncThrowingStream` (Swift) wrappers are provided.
+
 [Full Changelog](In progress)
 
 # v152.0 (_2026-05-18_)

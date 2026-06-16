@@ -18,8 +18,10 @@ use crate::mars::ad_response::{
 };
 use crate::mars::Environment;
 use crate::mars::ReportReason;
+use crate::worker::Command;
 use crate::MozAdsClient;
 use parking_lot::Mutex;
+use std::sync::mpsc::Sender;
 use url::Url;
 
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
@@ -49,6 +51,64 @@ impl ContextIdProvider for MozAdsContextIdProviderWrapper {
 impl From<MozAdsContextIdProviderWrapper> for Box<dyn ContextIdProvider> {
     fn from(wrapper: MozAdsContextIdProviderWrapper) -> Self {
         Box::new(wrapper)
+    }
+}
+
+// Foreign sinks for ad subscriptions, one per ad type. Internal plumbing —
+// surfaces consume the idiomatic `Flow` / `AsyncStream` wrappers built on top of
+// these. `on_ads` delivers the result (`None` / empty = no fill), `on_error`
+// reports a failed fetch. Invoked on the `ads-client.worker` thread.
+
+#[uniffi::export(with_foreign)]
+pub trait MozAdsTileSubscriber: Send + Sync {
+    fn on_ads(&self, ad: Option<MozAdsTile>);
+    fn on_error(&self, reason: String);
+}
+
+#[uniffi::export(with_foreign)]
+pub trait MozAdsImageSubscriber: Send + Sync {
+    fn on_ads(&self, ad: Option<MozAdsImage>);
+    fn on_error(&self, reason: String);
+}
+
+#[uniffi::export(with_foreign)]
+pub trait MozAdsSpocSubscriber: Send + Sync {
+    fn on_ads(&self, ads: Vec<MozAdsSpoc>);
+    fn on_error(&self, reason: String);
+}
+
+/// Handle returned by `subscribe_tile_ad`. Dropping it (or calling `unsubscribe`)
+/// removes the subscriber from the worker. The native wrappers use this as the
+/// teardown hook when stream collection is cancelled; surfaces don't touch it.
+#[derive(uniffi::Object)]
+pub struct MozAdsSubscription {
+    id: u64,
+    command_tx: Mutex<Sender<Command>>,
+}
+
+impl MozAdsSubscription {
+    pub(crate) fn new(id: u64, command_tx: Sender<Command>) -> Self {
+        Self {
+            id,
+            command_tx: Mutex::new(command_tx),
+        }
+    }
+}
+
+#[uniffi::export]
+impl MozAdsSubscription {
+    /// Stop receiving updates. Idempotent.
+    pub fn unsubscribe(&self) {
+        let _ = self
+            .command_tx
+            .lock()
+            .send(Command::Unsubscribe { id: self.id });
+    }
+}
+
+impl Drop for MozAdsSubscription {
+    fn drop(&mut self) {
+        self.unsubscribe();
     }
 }
 
@@ -86,7 +146,7 @@ pub struct MozAdsPlacementRequestWithCount {
     pub placement_id: String,
 }
 
-#[derive(Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsCallbacks {
     pub click: Url,
     pub impression: Url,
@@ -134,9 +194,7 @@ impl MozAdsClientBuilder {
                 .unwrap_or_else(MozAdsTelemetryWrapper::noop),
         };
         let client = AdsClient::new(client_config);
-        MozAdsClient {
-            inner: Mutex::new(client),
-        }
+        MozAdsClient::spawn(Arc::new(Mutex::new(client)))
     }
 
     pub fn cache_config(self: Arc<Self>, cache_config: MozAdsCacheConfig) -> Arc<Self> {
@@ -227,7 +285,7 @@ pub enum MozAdsCacheMode {
     NetworkFirst,
 }
 
-#[derive(Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsImage {
     pub alt_text: Option<String>,
     pub block_key: String,
@@ -237,7 +295,7 @@ pub struct MozAdsImage {
     pub url: String,
 }
 
-#[derive(Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsSpoc {
     pub block_key: String,
     pub callbacks: MozAdsCallbacks,
@@ -253,20 +311,20 @@ pub struct MozAdsSpoc {
     pub url: String,
 }
 
-#[derive(Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsSpocFrequencyCaps {
     pub cap_key: String,
     pub day: u32,
 }
 
-#[derive(Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsSpocRanking {
     pub item_score: f64,
     pub personalization_models: std::collections::HashMap<String, u32>,
     pub priority: u32,
 }
 
-#[derive(Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsTile {
     pub block_key: String,
     pub callbacks: MozAdsCallbacks,
