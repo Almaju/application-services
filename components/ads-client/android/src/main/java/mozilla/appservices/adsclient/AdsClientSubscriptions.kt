@@ -12,9 +12,9 @@ import kotlinx.coroutines.flow.callbackFlow
  * Observe a placement's tile ad as a [Flow].
  *
  * The first value is the cached ad if one exists (instant), then the fresh ad
- * once MARS responds; `null` means no fill. A failed fetch is thrown into the
- * flow (handle with `catch`/`retry`). Cancelling collection unsubscribes in Rust.
- * Values arrive on the worker thread — use `flowOn`/the main dispatcher to render.
+ * once MARS responds; `null` means no fill. Cancelling collection unsubscribes
+ * in Rust. Values arrive on the worker thread — use `flowOn`/the main dispatcher
+ * to render.
  */
 fun MozAdsClient.tileAdFlow(placementId: String): Flow<MozAdsTile?> = callbackFlow {
     val subscription = subscribeTileAd(
@@ -22,10 +22,6 @@ fun MozAdsClient.tileAdFlow(placementId: String): Flow<MozAdsTile?> = callbackFl
         object : MozAdsTileSubscriber {
             override fun onAds(ad: MozAdsTile?) {
                 trySend(ad)
-            }
-
-            override fun onError(reason: String) {
-                close(RuntimeException(reason))
             }
         },
     )
@@ -40,10 +36,6 @@ fun MozAdsClient.imageAdFlow(placementId: String): Flow<MozAdsImage?> = callback
             override fun onAds(ad: MozAdsImage?) {
                 trySend(ad)
             }
-
-            override fun onError(reason: String) {
-                close(RuntimeException(reason))
-            }
         },
     )
     awaitClose { subscription.unsubscribe() }
@@ -56,10 +48,6 @@ fun MozAdsClient.spocAdsFlow(placementId: String): Flow<List<MozAdsSpoc>> = call
         object : MozAdsSpocSubscriber {
             override fun onAds(ads: List<MozAdsSpoc>) {
                 trySend(ads)
-            }
-
-            override fun onError(reason: String) {
-                close(RuntimeException(reason))
             }
         },
     )

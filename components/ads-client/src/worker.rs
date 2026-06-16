@@ -148,7 +148,6 @@ trait AdKind {
     ) -> Result<HashMap<String, Self::Value>, RequestAdsError>;
 
     fn on_ads(sink: &Self::Sink, value: Self::Value);
-    fn on_error(sink: &Self::Sink, reason: &str);
 }
 
 /// Placement -> subscribers -> last-value cache for one ad type.
@@ -218,19 +217,13 @@ impl<K: AdKind> Registry<K> {
             })
             .collect();
 
-        match K::fetch(&client.lock(), requests) {
-            Ok(mut fetched) => {
-                for placement in &placements {
-                    let value = fetched.remove(placement).unwrap_or_default();
-                    self.cache.insert(placement.clone(), value.clone());
-                    self.for_each(placement, |sink| K::on_ads(sink, value.clone()));
-                }
-            }
-            Err(err) => {
-                let reason = err.to_string();
-                for placement in &placements {
-                    self.for_each(placement, |sink| K::on_error(sink, &reason));
-                }
+        // On failure the fetch already recorded telemetry; there's nothing to
+        // deliver, so subscribers keep their last value until the next refresh.
+        if let Ok(mut fetched) = K::fetch(&client.lock(), requests) {
+            for placement in &placements {
+                let value = fetched.remove(placement).unwrap_or_default();
+                self.cache.insert(placement.clone(), value.clone());
+                self.for_each(placement, |sink| K::on_ads(sink, value.clone()));
             }
         }
     }
@@ -265,9 +258,6 @@ impl AdKind for TileKind {
     fn on_ads(sink: &Self::Sink, value: Self::Value) {
         sink.on_ads(value);
     }
-    fn on_error(sink: &Self::Sink, reason: &str) {
-        sink.on_error(reason.to_string());
-    }
 }
 
 struct ImageKind;
@@ -288,9 +278,6 @@ impl AdKind for ImageKind {
 
     fn on_ads(sink: &Self::Sink, value: Self::Value) {
         sink.on_ads(value);
-    }
-    fn on_error(sink: &Self::Sink, reason: &str) {
-        sink.on_error(reason.to_string());
     }
 }
 
@@ -313,9 +300,6 @@ impl AdKind for SpocKind {
     fn on_ads(sink: &Self::Sink, value: Self::Value) {
         sink.on_ads(value);
     }
-    fn on_error(sink: &Self::Sink, reason: &str) {
-        sink.on_error(reason.to_string());
-    }
 }
 
 #[cfg(test)]
@@ -329,13 +313,10 @@ mod tests {
     use crate::test_utils::get_example_happy_uatile_response;
 
     /// Test sink that forwards every tile emission onto a channel.
-    struct ChannelSink(Sender<Result<Option<MozAdsTile>, String>>);
+    struct ChannelSink(Sender<Option<MozAdsTile>>);
     impl MozAdsTileSubscriber for ChannelSink {
         fn on_ads(&self, ad: Option<MozAdsTile>) {
-            let _ = self.0.send(Ok(ad));
-        }
-        fn on_error(&self, reason: String) {
-            let _ = self.0.send(Err(reason));
+            let _ = self.0.send(ad);
         }
     }
 
@@ -372,7 +353,7 @@ mod tests {
         .unwrap();
 
         let live = first_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(matches!(live, Ok(Some(_))), "{live:?}");
+        assert!(live.is_some(), "{live:?}");
 
         // Second subscriber to the same placement: it gets the cached ad
         // immediately, then the live ad from its own fetch — two emissions,
@@ -387,8 +368,8 @@ mod tests {
 
         let cached = second_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let refreshed = second_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(matches!(cached, Ok(Some(_))), "{cached:?}");
-        assert!(matches!(refreshed, Ok(Some(_))), "{refreshed:?}");
+        assert!(cached.is_some(), "{cached:?}");
+        assert!(refreshed.is_some(), "{refreshed:?}");
 
         tx.send(Command::Shutdown).unwrap();
         handle.join().unwrap();

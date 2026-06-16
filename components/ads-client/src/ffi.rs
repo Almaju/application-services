@@ -56,25 +56,24 @@ impl From<MozAdsContextIdProviderWrapper> for Box<dyn ContextIdProvider> {
 
 // Foreign sinks for ad subscriptions, one per ad type. Internal plumbing —
 // surfaces consume the idiomatic `Flow` / `AsyncStream` wrappers built on top of
-// these. `on_ads` delivers the result (`None` / empty = no fill), `on_error`
-// reports a failed fetch. Invoked on the `ads-client.worker` thread.
+// these. `on_ads` delivers the result (`None` / empty = no fill). Fetch failures
+// are best-effort: they're recorded as telemetry inside the client and not
+// surfaced, so the subscriber simply keeps its last value. Invoked on the
+// `ads-client.worker` thread.
 
 #[uniffi::export(with_foreign)]
 pub trait MozAdsTileSubscriber: Send + Sync {
     fn on_ads(&self, ad: Option<MozAdsTile>);
-    fn on_error(&self, reason: String);
 }
 
 #[uniffi::export(with_foreign)]
 pub trait MozAdsImageSubscriber: Send + Sync {
     fn on_ads(&self, ad: Option<MozAdsImage>);
-    fn on_error(&self, reason: String);
 }
 
 #[uniffi::export(with_foreign)]
 pub trait MozAdsSpocSubscriber: Send + Sync {
     fn on_ads(&self, ads: Vec<MozAdsSpoc>);
-    fn on_error(&self, reason: String);
 }
 
 /// Handle returned by `subscribe_tile_ad`. Dropping it (or calling `unsubscribe`)

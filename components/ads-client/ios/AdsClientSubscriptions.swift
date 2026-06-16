@@ -9,35 +9,31 @@
 
 import Foundation
 
-public struct MozAdsError: Error {
-    public let reason: String
-}
-
 public extension MozAdsClient {
-    /// Observe a placement's tile ad as an `AsyncThrowingStream`.
+    /// Observe a placement's tile ad as an `AsyncStream`.
     ///
     /// The first value is the cached ad if one exists (instant), then the fresh
-    /// ad once MARS responds; `nil` means no fill. A failed fetch is thrown into
-    /// the stream. Terminating the stream unsubscribes in Rust. Values arrive on
-    /// the worker thread — hop to `@MainActor` to render.
-    func tileAdStream(placementId: String) -> AsyncThrowingStream<MozAdsTile?, Error> {
-        AsyncThrowingStream { continuation in
+    /// ad once MARS responds; `nil` means no fill. Terminating the stream
+    /// unsubscribes in Rust. Values arrive on the worker thread — hop to
+    /// `@MainActor` to render.
+    func tileAdStream(placementId: String) -> AsyncStream<MozAdsTile?> {
+        AsyncStream { continuation in
             let subscription = subscribeTileAd(placementId: placementId, subscriber: TileSink(continuation))
             continuation.onTermination = { _ in subscription.unsubscribe() }
         }
     }
 
-    /// Observe a placement's image ad as an `AsyncThrowingStream`. See `tileAdStream`.
-    func imageAdStream(placementId: String) -> AsyncThrowingStream<MozAdsImage?, Error> {
-        AsyncThrowingStream { continuation in
+    /// Observe a placement's image ad as an `AsyncStream`. See `tileAdStream`.
+    func imageAdStream(placementId: String) -> AsyncStream<MozAdsImage?> {
+        AsyncStream { continuation in
             let subscription = subscribeImageAd(placementId: placementId, subscriber: ImageSink(continuation))
             continuation.onTermination = { _ in subscription.unsubscribe() }
         }
     }
 
-    /// Observe a placement's spoc ads as an `AsyncThrowingStream`. Empty means no fill. See `tileAdStream`.
-    func spocAdsStream(placementId: String) -> AsyncThrowingStream<[MozAdsSpoc], Error> {
-        AsyncThrowingStream { continuation in
+    /// Observe a placement's spoc ads as an `AsyncStream`. Empty means no fill. See `tileAdStream`.
+    func spocAdsStream(placementId: String) -> AsyncStream<[MozAdsSpoc]> {
+        AsyncStream { continuation in
             let subscription = subscribeSpocAds(placementId: placementId, subscriber: SpocSink(continuation))
             continuation.onTermination = { _ in subscription.unsubscribe() }
         }
@@ -47,22 +43,19 @@ public extension MozAdsClient {
 // Bridge the UniFFI callbacks into the stream continuations.
 
 private final class TileSink: MozAdsTileSubscriber {
-    private let continuation: AsyncThrowingStream<MozAdsTile?, Error>.Continuation
-    init(_ continuation: AsyncThrowingStream<MozAdsTile?, Error>.Continuation) { self.continuation = continuation }
+    private let continuation: AsyncStream<MozAdsTile?>.Continuation
+    init(_ continuation: AsyncStream<MozAdsTile?>.Continuation) { self.continuation = continuation }
     func onAds(ad: MozAdsTile?) { continuation.yield(ad) }
-    func onError(reason: String) { continuation.finish(throwing: MozAdsError(reason: reason)) }
 }
 
 private final class ImageSink: MozAdsImageSubscriber {
-    private let continuation: AsyncThrowingStream<MozAdsImage?, Error>.Continuation
-    init(_ continuation: AsyncThrowingStream<MozAdsImage?, Error>.Continuation) { self.continuation = continuation }
+    private let continuation: AsyncStream<MozAdsImage?>.Continuation
+    init(_ continuation: AsyncStream<MozAdsImage?>.Continuation) { self.continuation = continuation }
     func onAds(ad: MozAdsImage?) { continuation.yield(ad) }
-    func onError(reason: String) { continuation.finish(throwing: MozAdsError(reason: reason)) }
 }
 
 private final class SpocSink: MozAdsSpocSubscriber {
-    private let continuation: AsyncThrowingStream<[MozAdsSpoc], Error>.Continuation
-    init(_ continuation: AsyncThrowingStream<[MozAdsSpoc], Error>.Continuation) { self.continuation = continuation }
+    private let continuation: AsyncStream<[MozAdsSpoc]>.Continuation
+    init(_ continuation: AsyncStream<[MozAdsSpoc]>.Continuation) { self.continuation = continuation }
     func onAds(ads: [MozAdsSpoc]) { continuation.yield(ads) }
-    func onError(reason: String) { continuation.finish(throwing: MozAdsError(reason: reason)) }
 }
