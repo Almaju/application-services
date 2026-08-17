@@ -5,28 +5,20 @@
 
 use std::collections::HashMap;
 
-use error::{CallbackRequestError, ComponentError};
+use ads_client_core::client::ad_request::AdPlacementRequest;
+use ads_client_core::client::AdsClient;
+use ads_client_core::error::{CallbackRequestError, ComponentError};
+use ads_client_core::http_cache::CachePolicy;
 use error_support::handle_error;
 use parking_lot::Mutex;
 use url::Url as AdsClientUrl;
 
-use client::ad_request::AdPlacementRequest;
-use client::AdsClient;
-use http_cache::CachePolicy;
-
-mod client;
-mod error;
 mod ffi;
-pub mod http_cache;
-mod mars;
-pub mod telemetry;
 
 pub use ffi::*;
 
 use crate::ffi::telemetry::MozAdsTelemetryWrapper;
-
-#[cfg(test)]
-mod test_utils;
+use crate::ffi::FfiComponentError;
 
 uniffi::setup_scaffolding!("ads_client");
 
@@ -43,7 +35,7 @@ pub struct MozAdsClient {
 
 #[uniffi::export]
 impl MozAdsClient {
-    #[handle_error(ComponentError)]
+    #[handle_error(FfiComponentError)]
     pub fn request_image_ads(
         &self,
         moz_ad_requests: Vec<MozAdsPlacementRequest>,
@@ -51,14 +43,14 @@ impl MozAdsClient {
     ) -> AdsClientApiResult<HashMap<String, MozAdsImage>> {
         let inner = self.inner.lock();
         let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
-        let cache_policy: CachePolicy = options.into();
+        let cache_policy: CachePolicy = options.map(Into::into).unwrap_or_default();
         let response = inner
             .request_image_ads(requests, Some(cache_policy))
             .map_err(ComponentError::RequestAds)?;
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
-    #[handle_error(ComponentError)]
+    #[handle_error(FfiComponentError)]
     pub fn request_spoc_ads(
         &self,
         moz_ad_requests: Vec<MozAdsPlacementRequestWithCount>,
@@ -66,7 +58,7 @@ impl MozAdsClient {
     ) -> AdsClientApiResult<HashMap<String, Vec<MozAdsSpoc>>> {
         let inner = self.inner.lock();
         let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
-        let cache_policy: CachePolicy = options.into();
+        let cache_policy: CachePolicy = options.map(Into::into).unwrap_or_default();
         let response = inner
             .request_spoc_ads(requests, Some(cache_policy))
             .map_err(ComponentError::RequestAds)?;
@@ -76,7 +68,7 @@ impl MozAdsClient {
             .collect())
     }
 
-    #[handle_error(ComponentError)]
+    #[handle_error(FfiComponentError)]
     pub fn request_tile_ads(
         &self,
         moz_ad_requests: Vec<MozAdsPlacementRequest>,
@@ -84,33 +76,35 @@ impl MozAdsClient {
     ) -> AdsClientApiResult<HashMap<String, MozAdsTile>> {
         let inner = self.inner.lock();
         let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
-        let cache_policy: CachePolicy = options.into();
+        let cache_policy: CachePolicy = options.map(Into::into).unwrap_or_default();
         let response = inner
             .request_tile_ads(requests, Some(cache_policy))
             .map_err(ComponentError::RequestAds)?;
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
-    #[handle_error(ComponentError)]
+    #[handle_error(FfiComponentError)]
     pub fn record_impression(&self, impression_url: String) -> AdsClientApiResult<()> {
         let url = AdsClientUrl::parse(&impression_url).map_err(|e| {
             ComponentError::RecordImpression(CallbackRequestError::InvalidUrl(e).into())
         })?;
         let inner = self.inner.lock();
-        inner
+        Ok(inner
             .record_impression(url)
-            .map_err(ComponentError::RecordImpression)
+            .map_err(ComponentError::RecordImpression)?)
     }
 
-    #[handle_error(ComponentError)]
+    #[handle_error(FfiComponentError)]
     pub fn record_click(&self, click_url: String) -> AdsClientApiResult<()> {
         let url = AdsClientUrl::parse(&click_url)
             .map_err(|e| ComponentError::RecordClick(CallbackRequestError::InvalidUrl(e).into()))?;
         let inner = self.inner.lock();
-        inner.record_click(url).map_err(ComponentError::RecordClick)
+        Ok(inner
+            .record_click(url)
+            .map_err(ComponentError::RecordClick)?)
     }
 
-    #[handle_error(ComponentError)]
+    #[handle_error(FfiComponentError)]
     pub fn report_ad(
         &self,
         report_url: String,
@@ -119,9 +113,9 @@ impl MozAdsClient {
         let url = AdsClientUrl::parse(&report_url)
             .map_err(|e| ComponentError::ReportAd(CallbackRequestError::InvalidUrl(e).into()))?;
         let inner = self.inner.lock();
-        inner
+        Ok(inner
             .report_ad(url, reason.into())
-            .map_err(ComponentError::ReportAd)
+            .map_err(ComponentError::ReportAd)?)
     }
 
     pub fn clear_cache(&self) -> AdsClientApiResult<()> {

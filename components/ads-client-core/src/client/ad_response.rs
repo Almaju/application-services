@@ -190,7 +190,7 @@ impl AdResponseValue for AdTile {
 
 #[cfg(test)]
 mod tests {
-    use crate::ffi::telemetry::MozAdsTelemetryWrapper;
+    use crate::test_utils::NoopTelemetry;
 
     use super::*;
     use serde_json::{from_str, json};
@@ -332,8 +332,7 @@ mod tests {
             ]
         });
 
-        let parsed =
-            AdResponse::<AdImage>::parse(raw_ad_response, &MozAdsTelemetryWrapper::noop()).unwrap();
+        let parsed = AdResponse::<AdImage>::parse(raw_ad_response, &NoopTelemetry).unwrap();
 
         let expected = AdResponse {
             data: HashMap::from([(
@@ -369,8 +368,7 @@ mod tests {
             "example_placement_2": []
         });
 
-        let parsed =
-            AdResponse::<AdImage>::parse(raw_ad_response, &MozAdsTelemetryWrapper::noop()).unwrap();
+        let parsed = AdResponse::<AdImage>::parse(raw_ad_response, &NoopTelemetry).unwrap();
 
         let expected = AdResponse {
             data: HashMap::from([]),

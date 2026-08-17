@@ -248,19 +248,14 @@ pub enum ClientOperationEvent {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        ffi::telemetry::MozAdsTelemetryWrapper,
-        test_utils::{
-            get_example_happy_image_response, get_example_happy_spoc_response,
-            get_example_happy_uatile_response, make_happy_placement_requests,
-        },
+    use crate::test_utils::{
+        get_example_happy_image_response, get_example_happy_spoc_response,
+        get_example_happy_uatile_response, make_happy_placement_requests, NoopTelemetry,
     };
 
     use super::*;
 
-    fn new_with_mars_client(
-        client: MARSClient<MozAdsTelemetryWrapper>,
-    ) -> AdsClient<MozAdsTelemetryWrapper> {
+    fn new_with_mars_client(client: MARSClient<NoopTelemetry>) -> AdsClient<NoopTelemetry> {
         let context_id_component = ContextIDComponent::new(
             &uuid::Uuid::new_v4().to_string(),
             0,
@@ -272,7 +267,7 @@ mod tests {
             context_id_component,
             environment: Environment::Test,
             rotation_days: DEFAULT_ROTATION_DAYS,
-            telemetry: MozAdsTelemetryWrapper::noop(),
+            telemetry: NoopTelemetry,
         }
     }
 
@@ -282,7 +277,7 @@ mod tests {
             cache_config: None,
             environment: Environment::Test,
             rotation_days: None,
-            telemetry: MozAdsTelemetryWrapper::noop(),
+            telemetry: NoopTelemetry,
         };
         let client = AdsClient::new(config);
         let context_id = client.get_context_id().unwrap();
@@ -300,7 +295,7 @@ mod tests {
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let telemetry = MozAdsTelemetryWrapper::noop();
+        let telemetry = NoopTelemetry;
         let mars_client = MARSClient::new(None, telemetry);
         let ads_client = new_with_mars_client(mars_client);
 
@@ -322,7 +317,7 @@ mod tests {
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let telemetry = MozAdsTelemetryWrapper::noop();
+        let telemetry = NoopTelemetry;
         let mars_client = MARSClient::new(None, telemetry);
         let ads_client = new_with_mars_client(mars_client);
 
@@ -344,7 +339,7 @@ mod tests {
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let telemetry = MozAdsTelemetryWrapper::noop();
+        let telemetry = NoopTelemetry;
         let mars_client = MARSClient::new(None, telemetry.clone());
         let ads_client = new_with_mars_client(mars_client);
 
@@ -362,7 +357,7 @@ mod tests {
         let cache = HttpCache::builder("test_record_click_invalidates_cache")
             .build()
             .unwrap();
-        let telemetry = MozAdsTelemetryWrapper::noop();
+        let telemetry = NoopTelemetry;
         let mars_client = MARSClient::new(Some(cache), telemetry.clone());
         let ads_client = new_with_mars_client(mars_client);
 

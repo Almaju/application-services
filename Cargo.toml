@@ -5,6 +5,7 @@ resolver = "2"
 # the crate should not be built by default, e.g. integration-test-only crates).
 members = [
     "components/ads-client",
+    "components/ads-client-core",
     "components/ads-client/integration-tests",
     "components/as-ohttp-client",
     "components/autofill",
@@ -107,6 +108,7 @@ exclude = [
 # use the full member set.
 default-members = [
     "components/ads-client",
+    "components/ads-client-core",
     "components/as-ohttp-client",
     "components/autofill",
     "components/context_id",

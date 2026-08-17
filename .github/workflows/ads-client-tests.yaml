@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "components/ads-client/**"
+      - "components/ads-client-core/**"
   pull_request:
     branches: [main]
     paths:
       - "components/ads-client/**"
+      - "components/ads-client-core/**"
 
   workflow_dispatch:
 

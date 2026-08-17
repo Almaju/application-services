@@ -1,13 +1,31 @@
 # Architecture
 
+## Crate Separation: `ads-client` (FFI) vs `ads-client-core` (business logic)
+
+The ads client is split across two crates:
+
+- **`components/ads-client-core`**: A plain Rust library with no UniFFI dependency. It
+  implements `AdsClient`, the HTTP cache, MARS request/response handling, and error
+  types. It can be used directly from Rust (e.g. in tests or other Rust components)
+  without pulling in UniFFI, `Arc`, or the `Mutex` wrapping needed for the FFI object
+  model.
+- **`components/ads-client`**: The thin UniFFI/FFI layer. It depends on
+  `ads-client-core` and is responsible for the `Arc`/`Mutex` plumbing UniFFI's object
+  model requires, converting between `MozAds*` FFI types and `ads-client-core`'s
+  business logic types, and generating the Kotlin/Swift/JS bindings.
+
+This mirrors, at the crate level, the type separation described below: `ads-client`
+owns the public API contract exposed to external consumers, while `ads-client-core`
+owns the internal implementation and can evolve independently.
+
 ## Type Separation: FFI Types vs Business Logic Types
 
 This component uses a clear separation between **FFI (Foreign Function Interface) types** and **business logic types**. This architectural decision provides several important benefits for maintainability, API stability, and development velocity.
 
 ### Overview
 
-- **FFI Types** (`MozAds*` prefix, defined in `src/ffi.rs`): Types exposed through UniFFI to external consumers (e.g., Kotlin, Swift, Python bindings)
-- **Business Logic Types** (no prefix, defined in `src/client/`): Internal types used for core functionality, serialization, and business logic
+- **FFI Types** (`MozAds*` prefix, defined in `components/ads-client/src/ffi.rs`): Types exposed through UniFFI to external consumers (e.g., Kotlin, Swift, Python bindings)
+- **Business Logic Types** (no prefix, defined in `components/ads-client-core/src/client/`): Internal types used for core functionality, serialization, and business logic
 
 ### Key Benefits
 
@@ -107,10 +125,10 @@ pub fn request_ads(
 
 ### File Organization
 
-- `src/ffi.rs`: All UniFFI-exposed types (`MozAds*`), error types, and conversions
-- `src/lib.rs`: Public API entry point, handles FFI ↔ business logic conversions
-- `src/client/`: Business logic types and implementation
-- `src/error.rs`: Internal error types (FFI errors are in `ffi.rs`)
+- `components/ads-client/src/ffi.rs`: All UniFFI-exposed types (`MozAds*`), error types, and conversions
+- `components/ads-client/src/lib.rs`: Public API entry point, handles FFI ↔ business logic conversions
+- `components/ads-client-core/src/client/`: Business logic types and implementation
+- `components/ads-client-core/src/error.rs`: Internal error types (FFI errors are in `ads-client/src/ffi.rs`)
 
 ### Guidelines for Developers
 

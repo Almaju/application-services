@@ -16,9 +16,11 @@ This component is currently still under construction.
 
 ### Unit Tests
 
-Unit tests are run with
+Business logic unit tests live in the `ads-client-core` crate, and FFI-layer unit
+tests live in `ads-client`:
 
 ```shell
+cargo test -p ads-client-core
 cargo test -p ads-client
 ```
 

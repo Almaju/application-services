@@ -21,10 +21,26 @@ checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 name = "ads-client"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "ads-client-core",
  "context_id",
  "error-support",
  "mockall",
+ "mockito",
+ "parking_lot",
+ "serde_json",
+ "thiserror 2.0.3",
+ "uniffi",
+ "url",
+ "viaduct-dev",
+]
+
+[[package]]
+name = "ads-client-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "context_id",
+ "error-support",
  "mockito",
  "once_cell",
  "parking_lot",
@@ -33,7 +49,6 @@ dependencies = [
  "serde_json",
  "sql-support",
  "thiserror 2.0.3",
- "uniffi",
  "url",
  "uuid",
  "viaduct",
@@ -45,6 +60,7 @@ name = "ads-client-integration-tests"
 version = "0.1.0"
 dependencies = [
  "ads-client",
+ "ads-client-core",
  "mockito",
  "serde_json",
  "url",

@@ -3,6 +3,7 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
+use std::any::Any;
 use std::collections::HashMap;
 
 use url::Url;
@@ -13,8 +14,19 @@ use crate::client::{
         AdCallbacks, AdImage, AdResponse, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking,
     },
 };
+use crate::telemetry::Telemetry;
 
 pub const TEST_CONTEXT_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// A no-op `Telemetry` implementation used by core unit tests. The real telemetry
+/// adapter (`MozAdsTelemetryWrapper`) lives in the `ads-client` FFI crate, which
+/// this crate does not depend on.
+#[derive(Clone)]
+pub struct NoopTelemetry;
+
+impl Telemetry for NoopTelemetry {
+    fn record(&self, _event: &dyn Any) {}
+}
 
 pub fn make_happy_placement_requests() -> Vec<AdPlacementRequest> {
     vec![

@@ -104,6 +104,7 @@ sed -e 's|  "security/mls/mls_gk",|  "security/mls/mls_gk",\
   "services/app-services/tools/embedded-uniffi-bindgen",\
   "services/app-services/tools/uniffi-bindgen-library-mode",\
   "services/app-services/components/ads-client",\
+  "services/app-services/components/ads-client-core",\
   "services/app-services/components/autofill",\
   "services/app-services/components/context_id",\
   "services/app-services/components/crashtest",\

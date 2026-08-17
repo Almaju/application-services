@@ -6,10 +6,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::client::ClientOperationEvent;
-use crate::error::{RecordClickError, RecordImpressionError, ReportAdError, RequestAdsError};
-use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
-use crate::telemetry::Telemetry;
+use ads_client_core::client::ClientOperationEvent;
+use ads_client_core::error::{
+    RecordClickError, RecordImpressionError, ReportAdError, RequestAdsError,
+};
+use ads_client_core::http_cache::{CacheOutcome, HttpCacheBuilderError};
+use ads_client_core::telemetry::Telemetry;
 
 #[uniffi::export(with_foreign)]
 pub trait MozAdsTelemetry: Send + Sync {

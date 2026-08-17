@@ -7,17 +7,19 @@ pub mod telemetry;
 
 use std::sync::Arc;
 
-use crate::client::ad_request::{AdContentCategory, AdPlacementRequest, IABContentTaxonomy};
-use crate::client::ad_response::{
+use crate::ffi::telemetry::MozAdsTelemetryWrapper;
+use crate::MozAdsClient;
+use ads_client_core::client::ad_request::{
+    AdContentCategory, AdPlacementRequest, IABContentTaxonomy,
+};
+use ads_client_core::client::ad_response::{
     AdCallbacks, AdImage, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking,
 };
-use crate::client::config::{AdsCacheConfig, AdsClientConfig, Environment};
-use crate::client::AdsClient;
-use crate::client::ReportReason;
-use crate::error::ComponentError;
-use crate::ffi::telemetry::MozAdsTelemetryWrapper;
-use crate::http_cache::CachePolicy;
-use crate::MozAdsClient;
+use ads_client_core::client::config::{AdsCacheConfig, AdsClientConfig, Environment};
+use ads_client_core::client::AdsClient;
+use ads_client_core::client::ReportReason;
+use ads_client_core::error::ComponentError;
+use ads_client_core::http_cache::CachePolicy;
 use error_support::{ErrorHandling, GetErrorHandling};
 use parking_lot::Mutex;
 use url::Url;
@@ -40,12 +42,22 @@ impl From<context_id::ApiError> for MozAdsClientApiError {
     }
 }
 
-impl GetErrorHandling for ComponentError {
+/// Wraps `ads_client_core::error::ComponentError` so `GetErrorHandling` (a foreign
+/// trait) can be implemented for it here: Rust's orphan rules forbid implementing a
+/// foreign trait directly on a foreign type, and `ComponentError` now lives in
+/// `ads-client-core` rather than this crate. `#[from]` lets `?` convert a
+/// `ComponentError` into this wrapper automatically inside `#[handle_error(..)]`
+/// functions.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub(crate) struct FfiComponentError(#[from] ComponentError);
+
+impl GetErrorHandling for FfiComponentError {
     type ExternalError = MozAdsClientApiError;
 
     fn get_error_handling(&self) -> ErrorHandling<Self::ExternalError> {
         ErrorHandling::convert(MozAdsClientApiError::Other {
-            reason: self.to_string(),
+            reason: self.0.to_string(),
         })
     }
 }
@@ -151,8 +163,6 @@ pub enum MozAdsEnvironment {
     #[default]
     Prod,
     Staging,
-    #[cfg(test)]
-    Test,
 }
 
 #[derive(Clone, uniffi::Record)]
@@ -348,8 +358,11 @@ impl From<Environment> for MozAdsEnvironment {
         match env {
             Environment::Prod => MozAdsEnvironment::Prod,
             Environment::Staging => MozAdsEnvironment::Staging,
-            #[cfg(test)]
-            Environment::Test => MozAdsEnvironment::Test,
+            // `Environment::Test` only exists within `ads-client-core`'s own
+            // `#[cfg(test)]` builds (used to point at a mockito server), so it is
+            // never actually reachable here: this crate depends on
+            // `ads-client-core` as an ordinary (non-test) dependency, even when
+            // this crate's own tests are running.
         }
     }
 }
@@ -359,8 +372,6 @@ impl From<MozAdsEnvironment> for Environment {
         match env {
             MozAdsEnvironment::Prod => Environment::Prod,
             MozAdsEnvironment::Staging => Environment::Staging,
-            #[cfg(test)]
-            MozAdsEnvironment::Test => Environment::Test,
         }
     }
 }
@@ -414,11 +425,11 @@ impl From<MozAdsRequestOptions> for CachePolicy {
     }
 }
 
-impl From<Option<MozAdsRequestOptions>> for CachePolicy {
-    fn from(options: Option<MozAdsRequestOptions>) -> Self {
-        options.map(Into::into).unwrap_or_default()
-    }
-}
+// Note: `impl From<Option<MozAdsRequestOptions>> for CachePolicy` is not possible
+// here: `Option` is not a "fundamental" type, so wrapping the (local)
+// `MozAdsRequestOptions` in it doesn't satisfy Rust's orphan rules for a `From` impl
+// on the foreign `CachePolicy` type. Callers should use
+// `options.map(Into::into).unwrap_or_default()` directly instead.
 
 impl From<MozAdsCacheConfig> for AdsCacheConfig {
     fn from(config: MozAdsCacheConfig) -> Self {
