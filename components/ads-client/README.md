@@ -12,6 +12,14 @@ While we welcome outside feedback and are committed to open source, this library
 
 This component is currently still under construction.
 
+## Architecture
+
+- [Type separation: FFI types vs business logic types](./ARCHITECTURE.md) — how the current code is organised.
+- [Current architecture and the v2 direction](./docs/architecture-v2.md) — component diagrams for what
+  ships today, and a proposed move from a stateless HTTP client (request → response) to a stateful
+  ads client (dispatch → query) built on an ads store, a command queue and a background worker.
+  Discussion document, for team alignment.
+
 ## Tests
 
 ### Unit Tests
