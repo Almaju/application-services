@@ -68,6 +68,38 @@ pub const CREDIT_CARD_COMMON_VALS: &str = "
     :time_last_modified,
     :times_used";
 
+pub const PASSPORT_COMMON_COLS: &str = "
+    guid,
+    name,
+    country,
+    passport_number,
+    issue_date_month,
+    issue_date_day,
+    issue_date_year,
+    expiry_date_month,
+    expiry_date_day,
+    expiry_date_year,
+    time_created,
+    time_last_used,
+    time_last_modified,
+    times_used";
+
+pub const PASSPORT_COMMON_VALS: &str = "
+    :guid,
+    :name,
+    :country,
+    :passport_number,
+    :issue_date_month,
+    :issue_date_day,
+    :issue_date_year,
+    :expiry_date_month,
+    :expiry_date_day,
+    :expiry_date_year,
+    :time_created,
+    :time_last_used,
+    :time_last_modified,
+    :times_used";
+
 const CREATE_SHARED_SCHEMA_SQL: &str = include_str!("../../sql/create_shared_schema.sql");
 const CREATE_SHARED_TRIGGERS_SQL: &str = include_str!("../../sql/create_shared_triggers.sql");
 const CREATE_SYNC_TEMP_TABLES_SQL: &str = include_str!("../../sql/create_sync_temp_tables.sql");
@@ -76,16 +108,15 @@ pub struct AutofillConnectionInitializer;
 
 impl ConnectionInitializer for AutofillConnectionInitializer {
     const NAME: &'static str = "autofill db";
-    const END_VERSION: u32 = 4;
+    const END_VERSION: u32 = 5;
 
     fn prepare(&self, conn: &Connection, _db_empty: bool) -> Result<()> {
         define_functions(conn)?;
 
+        // Set up default SQLite pragmas to truncate the -wal file.
+        sql_support::setup_sqlite_defaults(conn)?;
+
         let initial_pragmas = "
-            -- use in-memory storage
-            PRAGMA temp_store = 2;
-            -- use write-ahead logging
-            PRAGMA journal_mode = WAL;
             -- autofill does not use foreign keys at present but this is probably a good pragma to set
             PRAGMA foreign_keys = ON;
         ";
@@ -107,6 +138,7 @@ impl ConnectionInitializer for AutofillConnectionInitializer {
             1 => upgrade_from_v1(db),
             2 => upgrade_from_v2(db),
             3 => upgrade_from_v3(db),
+            4 => upgrade_from_v4(db),
             _ => Err(Error::IncompatibleVersion(version)),
         }
     }
@@ -238,6 +270,15 @@ fn upgrade_from_v3(db: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn upgrade_from_v4(db: &Connection) -> Result<()> {
+    // v4 -> v5 only adds new tables (the passports_* tables), so we can just
+    // re-run the shared schema, which uses `CREATE TABLE IF NOT EXISTS`. This
+    // is the approach used by most other components and avoids duplicating the
+    // table definitions in a separate migration file.
+    db.execute_batch(CREATE_SHARED_SCHEMA_SQL)?;
+    Ok(())
+}
+
 pub fn create_empty_sync_temp_tables(db: &Connection) -> Result<()> {
     debug!("Initializing sync temp tables");
     db.execute_batch(CREATE_SYNC_TEMP_TABLES_SQL)?;
@@ -250,6 +291,7 @@ mod tests {
     use crate::db::addresses::get_address;
     use crate::db::credit_cards::get_credit_card;
     use crate::db::test::new_mem_db;
+    use crate::db::AutofillDb;
     use sql_support::open_database::test_utils::MigratedDatabaseFile;
     use sync_guid::Guid;
     use types::Timestamp;
@@ -258,6 +300,32 @@ mod tests {
     const CREATE_V1_DB: &str = include_str!("../../sql/tests/create_v1_db.sql");
     const CREATE_V2_DB: &str = include_str!("../../sql/tests/create_v2_db.sql");
     const CREATE_V3_DB: &str = include_str!("../../sql/tests/create_v3_db.sql");
+    const CREATE_V4_DB: &str = include_str!("../../sql/tests/create_v4_db.sql");
+
+    #[test]
+    fn test_wal_size_is_bounded() {
+        // A memory database has no -wal file, so open a real one.
+        let db_file = MigratedDatabaseFile::new(AutofillConnectionInitializer, "");
+        let db = AutofillDb::new(&db_file.path).expect("should open the database");
+
+        let journal_mode: String = db
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "wal");
+
+        let autocheckpoint: i64 = db
+            .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))
+            .unwrap();
+        assert!(autocheckpoint > 0, "auto-checkpointing is disabled");
+
+        let journal_size_limit: i64 = db
+            .query_row("PRAGMA journal_size_limit", [], |row| row.get(0))
+            .unwrap();
+        assert!(
+            journal_size_limit > 0,
+            "journal_size_limit is {journal_size_limit}, so the -wal file is never truncated"
+        );
+    }
 
     #[test]
     fn test_create_schema_twice() {
@@ -407,5 +475,21 @@ mod tests {
         address = get_address(&db, &Guid::new("B")).unwrap();
         assert_eq!(address.guid, "B");
         assert_eq!(address.address_level1, "ON");
+    }
+
+    #[test]
+    fn test_upgrade_version_4() {
+        let db_file = MigratedDatabaseFile::new(AutofillConnectionInitializer, CREATE_V4_DB);
+        let db = db_file.open();
+
+        // passports_data must not exist yet at v4.
+        db.execute_batch("SELECT guid FROM passports_data")
+            .expect_err("passports_data should not exist at v4");
+
+        db_file.upgrade_to(5);
+
+        // After upgrading to v5 the table exists.
+        db.execute_batch("SELECT guid FROM passports_data")
+            .expect("passports_data should exist at v5");
     }
 }

@@ -29,7 +29,8 @@ pub const GLOBAL_SYNCID_META_KEY: &str = "global_sync_id";
 pub const COLLECTION_SYNCID_META_KEY: &str = "sync_id";
 
 // A trait to abstract the broader sync processes.
-pub trait SyncEngineStorageImpl<T> {
+// Send + Sync is required to use a `ConfigSyncEngine` as a `BridgedEngine`.
+pub trait SyncEngineStorageImpl<T>: Send + Sync {
     fn get_incoming_impl(
         &self,
         enc_key: &Option<String>,
@@ -74,9 +75,10 @@ impl<T> ConfigSyncEngine<T> {
         let key = format!("{}.{}", self.config.namespace, tail);
         crate::db::store::delete_meta(conn, &key)
     }
+
     // Reset the local sync data so the next server request fetches all records.
     pub fn reset_local_sync_data(&self) -> Result<()> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         let tx = db.unchecked_transaction()?;
         self.storage_impl.reset_storage(&tx)?;
         self.put_meta(&tx, LAST_SYNC_META_KEY, &0)?;
@@ -105,11 +107,8 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
         Ok(())
     }
 
-    fn prepare_for_sync(
-        &self,
-        _get_client_data: &dyn Fn() -> sync15::ClientData,
-    ) -> anyhow::Result<()> {
-        let db = &self.store.db.lock().unwrap();
+    fn sync_started(&self) -> anyhow::Result<()> {
+        let db = self.store.lock_db()?;
         let signal = db.begin_interrupt_scope()?;
         crate::db::schema::create_empty_sync_temp_tables(&db.writer)?;
         signal.err_if_interrupted()?;
@@ -121,7 +120,7 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
         inbound: Vec<IncomingBso>,
         telem: &mut telemetry::Engine,
     ) -> anyhow::Result<()> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         let signal = db.begin_interrupt_scope()?;
 
         // Stage all incoming items.
@@ -141,7 +140,7 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
         timestamp: ServerTimestamp,
         _telem: &mut telemetry::Engine,
     ) -> anyhow::Result<Vec<OutgoingBso>> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         let signal = db.begin_interrupt_scope()?;
         let tx = db.writer.unchecked_transaction()?;
         let incoming_impl = self.storage_impl.get_incoming_impl(&self.local_enc_key)?;
@@ -155,10 +154,13 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
             super::apply_incoming_action(&*incoming_impl, &tx, action)?;
         }
 
-        // write the timestamp now, so if we are interrupted merging or
+        // The timestamp value is handled differently in desktop v mobile. Record a
+        // timestamp if we are given one now, so if we are interrupted merging or
         // creating outgoing changesets we don't need to re-download the same
         // records.
-        self.put_meta(&tx, LAST_SYNC_META_KEY, &timestamp.as_millis())?;
+        if timestamp != ServerTimestamp(0) {
+            self.put_meta(&tx, LAST_SYNC_META_KEY, &timestamp.as_millis())?;
+        }
 
         incoming_impl.finish_incoming(&tx)?;
 
@@ -173,7 +175,7 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
     }
 
     fn set_uploaded(&self, new_timestamp: ServerTimestamp, ids: Vec<Guid>) -> anyhow::Result<()> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         self.put_meta(&db.writer, LAST_SYNC_META_KEY, &new_timestamp.as_millis())?;
         let tx = db.writer.unchecked_transaction()?;
         let outgoing_impl = self.storage_impl.get_outgoing_impl(&self.local_enc_key)?;
@@ -186,7 +188,7 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
         &self,
         server_timestamp: ServerTimestamp,
     ) -> anyhow::Result<Option<CollectionRequest>> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         let since = ServerTimestamp(
             self.get_meta::<i64>(&db.writer, LAST_SYNC_META_KEY)?
                 .unwrap_or_default(),
@@ -203,7 +205,7 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
     }
 
     fn get_sync_assoc(&self) -> anyhow::Result<EngineSyncAssociation> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         let global = self.get_meta(&db.writer, GLOBAL_SYNCID_META_KEY)?;
         let coll = self.get_meta(&db.writer, COLLECTION_SYNCID_META_KEY)?;
         Ok(if let (Some(global), Some(coll)) = (global, coll) {
@@ -214,7 +216,7 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
     }
 
     fn reset(&self, assoc: &EngineSyncAssociation) -> anyhow::Result<()> {
-        let db = &self.store.db.lock().unwrap();
+        let db = self.store.lock_db()?;
         let tx = db.unchecked_transaction()?;
         self.storage_impl.reset_storage(&tx)?;
         // Reset the last sync time, so that the next sync fetches fresh records
@@ -242,6 +244,19 @@ impl<T: SyncRecord + std::fmt::Debug> SyncEngine for ConfigSyncEngine<T> {
         warn!("not implemented as there isn't a valid use case for it");
         Ok(())
     }
+
+    fn last_sync(&self) -> anyhow::Result<Option<ServerTimestamp>> {
+        let db = self.store.lock_db()?;
+        Ok(self
+            .get_meta::<i64>(&db.writer, LAST_SYNC_META_KEY)?
+            .map(ServerTimestamp::from_millis))
+    }
+
+    fn reset_last_sync(&self) -> anyhow::Result<()> {
+        let db = self.store.lock_db()?;
+        self.delete_meta(&db.writer, LAST_SYNC_META_KEY)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -255,7 +270,7 @@ mod tests {
     use crate::db::schema::create_empty_sync_temp_tables;
     use crate::encryption::EncryptorDecryptor;
     use crate::sync::{IncomingBso, UnknownFields};
-    use nss::ensure_initialized;
+    use nss_as::ensure_initialized;
     use sql_support::ConnExt;
 
     impl InternalCreditCard {
@@ -294,7 +309,8 @@ mod tests {
             .set_local_encryption_key(&test_key)
             .unwrap();
         {
-            create_empty_sync_temp_tables(&credit_card_engine.store.db.lock().unwrap())?;
+            let db = credit_card_engine.store.lock_db()?;
+            create_empty_sync_temp_tables(&db.writer)?;
         }
 
         let mut telem = telemetry::Engine::new("whatever");
@@ -303,7 +319,8 @@ mod tests {
         assert!(result.is_ok());
 
         // check that last sync metadata was set
-        let conn = &credit_card_engine.store.db.lock().unwrap().writer;
+        let db = credit_card_engine.store.lock_db()?;
+        let conn = &db.writer;
 
         assert_eq!(
             credit_card_engine.get_meta::<i64>(conn, LAST_SYNC_META_KEY)?,
@@ -332,7 +349,8 @@ mod tests {
             coll: coll_guid,
         };
         {
-            let conn = &credit_card_engine.store.db.lock().unwrap().writer;
+            let db = credit_card_engine.store.lock_db()?;
+            let conn = &db.writer;
             credit_card_engine.put_meta(conn, GLOBAL_SYNCID_META_KEY, &ids.global)?;
             credit_card_engine.put_meta(conn, COLLECTION_SYNCID_META_KEY, &ids.coll)?;
         }
@@ -364,7 +382,7 @@ mod tests {
 
         {
             // temp scope for the mutex lock.
-            let db = &engine.store.db.lock().unwrap();
+            let db = engine.store.lock_db()?;
             let tx = db.writer.unchecked_transaction()?;
             // create a normal record, a mirror record and a tombstone.
             add_internal_credit_card(&tx, &cc)?;
@@ -385,7 +403,8 @@ mod tests {
             coll: coll_guid.clone(),
         };
         {
-            let conn = &engine.store.db.lock().unwrap().writer;
+            let db = engine.store.lock_db()?;
+            let conn = &db.writer;
             engine.put_meta(conn, GLOBAL_SYNCID_META_KEY, &ids.global)?;
             engine.put_meta(conn, COLLECTION_SYNCID_META_KEY, &ids.coll)?;
         }
@@ -396,7 +415,8 @@ mod tests {
             .expect("should work");
 
         {
-            let conn = &engine.store.db.lock().unwrap().writer;
+            let db = engine.store.lock_db()?;
+            let conn = &db.writer;
 
             // check that the mirror and tombstone tables have no records
             assert!(get_all(conn, "credit_cards_mirror".to_string())?.is_empty());
@@ -434,7 +454,8 @@ mod tests {
             .reset(&EngineSyncAssociation::Connected(ids))
             .expect("should work");
 
-        let conn = &engine.store.db.lock().unwrap().writer;
+        let db = engine.store.lock_db()?;
+        let conn = &db.writer;
         // check that the meta records were set
         let retrieved_global_sync_id = engine.get_meta::<String>(conn, GLOBAL_SYNCID_META_KEY)?;
         assert_eq!(

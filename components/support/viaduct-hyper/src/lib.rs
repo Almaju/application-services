@@ -34,7 +34,7 @@ struct HyperBackend {
 /// Named `viaduct_init_backend_hyper` since that reads better on iOS/Swift where there aren't any
 /// namespaces.  Once we move to UniFII 0.31 we can use the renaming feature to do this instead.
 #[uniffi::export]
-pub fn viaduct_init_backend_hyper() -> Result<()> {
+pub fn viaduct_init_backend_hyper() {
     info!("initializing hyper backend");
     // Create a multi-threaded runtime, with 1 worker thread.
     //
@@ -111,7 +111,7 @@ async fn make_request_inner(
         let Some(location) = resp.headers().get("location") else {
             return Err(ViaductError::new_backend_error("location header missing"));
         };
-        url = Url::parse(location.to_str().map_backend_error()?)?;
+        url = url.join(location.to_str().map_backend_error()?)?;
         let new_request = Request {
             method: request.method,
             url: url.clone(),

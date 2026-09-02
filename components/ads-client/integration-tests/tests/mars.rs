@@ -6,13 +6,13 @@
 use std::sync::Arc;
 
 use ads_client::{
-    MozAdsClientBuilder, MozAdsEnvironment, MozAdsPlacementRequest,
-    MozAdsPlacementRequestWithCount, MozAdsReportReason,
+    MozAdsClientBuilder, MozAdsEnvironment, MozAdsIABContent, MozAdsIABContentTaxonomy,
+    MozAdsPlacementRequest, MozAdsPlacementRequestWithCount, MozAdsReportReason,
+    MozAdsRequestOptions,
 };
 
 fn init_backend() {
-    // Err means the backend is already initialized.
-    let _ = viaduct_hyper::viaduct_init_backend_hyper();
+    viaduct_hyper::viaduct_init_backend_hyper();
 }
 
 fn prod_client() -> ads_client::MozAdsClient {
@@ -42,6 +42,39 @@ fn test_contract_image_prod() {
     );
     let placements = result.unwrap();
     assert!(placements.contains_key("mock_billboard_1"));
+}
+
+#[test]
+#[ignore = "integration test: run manually with -- --ignored"]
+fn test_contract_image_with_categories_prod() {
+    init_backend();
+
+    let client = prod_client();
+    let result = client.request_image_ads(
+        vec![MozAdsPlacementRequest {
+            iab_content: Some(MozAdsIABContent {
+                category_ids: vec!["338".to_string()],
+                taxonomy: MozAdsIABContentTaxonomy::IAB3_0,
+            }),
+            placement_id: "mock_billboard_1".to_string(),
+        }],
+        Some(MozAdsRequestOptions {
+            flags: std::collections::HashMap::from([("contextual_placement".to_string(), true)]),
+            ..Default::default()
+        }),
+    );
+
+    assert!(
+        result.is_ok(),
+        "Image ad request with categories failed: {:?}",
+        result.err()
+    );
+    let placements = result.unwrap();
+    let ad = placements
+        .get("mock_billboard_1")
+        .expect("mock_billboard_1 should be present in the response");
+    assert!(!ad.url.is_empty(), "destination url should be populated");
+    assert!(!ad.image_url.is_empty(), "image url should be populated");
 }
 
 #[test]
@@ -104,7 +137,7 @@ fn test_record_impression() {
         .get("mock_tile_1")
         .expect("mock_tile_1 placement should be present");
 
-    let result = client.record_impression(ad.callbacks.impression.to_string());
+    let result = client.record_impression(ad.callbacks.impression.to_string(), None);
     assert!(
         result.is_ok(),
         "record_impression failed: {:?}",
@@ -132,7 +165,7 @@ fn test_record_click() {
         .get("mock_tile_1")
         .expect("mock_tile_1 placement should be present");
 
-    let result = client.record_click(ad.callbacks.click.to_string());
+    let result = client.record_click(ad.callbacks.click.to_string(), None);
     assert!(result.is_ok(), "record_click failed: {:?}", result.err());
 }
 
@@ -168,6 +201,43 @@ fn test_report_ad() {
     assert_eq!(placement_id_count, 1, "expected exactly one placement_id");
     assert_eq!(position_count, 1, "expected exactly one position");
 
-    let result = client.report_ad(report_url.to_string(), MozAdsReportReason::NotInterested);
+    let result = client.report_ad(
+        report_url.to_string(),
+        MozAdsReportReason::NotInterested,
+        None,
+    );
     assert!(result.is_ok(), "report_ad failed: {:?}", result.err());
+}
+
+#[test]
+#[ignore = "integration test: run manually with -- --ignored"]
+fn test_contract_tile_ohttp_prod() {
+    init_backend();
+    viaduct::ohttp::configure_ohttp_channel(
+        "ads-client".to_string(),
+        viaduct::ohttp::OhttpConfig {
+            relay_url: "https://mozilla-ohttp.fastly-edge.com/".to_string(),
+            gateway_host: "prod.ohttp-gateway.prod.webservices.mozgcp.net".to_string(),
+        },
+    )
+    .expect("OHTTP channel configuration should succeed");
+
+    let client = prod_client();
+
+    let placements = client
+        .request_tile_ads(
+            vec![MozAdsPlacementRequest {
+                iab_content: None,
+                placement_id: "mock_tile_1".to_string(),
+            }],
+            Some(MozAdsRequestOptions {
+                ohttp: true,
+                ..Default::default()
+            }),
+        )
+        .expect("tile ad request over OHTTP should succeed");
+    assert!(
+        placements.contains_key("mock_tile_1"),
+        "OHTTP response should contain mock_tile_1"
+    );
 }

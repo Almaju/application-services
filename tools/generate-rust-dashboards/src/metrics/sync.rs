@@ -3,11 +3,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::{
-    config::{Application, ReleaseChannel, TeamConfig},
+    config::{Application, ReleaseChannel, TeamConfig, Unit},
     schema::{
         CustomVariable, Dashboard, DashboardBuilder, DataLink, Datasource, FieldConfig,
-        FieldConfigCustom, FieldConfigDefaults, GridPos, LogOptions, LogPanel, Panel, Target,
-        TimeSeriesPanel, Transformation,
+        FieldConfigCustom, FieldConfigDefaults, GridPos, LogOptions, LogPanel, Panel,
+        ScaleDistribution, Target, TextPanel, TimeSeriesPanel, Transformation,
     },
     sql::Query,
     util::{Join, UrlBuilder},
@@ -15,20 +15,37 @@ use crate::{
 };
 
 pub fn add_to_main_dashboard(builder: &mut DashboardBuilder, config: &TeamConfig) -> Result<()> {
-    builder.add_panel_title("Sync");
+    add_overview_panels(
+        builder,
+        "Sync success rate",
+        config,
+        SyncMetric::SuccessRate,
+    );
+    add_overview_panels(
+        builder,
+        "Sync: total counts",
+        config,
+        SyncMetric::TotalCounts,
+    );
+    add_overview_panels(
+        builder,
+        "Sync: average time",
+        config,
+        SyncMetric::AverageTime,
+    );
 
-    for app in config.applications().iter() {
-        builder.add_panel_third(overview_count_panel(config, *app, ReleaseChannel::Nightly));
-        builder.add_panel_third(overview_count_panel(config, *app, ReleaseChannel::Beta));
-        builder.add_panel_third(overview_count_panel(config, *app, ReleaseChannel::Release));
+    if config.team_name == "SYNC" {
+        builder.add_panel_title("Legacy dashboards");
+        builder.add_panel_full(sync_legacy_dashboard_panel());
     }
+
     Ok(())
 }
 
 pub fn extra_dashboard(config: &TeamConfig) -> Result<Dashboard> {
     let mut builder = DashboardBuilder::new(
-        format!("{} - Sync Errors", config.team_name),
-        format!("{}-sync-errors", config.team_slug()),
+        format!("{} - Sync Details", config.team_name),
+        format!("{}-sync-extra", config.team_slug()),
     );
     builder.add_application_variable(config)?;
     builder.add_channel_variable();
@@ -44,34 +61,163 @@ pub fn extra_dashboard(config: &TeamConfig) -> Result<Dashboard> {
         ..CustomVariable::default()
     });
 
-    builder.add_panel_full(error_list_count_panel(config));
-    builder.add_panel_full(error_list_log_panel(config));
+    builder.add_panel_title("Metrics");
+    builder.add_panel_full(details_dash_count_panel(
+        "Success Rate",
+        SyncMetric::SuccessRate,
+    ));
+    builder.add_panel_full(details_dash_count_panel(
+        "Total counts (7 day moving average)",
+        SyncMetric::TotalCounts,
+    ));
+    builder.add_panel_full(details_dash_count_panel(
+        "Average sync time (7 day moving average)",
+        SyncMetric::AverageTime,
+    ));
+    builder.add_panel_title("Errors");
+    builder.add_panel_full(details_dash_error_count_panel(config));
+    builder.add_panel_full(details_dash_error_log_panel(config));
 
     Ok(builder.dashboard)
 }
 
-fn overview_count_panel(
+#[derive(Clone, Copy)]
+enum SyncMetric {
+    SuccessRate,
+    TotalCounts,
+    AverageTime,
+}
+
+impl SyncMetric {
+    fn column_name(&self) -> &'static str {
+        match &self {
+            SyncMetric::SuccessRate => "success_rate",
+            SyncMetric::TotalCounts => "count_total",
+            SyncMetric::AverageTime => "avg_sync_time",
+        }
+    }
+
+    fn moving_average(&self) -> bool {
+        matches!(self, SyncMetric::TotalCounts | SyncMetric::AverageTime)
+    }
+
+    fn field_config_custom(&self) -> FieldConfigCustom {
+        match self {
+            SyncMetric::SuccessRate => FieldConfigCustom {
+                axis_label: "success rate".into(),
+                axis_soft_min: 99,
+                axis_soft_max: 100,
+                ..FieldConfigCustom::default()
+            },
+            SyncMetric::TotalCounts => FieldConfigCustom {
+                scale_distribution: ScaleDistribution {
+                    type_: "log".into(),
+                    log: Some(10),
+                },
+                ..FieldConfigCustom::default()
+            },
+            SyncMetric::AverageTime => FieldConfigCustom::default(),
+        }
+    }
+
+    fn unit(&self) -> Option<Unit> {
+        match self {
+            SyncMetric::SuccessRate => None,
+            SyncMetric::TotalCounts => Some(Unit::SiShort),
+            SyncMetric::AverageTime => Some(Unit::Seconds),
+        }
+    }
+
+    fn column_expr(&self) -> String {
+        let column_name = self.column_name();
+        if !self.moving_average() {
+            column_name.into()
+        } else {
+            format!(
+                "AVG({column_name}) OVER (
+                PARTITION BY engine_name
+                ORDER BY submission_date
+                ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+              ) AS {column_name}"
+            )
+        }
+    }
+}
+
+fn add_overview_panels(
+    builder: &mut DashboardBuilder,
+    title: &str,
+    config: &TeamConfig,
+    metric: SyncMetric,
+) {
+    builder.add_panel_title(title);
+
+    for app in config.applications().iter() {
+        builder.add_panel_third(overview_panel(
+            config,
+            *app,
+            ReleaseChannel::Nightly,
+            metric,
+        ));
+        builder.add_panel_third(overview_panel(config, *app, ReleaseChannel::Beta, metric));
+        builder.add_panel_third(overview_panel(
+            config,
+            *app,
+            ReleaseChannel::Release,
+            metric,
+        ));
+    }
+}
+
+fn overview_panel(
     config: &TeamConfig,
     application: Application,
     channel: ReleaseChannel,
+    metric: SyncMetric,
 ) -> Panel {
-    let query = if application == Application::Desktop {
-        desktop_count_query(format!("'{channel}'"))
-    } else {
-        mobile_count_query(config, format!("'{channel}'"))
+    if application == Application::Ios && channel == ReleaseChannel::Nightly {
+        return TextPanel {
+            content: "## N/A".into(),
+            mode: "markdown".into(),
+            grid_pos: GridPos::height(8),
+        }
+        .into();
+    }
+
+    let column_name = metric.column_name();
+    let query = Query {
+        select: vec![
+            "TIMESTAMP(submission_date) as time".into(),
+            "engine_name".into(),
+            metric.column_expr(),
+        ],
+        from: format!("({COMBINED_SUBQUERY})"),
+        where_: vec![
+            "$__timeFilter(TIMESTAMP(submission_date))".into(),
+            format!("channel = '{channel}'"),
+            match application {
+                Application::Desktop => "application = 'desktop'",
+                Application::Ios => "application = 'firefox-ios'",
+                Application::Android => "application = 'firefox-android'",
+            }
+            .into(),
+            engine_where_clause(config),
+        ],
+        order_by: Some("time".into()),
+        ..Query::default()
     };
 
-    TimeSeriesPanel {
+    Panel::from(TimeSeriesPanel {
         title: application.display_name(channel),
         grid_pos: GridPos::height(8),
         datasource: Datasource::bigquery(),
         // needs to be fairly large since the total sync count can be low on mobile/nightly
         interval: "1d".into(),
-        targets: vec![Target::table(query)],
+        targets: vec![Target::table(query.sql())],
         field_config: FieldConfig {
             defaults: FieldConfigDefaults {
                 links: vec![DataLink {
-                    url: UrlBuilder::new_dashboard(format!("{}-sync-errors", config.team_slug()))
+                    url: UrlBuilder::new_dashboard(format!("{}-sync-extra", config.team_slug()))
                         .with_time_range_param()
                         .with_param("var-application", application.slug())
                         .with_param("var-channel", channel.to_string())
@@ -81,13 +227,8 @@ fn overview_count_panel(
                     one_click: true,
                     title: "Errors".into(),
                 }],
-                custom: FieldConfigCustom {
-                    axis_label: "success rate".into(),
-                    axis_soft_min: 99,
-                    axis_soft_max: 100,
-                    ..FieldConfigCustom::default()
-                },
-                unit: None,
+                custom: metric.field_config_custom(),
+                unit: metric.unit(),
             },
         },
         transformations: vec![
@@ -97,87 +238,57 @@ fn overview_count_panel(
             },
             // Fixup the field names for better legend labels
             Transformation::RenameByRegex {
-                regex: "success_rate (.*)".into(),
+                regex: format!("{column_name} (.*)"),
                 rename_pattern: "$1".into(),
             },
         ],
+        ..TimeSeriesPanel::default()
+    })
+}
+
+fn details_dash_count_panel(title: &str, metric: SyncMetric) -> Panel {
+    let query = Query {
+        select: vec![
+            "TIMESTAMP(submission_date) as time".into(),
+            metric.column_expr(),
+        ],
+        from: format!("(\n{COMBINED_SUBQUERY}\n)"),
+        where_: vec![
+            "$__timeFilter(TIMESTAMP(submission_date))".into(),
+            "channel = '${channel}'".into(),
+            "application=CASE '${application}'
+                WHEN 'firefox_desktop' THEN 'desktop'
+                WHEN 'firefox_android' THEN 'firefox-android'
+                WHEN 'firefox_ios' THEN 'firefox-ios'
+                ELSE '${application}'
+            END"
+            .into(),
+            "engine_name = '${engine}'".into(),
+        ],
+        ..Query::default()
+    };
+
+    TimeSeriesPanel {
+        title: title.into(),
+        grid_pos: GridPos::height(10),
+        datasource: Datasource::bigquery(),
+        // needs to be fairly large since the total sync count can be low on mobile/nightly
+        interval: "1d".into(),
+        targets: vec![Target::table(query.sql())],
+        transformations: vec![],
+        field_config: FieldConfig {
+            defaults: FieldConfigDefaults {
+                links: vec![],
+                custom: metric.field_config_custom(),
+                unit: metric.unit(),
+            },
+        },
         ..TimeSeriesPanel::default()
     }
     .into()
 }
 
-/// Subquery to fetch general sync info for desktop
-///
-/// We use subqueries to smooth out the differences between desktop and mobile telemetry.
-fn desktop_count_query(channel_expr: String) -> String {
-    format!(
-        "\
-WITH counts AS
-  (SELECT 
-      $__timeGroup(submission_timestamp, $__interval) as time,
-      JSON_VALUE(engine.name) AS engine_name,
-      COUNTIF(syncs.failureReason IS NOT NULL OR engine.failureReason IS NOT NULL) as count_total_errors,
-      COUNTIF(syncs.failureReason IS NULL
-              AND engine.failureReason IS NULL
-              AND (engine.incoming IS NOT NULL
-                   OR engine.outgoing IS NOT NULL 
-                   OR engine.took IS NOT NULL)) AS count_success,
-   FROM firefox_desktop.sync
-   CROSS JOIN UNNEST(JSON_QUERY_ARRAY(metrics.object.syncs_syncs)) as syncs
-   CROSS JOIN UNNEST(JSON_QUERY_ARRAY(syncs,'$.engines')) AS engine
-   WHERE metrics IS NOT NULL
-     AND JSON_VALUE(engine.name) NOT IN ('bookmarks', 'extension-storage')
-     AND normalized_channel = {channel_expr}
-     AND $__timeFilter(submission_timestamp)
-   GROUP BY time, engine_name)
-SELECT engine_name,
-       time,
-       count_success / (count_success + count_total_errors) * 100 AS success_rate,
-FROM counts
-ORDER BY time")
-}
-
-/// Subquery to fetch general sync info for mobile
-///
-/// We use subqueries to smooth out the differences between desktop and mobile telemetry.
-fn mobile_count_query(config: &TeamConfig, channel_expr: String) -> String {
-    let parts = config
-        .components
-        .iter()
-        .flat_map(|c| c.sync_engines())
-        .map(|engine_name| {
-            let table_name = format!("{}_sync", engine_name.replace("-", "_"));
-            format!(
-                "\
-SELECT '{engine_name}' AS engine_name, 
-    $__timeGroup(submission_timestamp, $__interval) as time,
-    SAFE_DIVIDE(
-        -- 100 * success count
-        100 * COUNTIF(
-            (metrics.labeled_counter.{table_name}_v2_incoming IS NOT NULL
-              OR metrics.labeled_counter.{table_name}_v2_outgoing IS NOT NULL)
-            AND metrics.labeled_string.{table_name}_v2_failure_reason IS NULL
-        ),
-        -- count success or failures
-        COUNTIF(
-            metrics.labeled_string.{table_name}_v2_failure_reason IS NOT NULL
-            OR metrics.labeled_counter.{table_name}_v2_outgoing IS NOT NULL
-            OR metrics.labeled_counter.{table_name}_v2_incoming IS NOT NULL
-        )
-    ) AS success_rate,
-FROM mozdata.fenix.{table_name}
-WHERE normalized_channel={channel_expr} AND $__timeFilter(submission_timestamp)
-GROUP BY 1, 2"
-            )
-        })
-        .collect::<Vec<_>>();
-    format!(
-        "{}\nORDER BY engine_name, time",
-        parts.join("\nUNION ALL\n")
-    )
-}
-
-fn error_list_count_panel(config: &TeamConfig) -> Panel {
+fn details_dash_error_count_panel(config: &TeamConfig) -> Panel {
     let query = Query {
         select: vec![
             "error".into(),
@@ -186,7 +297,7 @@ fn error_list_count_panel(config: &TeamConfig) -> Panel {
         ],
         where_: vec![
             "application='${application}'".into(),
-            "engine_name='${engine}'".into(),
+            "engine_name = '${engine}'".into(),
             "normalized_channel = '${channel}'".into(),
             "$__timeFilter(submission_timestamp)".into(),
         ],
@@ -197,7 +308,7 @@ fn error_list_count_panel(config: &TeamConfig) -> Panel {
     };
 
     TimeSeriesPanel {
-        title: "Error counts".into(),
+        title: "Error counts by type".into(),
         grid_pos: GridPos::height(10),
         datasource: Datasource::bigquery(),
         // needs to be fairly large since the total sync count can be low on mobile/nightly
@@ -218,7 +329,7 @@ fn error_list_count_panel(config: &TeamConfig) -> Panel {
     .into()
 }
 
-fn error_list_log_panel(config: &TeamConfig) -> Panel {
+fn details_dash_error_log_panel(config: &TeamConfig) -> Panel {
     let query = Query {
         select: vec![
             "CONCAT(IFNULL(error, 'unknown'), ': ', IFNULL(details, 'unknown')) as message".into(),
@@ -226,7 +337,7 @@ fn error_list_log_panel(config: &TeamConfig) -> Panel {
         ],
         from: format!("(\n{}\n)", error_subquery(config)),
         where_: vec![
-            "engine_name='${engine}'".into(),
+            "engine_name = '${engine}'".into(),
             "normalized_channel = '${channel}'".into(),
             "application='${application}'".into(),
             "$__timeFilter(submission_timestamp)".into(),
@@ -282,6 +393,8 @@ WHERE
             .components
             .iter()
             .flat_map(|c| c.sync_engines())
+            // filter out desktop-only engines
+            .filter(|c| **c != "rust-logins")
             .flat_map(|engine_name| {
                 [
                     format!(
@@ -314,3 +427,57 @@ WHERE
 
     queries.join("\nUNION ALL\n")
 }
+
+fn sync_legacy_dashboard_panel() -> Panel {
+    let content = "\
+# Legacy Sync dashboards
+* [iOS Credit Cards Verification Usage](https://sql.telemetry.mozilla.org/dashboard/ios-credit-cards-verification-usage)
+* [Mobile Logins Verification Usage](https://sql.telemetry.mozilla.org/dashboard/mobile-logins-verification-usage?p_channel=org_mozilla_ios_firefox)
+* [iOS FxA Keychain Rollout Enrollment](https://sql.telemetry.mozilla.org/dashboard/ios-credit-cards-key-regeneration-metrics)
+";
+    TextPanel {
+        content: content.to_string(),
+        mode: "markdown".into(),
+        grid_pos: GridPos::height(8),
+    }
+    .into()
+}
+
+fn engine_where_clause(config: &TeamConfig) -> String {
+    let mut engines: Vec<_> = config
+        .components
+        .iter()
+        .flat_map(|c| c.sync_engines())
+        .map(|e| format!("'{e}'"))
+        .collect();
+    engines.sort_unstable();
+    engines.dedup();
+    format!("engine_name IN ({})", engines.join(", "))
+}
+
+/// Subquery that combines the desktop and mobile ETL tables
+const COMBINED_SUBQUERY: &str = "\
+SELECT 
+    submission_date,
+    channel,
+    application,
+    engine_name,
+    success_rate,
+    avg_sync_time,
+    count_total
+FROM
+    moz-fx-data-shared-prod.sync_derived.desktop_v1
+
+UNION ALL
+
+SELECT 
+    submission_date,
+    channel,
+    application,
+    engine_name,
+    success_rate,
+    0 as avg_sync_time, -- TODO: make this work on Mobile
+    count_total
+FROM
+    moz-fx-data-shared-prod.sync_derived.mobile_v1
+";

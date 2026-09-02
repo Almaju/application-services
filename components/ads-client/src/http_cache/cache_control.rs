@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use viaduct::{header_names, Response};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,6 +49,10 @@ impl From<&Response> for CacheControl {
 impl CacheControl {
     pub fn should_cache(&self) -> bool {
         !self.no_store
+    }
+
+    pub fn max_age_duration(&self) -> Option<Duration> {
+        self.max_age.map(Duration::from_secs)
     }
 }
 

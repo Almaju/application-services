@@ -20,14 +20,14 @@ sync15 = { path = "../sync15", default-features=false, features=["crypto"] }
 url = "2.2"
 viaduct = { path = "../viaduct" }
 jwcrypto = { path = "../support/jwcrypto" }
-rc_crypto = { path = "../support/rc_crypto", features = ["ece", "hawk"] }
+rc_crypto = { path = "../support/rc_crypto", features = ["ece"] }
 error-support = { path = "../support/error" }
 thiserror = "2"
 anyhow = "1.0"
 sync-guid = { path = "../support/guid", features = ["random"] }
 uniffi = { version = "0.31" }
 payload-support = { path = "../support/payload" }
-nss = { path = "../support/rc_crypto/nss" }
+nss-as = { path = "../support/rc_crypto/nss" }
 
 [build-dependencies]
 uniffi = { version = "0.31", features = ["build"] }
