@@ -3,14 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use error_support::{ErrorHandling, GetErrorHandling};
-use rc_crypto::hawk;
 use std::string;
 
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+#[uniffi(flat_error)]
 /// Public error type thrown by many [`FirefoxAccount`] operations.
 ///
 /// Precise details of the error are hidden from consumers. The type of the error indicates how the
 /// calling code should respond.
-#[derive(Debug, thiserror::Error)]
 pub enum FxaError {
     /// Thrown when there was a problem with the authentication status of the account,
     /// such as an expired token. The application should [check its authorization status](
@@ -18,6 +18,12 @@ pub enum FxaError {
     /// or retry the operation with a freshly-generated token.
     #[error("authentication error")]
     Authentication,
+    /// Thrown when an authenticated account isn't allowed to perform some operation. Unlike
+    /// `Authentication`, there's no problem with the account status. In some cases it
+    /// might be possible to request additional scopes, and once granted, the operation
+    /// may succeed.
+    #[error("forbidden")]
+    Forbidden,
     /// Thrown if an operation fails due to network access problems.
     /// The application may retry at a later time once connectivity is restored.
     #[error("network error")]
@@ -67,12 +73,6 @@ pub enum Error {
     #[error("Unknown OAuth State")]
     UnknownOAuthState,
 
-    #[error("Multiple OAuth scopes requested")]
-    MultipleScopesRequested,
-
-    #[error("No cached token for scope {0}")]
-    NoCachedToken(String),
-
     #[error("No cached scoped keys for scope {0}")]
     NoScopedKey(String),
 
@@ -112,6 +112,15 @@ pub enum Error {
     #[error("Remote key and local key mismatch")]
     MismatchedKeys,
 
+    // For example, we requested an access token, the server responded with a 200, but the response body
+    // had no token. This is a little bit vague, because in many cases you would get a JSON error if the
+    // shape of the payload was entirely wrong.
+    #[error("The response from the server, or the content in that reponse, was unexpected")]
+    UnexpectedServerResponse,
+
+    // This should probably be rolled up into `UnexpectedServerResponse`, but the way it is implemented
+    // and even exposed to consumers makes that a little tricky - but at the end of the day, this can
+    // only happen when the server gave us a confused response.
     #[error("The sync scoped key was missing in the server response")]
     SyncScopedKeyMissingInServerResponse,
 
@@ -181,9 +190,6 @@ pub enum Error {
     #[error("Sync15 error: {0}")]
     SyncError(#[from] sync15::Error),
 
-    #[error("HAWK error: {0}")]
-    HawkError(#[from] hawk::Error),
-
     #[error("Integer conversion error: {0}")]
     IntegerConversionError(#[from] std::num::TryFromIntError),
 
@@ -209,9 +215,12 @@ impl GetErrorHandling for Error {
         match self {
             Error::RemoteError { code: 401, .. }
             | Error::NoRefreshToken
-            | Error::NoScopedKey(_)
-            | Error::NoCachedToken(_) => {
+            | Error::NoSessionToken
+            | Error::NoScopedKey(_) => {
                 ErrorHandling::convert(FxaError::Authentication).log_warning()
+            }
+            Error::RemoteError { code: 403, .. } => {
+                ErrorHandling::convert(FxaError::Forbidden).log_warning()
             }
             Error::RequestError(_) => ErrorHandling::convert(FxaError::Network).log_warning(),
             Error::SyncScopedKeyMissingInServerResponse => {

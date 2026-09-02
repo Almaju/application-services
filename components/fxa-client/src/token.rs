@@ -20,6 +20,7 @@ use error_support::handle_error;
 use serde_derive::*;
 use std::convert::TryInto;
 
+#[uniffi::export]
 impl FirefoxAccount {
     /// Get a short-lived OAuth access token for the user's account.
     ///
@@ -34,9 +35,13 @@ impl FirefoxAccount {
     ///
     /// # Arguments
     ///
-    ///    - `scope` - the OAuth scope to be granted by the token.
-    ///        - This must be one of the scopes requested during the signin flow.
-    ///        - Only a single scope is supported; for multiple scopes request multiple tokens.
+    ///    - `scope` - space-separated list of OAuth scopes to be granted by the token.
+    ///        - Each scope must have been requested during the signin flow, or be a scope
+    ///          which the server might offer automatically in some account-specific cases.
+    ///        - Scope order is not significant; `"a b"` and `"b a"` are equivalent.
+    ///        - When a single scope is requested and it has an associated scoped key
+    ///          (e.g. `https://identity.mozilla.com/apps/oldsync`), the returned
+    ///          `AccessTokenInfo::key` will be populated; for multi-scope requests it is `None`.
     ///    - `use_cache` - optionally set to false to force a new token request.  The fetched
     ///       token will still be cached for later `get_access_token` calls.
     ///
@@ -46,11 +51,41 @@ impl FirefoxAccount {
     ///      token, it should call [`clear_access_token_cache`](FirefoxAccount::clear_access_token_cache)
     ///      before requesting a fresh token.
     #[handle_error(Error)]
+    #[uniffi::method(default(use_cache = true))]
     pub fn get_access_token(&self, scope: &str, use_cache: bool) -> ApiResult<AccessTokenInfo> {
         self.internal
             .lock()
             .get_access_token(scope, use_cache)?
             .try_into()
+    }
+
+    /// Check whether the account has already been granted the given OAuth scope(s).
+    ///
+    /// This checks whether the refresh token has *every* specified scope.
+    ///
+    /// # Arguments
+    ///    - `scope` - space-separated list of OAuth scopes. Order is not significant.
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.internal.lock().has_scope(scope)
+    }
+
+    /// Builds a complete `signedInUser` JSON object for a WebChannel `fxaccounts:fxa_status`
+    /// response, embedding the session token without exposing it to the browser layer. Email and
+    /// uid are read from the cached profile in internal state. Returns `None` if no session token
+    /// is available.
+    pub fn get_signed_in_user_for_web_channel(&self) -> Option<String> {
+        self.internal.lock().get_signed_in_user_for_web_channel()
+    }
+
+    /// Handle a WebChannel password-change notification by exchanging the new session token
+    /// for a new refresh token.
+    ///
+    /// **💾 This method alters the persisted account state.**
+    #[handle_error(Error)]
+    pub fn handle_web_channel_password_change(&self, json_payload: String) -> ApiResult<()> {
+        self.internal
+            .lock()
+            .handle_web_channel_password_change(&json_payload)
     }
 
     /// Get the session token for the user's account, if one is available.
@@ -125,13 +160,13 @@ impl FirefoxAccount {
     }
 }
 
+#[derive(uniffi::Record, Debug)]
 /// An OAuth access token, with its associated keys and metadata.
 ///
 /// This struct represents an FxA OAuth access token, which can be used to access a resource
 /// or service on behalf of the user. For example, accessing the user's data in Firefox Sync
 /// an access token for the scope `https://identity.mozilla.com/apps/sync` along with the
 /// associated encryption key.
-#[derive(Debug)]
 pub struct AccessTokenInfo {
     /// The scope of access granted by token.
     pub scope: String,
@@ -157,13 +192,12 @@ pub struct AccessTokenInfo {
     pub expires_at: i64,
 }
 
+#[derive(uniffi::Record, Clone, Serialize, Deserialize)]
 /// A cryptographic key associated with an OAuth scope.
 ///
 /// Some OAuth scopes have a corresponding client-side encryption key that is required
 /// in order to access protected data. This struct represents such key material in a
 /// format compatible with the common "JWK" standard.
-///
-#[derive(Clone, Serialize, Deserialize)]
 pub struct ScopedKey {
     /// The type of key.
     ///
@@ -183,6 +217,7 @@ pub struct ScopedKey {
     pub kid: String,
 }
 
+#[derive(uniffi::Record)]
 /// Parameters provided in an incoming OAuth request.
 ///
 /// This struct represents parameters obtained from an incoming OAuth request - that is,

@@ -34,9 +34,9 @@ val client = MozAdsClientBuilder()
 | Method                                                                                                                  | Return Type                                            | Description                                                                                                                                                                          |
 | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `clearCache()`                                                                                                          | `Unit`                                                 | Clears the client's HTTP cache. Throws on failure.                                                                                                                                   |
-| `recordClick(clickUrl: String)`                                                                                         | `Unit`                                                 | Records a click using the provided callback URL (typically from `ad.callbacks.click`).                                                                                               |
-| `recordImpression(impressionUrl: String)`                                                                               | `Unit`                                                 | Records an impression using the provided callback URL (typically from `ad.callbacks.impression`).                                                                                    |
-| `reportAd(reportUrl: String)`                                                                                           | `Unit`                                                 | Reports an ad using the provided callback URL (typically from `ad.callbacks.report`).                                                                                                |
+| `recordClick(clickUrl: String, options: MozAdsCallbackOptions?)`                                                                                         | `Unit`                                                 | Records a click using the provided callback URL (typically from `ad.callbacks.click`).                                                                                               |
+| `recordImpression(impressionUrl: String, options: MozAdsCallbackOptions?)`                                                                               | `Unit`                                                 | Records an impression using the provided callback URL (typically from `ad.callbacks.impression`).                                                                                    |
+| `reportAd(reportUrl: String, reason: MozAdsReportReason, options: MozAdsCallbackOptions?)`                                                                                           | `Unit`                                                 | Reports an ad using the provided callback URL (typically from `ad.callbacks.report`).                                                                                                |
 | `requestImageAds(mozAdRequests: List<MozAdsPlacementRequest>, options: MozAdsRequestOptions?)`                          | `Map<String, MozAdsImage>`                             | Requests one image ad per placement. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns a map keyed by `placementId`.                                              |
 | `requestSpocAds(mozAdRequests: List<MozAdsPlacementRequestWithCount>, options: MozAdsRequestOptions?)`                  | `Map<String, List<MozAdsSpoc>>`                        | Requests spoc ads per placement. Each placement request specifies its own count. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns a map keyed by `placementId`.  |
 | `requestTileAds(mozAdRequests: List<MozAdsPlacementRequest>, options: MozAdsRequestOptions?)`                           | `Map<String, MozAdsTile>`                              | Requests one tile ad per placement. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns a map keyed by `placementId`.                                               |
@@ -219,13 +219,48 @@ Options passed when making a single ad request.
 
 ```kotlin
 data class MozAdsRequestOptions(
-    val cachePolicy: MozAdsRequestCachePolicy?
+    val cachePolicy: MozAdsRequestCachePolicy?,
+    val flags: Map<String, Boolean> = emptyMap(),
+    val ohttp: Boolean = false
 )
 ```
 
-| Field          | Type                         | Description                                                                                    |
-| -------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| `cachePolicy`  | `MozAdsRequestCachePolicy?`  | Per-request caching policy. If `null`, uses the client's default TTL with a `CacheFirst` mode. |
+| Field         | Type                         | Description                                                                                                                                |
+| ------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cachePolicy` | `MozAdsRequestCachePolicy?`  | Per-request caching policy. If `null`, uses the client's default TTL with a `CacheFirst` mode.                                             |
+| `flags`       | `Map<String, Boolean>`       | Request-level flags forwarded verbatim as the `flags` object on the wire. An empty map omits it. e.g. `mapOf("contextual_placement" to true)`. Defaults to `emptyMap()`. |
+| `ohttp`       | `Boolean`                    | Whether to route this request through OHTTP. Defaults to `false`.                                                                          |
+
+---
+
+## `MozAdsCallbackOptions`
+
+Options passed when making callback requests (click, impression, report).
+
+```kotlin
+data class MozAdsCallbackOptions(
+    val ohttp: Boolean = false
+)
+```
+
+| Field   | Type      | Description                                                        |
+| ------- | --------- | ------------------------------------------------------------------ |
+| `ohttp` | `Boolean` | Whether to route this callback through OHTTP. Defaults to `false`. |
+
+#### OHTTP Usage Example
+
+```kotlin
+// Request ads over OHTTP
+val ads = client.requestTileAds(placements, MozAdsRequestOptions(ohttp = true))
+
+// Record a click over OHTTP
+client.recordClick(ad.callbacks.click, MozAdsCallbackOptions(ohttp = true))
+
+// Record an impression over OHTTP
+client.recordImpression(ad.callbacks.impression, MozAdsCallbackOptions(ohttp = true))
+```
+
+> **Note:** OHTTP must be configured at the viaduct level before use. When `ohttp` is `true`, the client automatically performs a preflight request to obtain geo-location and user-agent headers, which are injected into the MARS request.
 
 ---
 
@@ -468,19 +503,16 @@ It reduces redundant network traffic and improves latency for repeated or identi
 
 ### Cache Lifecycle
 
-Each network response can be stored in the cache with an associated effective TTL, computed as:
+Each network response can be stored in the cache with an associated effective TTL,
+resolved by priority (highest to lowest):
 
-```
-effective_ttl = min(server_max_age, client_default_ttl, per_request_ttl)
-```
+1. `per_request_ttl` — caller-provided override on `MozAdsRequestCachePolicy`.
+2. `server_max_age` — value of the HTTP `Cache-Control: max-age=N` header on the response.
+3. `client_default_ttl` — configured on `MozAdsCacheConfig`.
 
-where:
-
-- `server_max_age` comes from the HTTP `Cache-Control: max-age=N` header (if present),
-- `client_default_ttl` is set in `MozAdsCacheConfig`,
-- `per_request_ttl` is an optional override set in `MozAdsRequestCachePolicy`.
-
-If the effective TTL resolves to 0 seconds, the response is not cached.
+If the effective TTL resolves to 0 seconds (e.g. `Cache-Control: max-age=0`),
+the response is not cached. The resolved TTL is capped at 7 days regardless
+of source.
 
 ### Configuring The Cache
 

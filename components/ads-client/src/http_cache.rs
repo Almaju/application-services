@@ -7,18 +7,25 @@ mod bytesize;
 mod cache_control;
 mod clock;
 mod connection_initializer;
+mod outcome;
 mod request_hash;
 mod store;
+mod strategy;
+mod ttl;
 
-use self::{builder::HttpCacheBuilder, cache_control::CacheControl, store::HttpCacheStore};
+use self::{
+    builder::HttpCacheBuilder,
+    store::HttpCacheStore,
+    strategy::{CacheFirst, NetworkFirst},
+};
 
 use std::hash::Hash;
 use viaduct::{Client, Request, Response};
 
 pub use self::builder::HttpCacheBuilderError;
 pub use self::bytesize::ByteSize;
+pub use self::outcome::CacheOutcome;
 pub use self::request_hash::RequestHash;
-use std::cmp;
 use std::path::Path;
 use std::time::Duration;
 
@@ -37,124 +44,76 @@ impl Default for CachePolicy {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum HttpCacheError {
-    #[error("Could not build cache: {0}")]
-    Builder(#[from] builder::HttpCacheBuilderError),
-
-    #[error("SQLite operation failed: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-}
-
-#[derive(Debug)]
-pub enum CacheOutcome {
-    Hit,
-    LookupFailed(rusqlite::Error), // cache miss path due to lookup error
-    NoCache,                       // send policy requested a cache bypass
-    MissNotCacheable,              // policy says "don't store"
-    MissStored,                    // stored successfully
-    StoreFailed(HttpCacheError),   // insert/upsert failed
-    CleanupFailed(HttpCacheError), // cleaning expired objects failed
-}
-
-pub struct HttpCache<T: Hash + Into<Request>> {
-    client: Client,
+pub struct HttpCache {
     default_ttl: Duration,
     max_size: ByteSize,
     store: HttpCacheStore,
-    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Hash + Into<Request>> HttpCache<T> {
-    pub fn builder<P: AsRef<Path>>(db_path: P) -> HttpCacheBuilder<T> {
+impl HttpCache {
+    pub fn builder<P: AsRef<Path>>(db_path: P) -> HttpCacheBuilder {
         HttpCacheBuilder::new(db_path.as_ref())
     }
 
-    pub fn clear(&self) -> Result<(), HttpCacheError> {
-        self.store.clear_all().map_err(HttpCacheError::from)?;
+    pub fn clear(&self) -> Result<(), rusqlite::Error> {
+        self.store.clear_all()?;
         Ok(())
     }
 
-    pub fn invalidate_by_hash(&self, request_hash: &RequestHash) -> Result<(), HttpCacheError> {
-        self.store
-            .invalidate_by_hash(request_hash)
-            .map_err(HttpCacheError::from)?;
+    pub fn shutdown_db(self) -> Result<(), rusqlite::Error> {
+        self.store.close()
+    }
+
+    pub fn invalidate_by_hash(&self, request_hash: &RequestHash) -> Result<(), rusqlite::Error> {
+        self.store.invalidate_by_hash(request_hash)?;
         Ok(())
     }
 
-    pub fn send_with_policy(&self, item: T, cache_policy: &CachePolicy) -> HttpCacheSendResult {
-        let mut outcomes = vec![];
-        let request_hash = RequestHash::new(&item);
-        let ttl = match cache_policy {
-            CachePolicy::CacheFirst { ttl: Some(d) }
-            | CachePolicy::NetworkFirst { ttl: Some(d) } => *d,
-            _ => self.default_ttl,
-        };
-
-        if let Err(e) = self.store.delete_expired_entries() {
-            outcomes.push(CacheOutcome::CleanupFailed(e.into()));
-        }
-
-        if matches!(cache_policy, CachePolicy::CacheFirst { .. }) {
-            match self.store.lookup(&request_hash) {
-                Ok(Some(response)) => {
-                    outcomes.push(CacheOutcome::Hit);
-                    return Ok((response, outcomes));
-                }
-                Err(e) => {
-                    outcomes.push(CacheOutcome::LookupFailed(e));
-                    let (response, mut fetch_outcomes) = self.fetch_and_cache(item, &ttl)?;
-                    outcomes.append(&mut fetch_outcomes);
-                    return Ok((response, outcomes));
-                }
-                Ok(None) => {}
-            }
-        }
-
-        let (response, mut fetch_outcomes) = self.fetch_and_cache(item, &ttl)?;
-        outcomes.append(&mut fetch_outcomes);
-        Ok((response, outcomes))
-    }
-
-    pub fn set_client(&mut self, client: Client) {
-        self.client = client;
-    }
-
-    fn cache_object(
+    pub fn send_with_policy<T: Hash + Into<Request>>(
         &self,
-        request_hash: &RequestHash,
-        response: &Response,
-        ttl: &Duration,
-    ) -> Result<(), HttpCacheError> {
-        self.store.store_with_ttl(request_hash, response, ttl)?;
-        self.store.trim_to_max_size(self.max_size.as_u64() as i64)?;
-        Ok(())
-    }
+        client: &Client,
+        item: T,
+        policy: &CachePolicy,
+    ) -> HttpCacheSendResult {
+        let hash = RequestHash::new(&item);
+        let request = item.into();
+        let mut outcomes = vec![];
 
-    fn fetch_and_cache(&self, item: T, ttl: &Duration) -> HttpCacheSendResult {
-        let request_hash = RequestHash::new(&item);
-        let request: Request = item.into();
-        let response = self.client.send_sync(request)?;
-        let cache_control = CacheControl::from(&response);
-        let cache_outcome = if cache_control.should_cache() {
-            let ttl = match cache_control.max_age {
-                Some(s) => cmp::min(*ttl, Duration::from_secs(s)),
-                None => *ttl,
-            };
+        // Clean up expired entries before applying the policy
+        if let Err(e) = self.store.delete_expired_entries() {
+            outcomes.push(CacheOutcome::CleanupFailed(e));
+        }
 
-            if ttl.is_zero() {
-                return Ok((response, vec![CacheOutcome::NoCache]));
+        // Apply the cache policy and collect outcomes
+        let (response, mut strategy_outcomes) = match policy {
+            CachePolicy::CacheFirst { ttl } => CacheFirst {
+                hash,
+                request,
+                explicit_ttl: *ttl,
+                default_ttl: self.default_ttl,
             }
-
-            match self.cache_object(&request_hash, &response, &ttl) {
-                Ok(()) => CacheOutcome::MissStored,
-                Err(e) => CacheOutcome::StoreFailed(e),
+            .apply(client, &self.store),
+            CachePolicy::NetworkFirst { ttl } => NetworkFirst {
+                hash,
+                request,
+                explicit_ttl: *ttl,
+                default_ttl: self.default_ttl,
             }
-        } else {
-            CacheOutcome::MissNotCacheable
-        };
+            .apply(client, &self.store),
+        }?;
+        outcomes.append(&mut strategy_outcomes);
 
-        Ok((response, vec![cache_outcome]))
+        // Trim the cache to the max size only when something was actually stored
+        if outcomes
+            .iter()
+            .any(|o| matches!(o, CacheOutcome::MissStored))
+        {
+            if let Err(e) = self.store.trim_to_max_size(&self.max_size) {
+                outcomes.push(CacheOutcome::TrimFailed(e));
+            }
+        }
+
+        Ok((response, outcomes))
     }
 }
 
@@ -164,6 +123,11 @@ mod tests {
     use std::hash::{Hash, Hasher};
 
     use super::*;
+    use viaduct::ClientSettings;
+
+    fn make_client() -> Client {
+        Client::new(ClientSettings::default())
+    }
 
     /// Test-only hashable wrapper around Request.
     /// Hashes method + url for cache key purposes.
@@ -188,7 +152,7 @@ mod tests {
         TestRequest(Request::post(url).json(&serde_json::json!({"fake":"data"})))
     }
 
-    fn make_cache() -> HttpCache<TestRequest> {
+    fn make_cache() -> HttpCache {
         // Our store opens an in-memory cache for tests. So the name is irrelevant.
         HttpCache::builder("ignored_in_tests.db")
             .default_ttl(Duration::from_secs(60))
@@ -197,7 +161,7 @@ mod tests {
             .expect("cache build should succeed")
     }
 
-    fn make_cache_with_ttl(secs: u64) -> HttpCache<TestRequest> {
+    fn make_cache_with_ttl(secs: u64) -> HttpCache {
         // In tests our store uses an in-memory DB; filename is irrelevant.
         HttpCache::builder("ignored_in_tests.db")
             .default_ttl(Duration::from_secs(secs))
@@ -209,21 +173,20 @@ mod tests {
     #[test]
     fn test_http_cache_creation() {
         // Test that HttpCache can be created successfully with test config
-        let cache: Result<HttpCache<TestRequest>, _> = HttpCache::builder("test_cache.db").build();
+        let cache: Result<HttpCache, _> = HttpCache::builder("test_cache.db").build();
         assert!(cache.is_ok());
 
         // Test with custom config
-        let cache_with_config: Result<HttpCache<TestRequest>, _> =
-            HttpCache::builder("custom_test.db")
-                .max_size(ByteSize::mib(1))
-                .default_ttl(Duration::from_secs(60))
-                .build();
+        let cache_with_config: Result<HttpCache, _> = HttpCache::builder("custom_test.db")
+            .max_size(ByteSize::mib(1))
+            .default_ttl(Duration::from_secs(60))
+            .build();
         assert!(cache_with_config.is_ok());
     }
 
     #[test]
     fn test_clear_cache() {
-        let cache: HttpCache<TestRequest> = HttpCache::builder("test_clear.db").build().unwrap();
+        let cache: HttpCache = HttpCache::builder("test_clear.db").build().unwrap();
 
         // Create a test request and response
         let hash = RequestHash::new(&("Get", "https://example.com/test"));
@@ -258,7 +221,7 @@ mod tests {
         viaduct_dev::init_backend_dev();
 
         let body = r#"{"ok":true}"#;
-        let _m = mock("POST", "/ads")
+        let m = mock("POST", "/ads")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -267,73 +230,76 @@ mod tests {
 
         let cache = make_cache();
         let req = make_post_request();
+        let client = make_client();
 
         // First call: miss -> store
         let (_, outcomes) = cache
-            .send_with_policy(req.clone(), &CachePolicy::default())
+            .send_with_policy(&client, req.clone(), &CachePolicy::default())
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Second call: hit (no extra HTTP request due to expect(1))
         let (response, outcomes) = cache
-            .send_with_policy(req, &CachePolicy::default())
+            .send_with_policy(&client, req, &CachePolicy::default())
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::Hit));
         assert_eq!(response.status, 200);
+        m.assert();
     }
 
     #[test]
     fn test_refresh_policy_always_uses_network_then_caches() {
         viaduct_dev::init_backend_dev();
 
-        let body1 = r#"{"ok":true,"n":1}"#;
-        let body2 = r#"{"ok":true,"n":2}"#;
-        // Two live responses expected on refresh
-        let _m1 = mock("POST", "/ads")
+        let body = r#"{"ok":true}"#;
+        let m = mock("POST", "/ads")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(body1)
-            .create();
-        let _m2 = mock("POST", "/ads")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(body2)
+            .with_body(body)
+            .expect(2)
             .create();
 
         let cache = make_cache();
         let req = make_post_request();
+        let client = make_client();
 
         // First refresh: live -> MissStored
         let (_, outcomes) = cache
-            .send_with_policy(req.clone(), &CachePolicy::NetworkFirst { ttl: None })
+            .send_with_policy(
+                &client,
+                req.clone(),
+                &CachePolicy::NetworkFirst { ttl: None },
+            )
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-        // Second refresh: live again (different body), still MissStored
+        // Second refresh: live again, still MissStored
         let (response, outcomes) = cache
-            .send_with_policy(req, &CachePolicy::NetworkFirst { ttl: None })
+            .send_with_policy(&client, req, &CachePolicy::NetworkFirst { ttl: None })
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
         assert_eq!(response.status, 200);
+        m.assert();
     }
 
     #[test]
     fn test_not_cacheable_no_store() {
         viaduct_dev::init_backend_dev();
 
-        let _m = mock("POST", "/ads")
+        let m = mock("POST", "/ads")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header("cache-control", "no-store") // should block caching
             .with_body(r#"{"ok":true}"#)
-            .expect(1)
+            .expect(2) // both calls should hit the network since the response isn't cacheable
             .create();
 
         let cache = make_cache();
         let req = make_post_request();
+        let client = make_client();
 
         let (_, outcomes) = cache
-            .send_with_policy(req.clone(), &CachePolicy::default())
+            .send_with_policy(&client, req.clone(), &CachePolicy::default())
             .unwrap();
         assert!(matches!(
             outcomes.last().unwrap(),
@@ -341,30 +307,24 @@ mod tests {
         ));
 
         // Next call should hit network again (since we didn't cache)
-        let _m2 = mock("POST", "/ads")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"ok":true}"#)
-            .expect(1)
-            .create();
         let (_, outcomes) = cache
-            .send_with_policy(req, &CachePolicy::default())
+            .send_with_policy(&client, req, &CachePolicy::default())
             .unwrap();
-        // Either MissStored (if headers differ) or MissNotCacheable if still no-store
         assert!(matches!(
             outcomes.last().unwrap(),
-            CacheOutcome::MissStored | CacheOutcome::MissNotCacheable
+            CacheOutcome::MissNotCacheable
         ));
+        m.assert();
     }
 
     #[test]
-    fn ttl_resolution_min_of_server_request_default() {
+    fn ttl_resolution_explicit_overrides_server_max_age() {
         viaduct_dev::init_backend_dev();
 
-        let _m = mockito::mock("POST", "/ads")
+        let m = mockito::mock("POST", "/ads")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_header("cache-control", "max-age=1") // Set max age to 1 second
+            .with_header("cache-control", "max-age=1") // Server says 1 second
             .with_body(r#"{"ok":true}"#)
             .expect(1)
             .create();
@@ -373,25 +333,65 @@ mod tests {
         let req = make_post_request();
         let hash = RequestHash::new(&req);
         let policy = CachePolicy::CacheFirst {
-            ttl: Some(Duration::from_secs(20)), // 20 second ttl specified vs the cache's default of 300s
+            ttl: Some(Duration::from_secs(20)), // Caller asked for 20s
         };
 
-        // Store ttl should resolve to 1s as specified by response headers
-        let (_, outcomes) = cache.send_with_policy(req, &policy).unwrap();
+        let client = make_client();
+        // Caller's explicit TTL wins over the server's max-age.
+        let (_, outcomes) = cache.send_with_policy(&client, req, &policy).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-        // After ~>1s, cleanup should remove it
+        // Past the server max-age (1s) but still under the explicit TTL (20s) — entry is still there.
         cache.store.get_clock().advance(2);
         cache.store.delete_expired_entries().unwrap();
+        assert!(cache.store.lookup(&hash).unwrap().is_some());
 
+        // Past the explicit TTL — entry should be expired.
+        cache.store.get_clock().advance(20);
+        cache.store.delete_expired_entries().unwrap();
+        assert!(cache.store.lookup(&hash).unwrap().is_none());
+        m.assert();
+    }
+
+    #[test]
+    fn ttl_resolution_uses_server_max_age_when_no_explicit_override() {
+        viaduct_dev::init_backend_dev();
+
+        let _m = mockito::mock("POST", "/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("cache-control", "max-age=2") // Server says 2 seconds
+            .with_body(r#"{"ok":true}"#)
+            .expect(1)
+            .create();
+
+        // Configured default is 300s — should be ignored in favor of server max-age.
+        let cache = make_cache_with_ttl(300);
+        let req = make_post_request();
+        let hash = RequestHash::new(&req);
+
+        let client = make_client();
+        let (_, outcomes) = cache
+            .send_with_policy(&client, req, &CachePolicy::default())
+            .unwrap();
+        assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
+
+        // Still cached at ~1s.
+        cache.store.get_clock().advance(1);
+        cache.store.delete_expired_entries().unwrap();
+        assert!(cache.store.lookup(&hash).unwrap().is_some());
+
+        // Expired after exceeding server max-age.
+        cache.store.get_clock().advance(2);
+        cache.store.delete_expired_entries().unwrap();
         assert!(cache.store.lookup(&hash).unwrap().is_none());
     }
 
     #[test]
-    fn ttl_resolution_request_overrides_default_when_smaller() {
+    fn ttl_resolution_explicit_overrides_default() {
         viaduct_dev::init_backend_dev();
 
-        let _m = mockito::mock("POST", "/ads")
+        let m = mockito::mock("POST", "/ads")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"ok":true}"#)
@@ -405,8 +405,9 @@ mod tests {
             ttl: Some(Duration::from_secs(2)),
         };
 
+        let client = make_client();
         // Store with effective TTL = 2s
-        let (_, outcomes) = cache.send_with_policy(req, &policy).unwrap();
+        let (_, outcomes) = cache.send_with_policy(&client, req, &policy).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired yet at ~1s
@@ -418,13 +419,14 @@ mod tests {
         cache.store.get_clock().advance(2);
         cache.store.delete_expired_entries().unwrap();
         assert!(cache.store.lookup(&hash).unwrap().is_none());
+        m.assert();
     }
 
     #[test]
     fn ttl_resolution_uses_default_when_no_server_and_no_request_override() {
         viaduct_dev::init_backend_dev();
 
-        let _m = mockito::mock("POST", "/ads")
+        let m = mockito::mock("POST", "/ads")
             .with_status(200)
             // No response policy ttl
             .with_header("content-type", "application/json")
@@ -435,9 +437,10 @@ mod tests {
         let cache = make_cache_with_ttl(2);
         let req = make_post_request();
         let hash = RequestHash::new(&req);
+        let client = make_client();
         // Store with effective TTL = 2s from client default
         let (_, outcomes) = cache
-            .send_with_policy(req, &CachePolicy::default())
+            .send_with_policy(&client, req, &CachePolicy::default())
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
@@ -450,29 +453,27 @@ mod tests {
         cache.store.get_clock().advance(3);
         cache.store.delete_expired_entries().unwrap();
         assert!(cache.store.lookup(&hash).unwrap().is_none());
+        m.assert();
     }
 
     #[test]
     fn test_expired_entry_is_a_miss_on_next_send() {
         viaduct_dev::init_backend_dev();
 
-        let _m1 = mockito::mock("POST", "/ads")
+        let m = mockito::mock("POST", "/ads")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"ok":true,"n":1}"#)
-            .create();
-        let _m2 = mockito::mock("POST", "/ads")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"ok":true,"n":2}"#)
+            .with_body(r#"{"ok":true}"#)
+            .expect(2) // both calls should hit the network — second after the entry expires
             .create();
 
         let cache = make_cache_with_ttl(2);
         let req = make_post_request();
+        let client = make_client();
 
         // First call: miss -> store with 2s TTL
         let (_, outcomes) = cache
-            .send_with_policy(req.clone(), &CachePolicy::default())
+            .send_with_policy(&client, req.clone(), &CachePolicy::default())
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
@@ -481,15 +482,15 @@ mod tests {
 
         // Second call: expired entry must be a miss, not a hit
         let (_, outcomes) = cache
-            .send_with_policy(req, &CachePolicy::default())
+            .send_with_policy(&client, req, &CachePolicy::default())
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
+        m.assert();
     }
 
     #[test]
     fn test_invalidate_by_hash() {
-        let cache: HttpCache<TestRequest> =
-            HttpCache::builder("test_invalidate.db").build().unwrap();
+        let cache: HttpCache = HttpCache::builder("test_invalidate.db").build().unwrap();
 
         let hash1 = RequestHash::new(&("Post", "https://example.com/api1"));
         let hash2 = RequestHash::new(&("Post", "https://example.com/api2"));

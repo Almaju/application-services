@@ -101,63 +101,36 @@ class FxaClient(inner: FirefoxAccount, persistCallback: PersistCallback?) : Auto
     fun getAuthState() = this.inner.getAuthState()
 
     /**
-     * Constructs a URL used to begin the OAuth flow for the requested scopes and keys.
+     * Stores anything necessary to login from a WebChannel login JSON payload. This includes the session
+     * token, but that is abstracted because the consuming apps should not be aware of the
+     * specific payload format returned, nor should they get access to the session token
+     * directly if possible.
      *
-     * This performs network requests, and should not be used on the main thread.
-     *
-     * @param scopes List of OAuth scopes for which the client wants access
-     * @param entrypoint to be used for metrics
-     * @return String that resolves to the flow URL when complete
+     * @param jsonPayload The `data` object from the `fxaccounts:login` WebChannel command.
      */
-    fun beginOAuthFlow(
-        scopes: Array<String>,
-        entrypoint: String,
-    ): String {
-        return this.inner.beginOauthFlow(scopes.toList(), entrypoint)
-    }
-
-    /**
-     * Begins the pairing flow.
-     *
-     * This performs network requests, and should not be used on the main thread.
-     *
-     * @param pairingUrl the url to initilaize the paring flow with
-     * @param scopes List of OAuth scopes for which the client wants access
-     * @param entrypoint to be used for metrics
-     * @return String that resoles to the flow URL when complete
-     */
-    fun beginPairingFlow(
-        pairingUrl: String,
-        scopes: Array<String>,
-        entrypoint: String,
-    ): String {
-        return this.inner.beginPairingFlow(pairingUrl, scopes.toList(), entrypoint)
-    }
-
-    /**
-     * Sets user data from the web content.
-     * NOTE: this is only useful for applications that are user agents
-     *       and require the user's session token
-     * @param userData: The user data including session token, email and uid
-     */
-    fun setUserData(
-        userData: UserData,
-    ) {
-        this.inner.setUserData(userData)
+    fun handleWebChannelLogin(jsonPayload: String) {
+        this.inner.handleWebChannelLogin(jsonPayload)
         tryPersistState()
     }
 
     /**
-     * Authenticates the current account using the code and state parameters fetched from the
-     * redirect URL reached after completing the sign in flow triggered by [beginOAuthFlow].
+     * Handle a WebChannel password-change notification by exchanging the new session token
+     * for a new refresh token via a network call.
      *
-     * Modifies the FirefoxAccount state.
-     *
-     * This performs network requests, and should not be used on the main thread.
+     * @param jsonPayload is the `data` object from the `fxaccounts:change_password` WebChannel command.
      */
-    fun completeOAuthFlow(code: String, state: String) {
-        this.inner.completeOauthFlow(code, state)
-        this.tryPersistState()
+    fun handleWebChannelPasswordChange(jsonPayload: String) {
+        this.inner.handleWebChannelPasswordChange(jsonPayload)
+        tryPersistState()
+    }
+
+    /**
+     * Returns a complete signedInUser JSON object for a WebChannel fxaccounts:fxa_status response.
+     *
+     * @return An opaque string which holds JSON data and can be directly supplied to the WebChannel.
+     */
+    fun getSignedInUserForWebChannel(): String? {
+        return this.inner.getSignedInUserForWebChannel()
     }
 
     /**
@@ -275,7 +248,9 @@ class FxaClient(inner: FirefoxAccount, persistCallback: PersistCallback?) : Auto
      * caller should indicate to the user that there are authentication issues and allow them to
      * re-login by starting a new OAuth flow.
      *
-     * @param scope Single OAuth scope (no spaces) for which the client wants access
+     * @param scope Space-separated list of OAuth scopes for which the client wants access.
+     * Scope order is not significant. When a single scope is requested and it has an associated
+     * scoped key, [AccessTokenInfo.key] will be populated; for multi-scope requests it is null.
      * @param useCache set to false to force a new token request.  The fetched token will still be
      * cached for later `get_access_token` calls.
      * @return [AccessTokenInfo] that stores the token, along with its scopes and keys when complete
@@ -292,17 +267,17 @@ class FxaClient(inner: FirefoxAccount, persistCallback: PersistCallback?) : Auto
         }
     }
 
-    fun checkAuthorizationStatus(): AuthorizationInfo {
-        return this.inner.checkAuthorizationStatus()
+    /**
+     * Check whether the account has already been granted every given OAuth scope(s).
+     *
+     * @param scope space-separated list of OAuth scopes. Order is not significant.
+     */
+    fun hasScope(scope: String): Boolean {
+        return this.inner.hasScope(scope)
     }
 
-    /**
-     * Tries to return a session token
-     *
-     * @throws FxaException Will send you an exception if there is no session token set
-     */
-    fun getSessionToken(): String {
-        return this.inner.getSessionToken()
+    fun checkAuthorizationStatus(): AuthorizationInfo {
+        return this.inner.checkAuthorizationStatus()
     }
 
     /**
@@ -395,7 +370,7 @@ class FxaClient(inner: FirefoxAccount, persistCallback: PersistCallback?) : Auto
 
     /**
      * Disconnect from the account and optionally destroy our device record.
-     * `beginOAuthFlow` will need to be called to reconnect.
+     * A `BeginOAuthFlow` state-machine event will need to be sent to reconnect.
      *
      * This performs network requests, and should not be used on the main thread.
      */

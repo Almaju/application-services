@@ -37,9 +37,9 @@ const client = MozAdsClientBuilder()
 | Method                                                                              | Return Type                               | Description                                                                                                                                                                          |
 | ----------------------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `clearCache()`                                                                      | `void`                                    | Clears the client's HTTP cache. Throws on failure.                                                                                                                                   |
-| `recordClick(clickUrl)`                                                             | `void`                                    | Records a click using the provided callback URL (typically from `ad.callbacks.click`).                                                                                               |
-| `recordImpression(impressionUrl)`                                                   | `void`                                    | Records an impression using the provided callback URL (typically from `ad.callbacks.impression`).                                                                                    |
-| `reportAd(reportUrl)`                                                               | `void`                                    | Reports an ad using the provided callback URL (typically from `ad.callbacks.report`).                                                                                                |
+| `recordClick(clickUrl, options?)`                                                   | `void`                                    | Records a click using the provided callback URL (typically from `ad.callbacks.click`). Optional `MozAdsCallbackOptions` can enable OHTTP.                                            |
+| `recordImpression(impressionUrl, options?)`                                         | `void`                                    | Records an impression using the provided callback URL (typically from `ad.callbacks.impression`). Optional `MozAdsCallbackOptions` can enable OHTTP.                                 |
+| `reportAd(reportUrl, reason, options?)`                                             | `void`                                    | Reports an ad using the provided callback URL (typically from `ad.callbacks.report`). Optional `MozAdsCallbackOptions` can enable OHTTP.                                             |
 | `requestImageAds(mozAdRequests, options?)`                                          | `Object.<string, MozAdsImage>`            | Requests one image ad per placement. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns an object keyed by `placementId`.                                          |
 | `requestSpocAds(mozAdRequests, options?)`                                           | `Object.<string, Array.<MozAdsSpoc>>`     | Requests spoc ads per placement. Each placement request specifies its own count. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns an object keyed by `placementId`. |
 | `requestTileAds(mozAdRequests, options?)`                                           | `Object.<string, MozAdsTile>`             | Requests one tile ad per placement. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns an object keyed by `placementId`.                                           |
@@ -246,12 +246,50 @@ Options passed when making a single ad request.
 /**
  * @typedef {Object} MozAdsRequestOptions
  * @property {MozAdsRequestCachePolicy|null} cachePolicy - Per-request caching policy.
+ * @property {Object.<string, boolean>} flags - Request-level flags forwarded as the `flags` object on the wire. An empty object omits it.
+ * @property {boolean} ohttp - Whether to route this request through OHTTP (default: false).
  */
 ```
 
-| Field          | Type                                  | Description                                                                                     |
-| -------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `cachePolicy`  | `MozAdsRequestCachePolicy \| null`    | Per-request caching policy. If `null`, uses the client's default TTL with a `CacheFirst` mode.  |
+| Field         | Type                                  | Description                                                                                                                                |
+| ------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cachePolicy` | `MozAdsRequestCachePolicy \| null`    | Per-request caching policy. If `null`, uses the client's default TTL with a `CacheFirst` mode.                                             |
+| `flags`       | `Object.<string, boolean>`            | Request-level flags forwarded verbatim as the `flags` object on the wire. An empty object omits it. e.g. `{ contextual_placement: true }`. Defaults to `{}`. |
+| `ohttp`       | `boolean`                             | Whether to route this request through OHTTP. Defaults to `false`.                                                                          |
+
+---
+
+## `MozAdsCallbackOptions`
+
+Options passed when making callback requests (click, impression, report).
+
+```javascript
+/**
+ * @typedef {Object} MozAdsCallbackOptions
+ * @property {boolean} ohttp - Whether to route this callback through OHTTP (default: false).
+ */
+```
+
+| Field   | Type      | Description                                                        |
+| ------- | --------- | ------------------------------------------------------------------ |
+| `ohttp` | `boolean` | Whether to route this callback through OHTTP. Defaults to `false`. |
+
+#### OHTTP Usage Example
+
+```javascript
+// Request ads over OHTTP
+const ads = client.requestTileAds(placements, {
+    ohttp: true
+});
+
+// Record a click over OHTTP
+client.recordClick(ad.callbacks.click, { ohttp: true });
+
+// Record an impression over OHTTP
+client.recordImpression(ad.callbacks.impression, { ohttp: true });
+```
+
+> **Note:** OHTTP must be configured at the viaduct level before use. When `ohttp` is `true`, the client automatically performs a preflight request to obtain geo-location and user-agent headers, which are injected into the MARS request.
 
 ---
 
@@ -508,19 +546,16 @@ It reduces redundant network traffic and improves latency for repeated or identi
 
 ### Cache Lifecycle
 
-Each network response can be stored in the cache with an associated effective TTL, computed as:
+Each network response can be stored in the cache with an associated effective TTL,
+resolved by priority (highest to lowest):
 
-```
-effective_ttl = min(server_max_age, client_default_ttl, per_request_ttl)
-```
+1. `per_request_ttl` — caller-provided override on `MozAdsRequestCachePolicy`.
+2. `server_max_age` — value of the HTTP `Cache-Control: max-age=N` header on the response.
+3. `client_default_ttl` — configured on `MozAdsCacheConfig`.
 
-where:
-
-- `server_max_age` comes from the HTTP `Cache-Control: max-age=N` header (if present),
-- `client_default_ttl` is set in `MozAdsCacheConfig`,
-- `per_request_ttl` is an optional override set in `MozAdsRequestCachePolicy`.
-
-If the effective TTL resolves to 0 seconds, the response is not cached.
+If the effective TTL resolves to 0 seconds (e.g. `Cache-Control: max-age=0`),
+the response is not cached. The resolved TTL is capped at 7 days regardless
+of source.
 
 ### Configuring The Cache
 

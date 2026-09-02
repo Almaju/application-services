@@ -24,13 +24,12 @@ nimbus_events:
       branch:
         type: string
         description: The branch slug/identifier that was randomly chosen
-      experiment_type:
-        type: string
-        description: Indicates whether this is an experiment or rollout
     bugs:
       - https://jira.mozilla.com/browse/SDK-61
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2055331
     data_reviews:
       - https://github.com/mozilla-mobile/android-components/pull/9168#issuecomment-743461975
+      - https://github.com/mozilla/application-services/pull/7480#issuecomment-4995012840
     data_sensitivity:
       - technical
     notification_emails:
@@ -60,7 +59,7 @@ nimbus_events:
       - technical
     notification_emails:
       - tlong@mozilla.com
-      - nimbus-team@mozilla.com
+      - project-nimbus@mozilla.com
     expires: never
     send_in_pings:
       - background-update
@@ -111,7 +110,7 @@ nimbus_events:
       - technical
     notification_emails:
       - tlong@mozilla.com
-      - nimbus-team@mozilla.com
+      - project-nimbus@mozilla.com
     expires: never
     send_in_pings:
       - background-update
@@ -315,7 +314,7 @@ nimbus_events:
       - technical
     notification_emails:
       - chumphreys@mozilla.com
-      - nimbus-team@mozilla.com
+      - project-nimbus@mozilla.com
     expires: never
   enrollment_status:
     type: event
