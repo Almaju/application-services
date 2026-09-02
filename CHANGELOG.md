@@ -11,6 +11,8 @@
 ### Ads-Client
 
 - Added `blocks: Vec<String>` to `ffi::MozAdsRequestOptions`, `AdsClient::request*_ads`, `MARSClient::fetch_ads`, `mars::AdRequest`, and `mars::AdRequest::try_new`. This is serialized and passed to MARS so that it can remove blocks server-side.
+- `MozAdsClient::shutdown()` now releases foreign callback references without taking the client lock, so it can no longer be blocked by an in-flight ad request. Closing the cache database still needs the lock, but is now bounded and best-effort — an unclosed connection is recovered by SQLite on next open, whereas blocking shutdown is not recoverable. The context ID provider is now released alongside telemetry; previously only telemetry was.
+- `MozAdsClientBuilder::build()` now moves the telemetry and context ID provider out of the builder instead of cloning them, so a builder still awaiting foreign garbage collection no longer keeps those references alive. As a result `build()` is single-use: a second call produces a client with no-op telemetry and no context ID provider.
 
 # v156.0 (_2026-08-27_)
 

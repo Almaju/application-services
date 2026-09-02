@@ -22,7 +22,7 @@ use crate::mars::Environment;
 use crate::mars::ReportReason;
 use crate::AdsClientUrl;
 use crate::MozAdsClient;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
@@ -35,17 +35,40 @@ pub trait MozAdsContextIdProvider: Send + Sync {
     fn context_id(&self) -> String;
 }
 
-struct MozAdsContextIdProviderWrapper(Arc<dyn MozAdsContextIdProvider>);
+/// Wrapper around a foreign [MozAdsContextIdProvider].
+///
+/// Shaped like [MozAdsTelemetryWrapper]: the foreign reference lives in an `Option`
+/// behind a shared `RwLock`, so it can be dropped explicitly at shutdown rather than
+/// waiting for the whole client to be dropped. Clones share one cell, which lets the
+/// FFI layer hold a handle to the same reference the client is using.
+#[derive(Clone)]
+pub(crate) struct MozAdsContextIdProviderWrapper(
+    Arc<RwLock<Option<Arc<dyn MozAdsContextIdProvider>>>>,
+);
 
 impl MozAdsContextIdProviderWrapper {
     fn new(provider: Arc<dyn MozAdsContextIdProvider>) -> Self {
-        Self(provider)
+        Self(Arc::new(RwLock::new(Some(provider))))
+    }
+
+    /// Drop the foreign reference. Subsequent calls return an error rather than
+    /// reaching into foreign code that may no longer be there.
+    pub(crate) fn shutdown(&self) {
+        let _dropped = self.0.write().take();
     }
 }
 
 impl ContextIdProvider for MozAdsContextIdProviderWrapper {
     fn context_id(&self) -> context_id::ApiResult<String> {
-        Ok(self.0.context_id())
+        // Clone out of the lock before calling into foreign code: holding the read
+        // guard across the call would deadlock if the foreign side re-entered us.
+        let provider = self.0.read().clone();
+        match provider {
+            Some(provider) => Ok(provider.context_id()),
+            None => Err(context_id::ApiError::Other {
+                reason: "the context ID provider has been shut down".to_string(),
+            }),
+        }
     }
 }
 
@@ -124,25 +147,43 @@ impl MozAdsClientBuilder {
         Self::default()
     }
 
+    /// Build the client, moving the foreign references out of the builder.
+    ///
+    /// The foreign references are `take`n rather than cloned. The builder is itself a
+    /// UniFFI object, so it is released when the foreign side garbage-collects it —
+    /// which may be long after `build()`, or not before shutdown at all. Leaving a
+    /// clone behind here would keep the foreign objects alive past teardown regardless
+    /// of what the client does. The client, by contrast, has an explicit
+    /// [MozAdsClient::shutdown].
+    ///
+    /// This makes `build()` single-use: a second call gets no-op telemetry and no
+    /// context ID provider.
     pub fn build(&self) -> MozAdsClient {
-        let inner = self.0.lock();
+        let mut inner = self.0.lock();
+        let telemetry = inner
+            .telemetry
+            .take()
+            .map(MozAdsTelemetryWrapper::new)
+            .unwrap_or_else(MozAdsTelemetryWrapper::noop);
+        let context_id_provider = inner
+            .context_id_provider
+            .take()
+            .map(MozAdsContextIdProviderWrapper::new);
+
         let client_config = AdsClientConfig {
             cache_config: inner.cache_config.clone().map(Into::into),
-            context_id_provider: inner
-                .context_id_provider
-                .clone()
-                .map(MozAdsContextIdProviderWrapper::new)
-                .map(Into::into),
+            // Cloning these two is safe and intended: clones share one inner cell, so
+            // the handles kept on `MozAdsClient` release the same foreign reference the
+            // client uses. See the field comments on `MozAdsClient`.
+            context_id_provider: context_id_provider.clone().map(Into::into),
             environment: inner.environment.unwrap_or_default().into(),
-            telemetry: inner
-                .telemetry
-                .clone()
-                .map(MozAdsTelemetryWrapper::new)
-                .unwrap_or_else(MozAdsTelemetryWrapper::noop),
+            telemetry: telemetry.clone(),
         };
         let client = AdsClient::new(client_config);
         MozAdsClient {
             inner: Mutex::new(client),
+            telemetry,
+            context_id_provider,
         }
     }
 

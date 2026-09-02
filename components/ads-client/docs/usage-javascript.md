@@ -43,10 +43,12 @@ const client = MozAdsClientBuilder()
 | `requestImageAds(mozAdRequests, options?)`                                          | `Object.<string, MozAdsImage>`            | Requests one image ad per placement. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns an object keyed by `placementId`.                                          |
 | `requestSpocAds(mozAdRequests, options?)`                                           | `Object.<string, Array.<MozAdsSpoc>>`     | Requests spoc ads per placement. Each placement request specifies its own count. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns an object keyed by `placementId`. |
 | `requestTileAds(mozAdRequests, options?)`                                           | `Object.<string, MozAdsTile>`             | Requests one tile ad per placement. Optional `MozAdsRequestOptions` can adjust caching behavior. Returns an object keyed by `placementId`.                                           |
+| `shutdown()`                                                                        | `void`                                    | Releases the client's references to your `telemetry` and context ID provider implementations, and closes the cache database. Call this during shutdown. No other method should be called afterwards. |
 
 > **Notes**
 >
 > - We recommend that this client be initialized as a singleton or something similar so that multiple instances of the client do not exist at once.
+> - **Call `shutdown()` before the application tears down.** The client holds references to the `telemetry` and context ID provider objects you passed in, and dropping the client is not enough to release them — that happens whenever garbage collection gets to it, which may be after teardown. `shutdown()` releases them immediately and never blocks on an in-flight ad request, so it is safe to call from a shutdown handler.
 > - Responses omit placements with no fill. Empty placements do not appear in the returned objects.
 > - The HTTP cache is internally managed. Configuration can be set with `MozAdsClientBuilder`. Per-request cache settings can be set with `MozAdsRequestOptions`.
 > - If `cacheConfig` is `null`, caching is disabled entirely.
@@ -93,7 +95,7 @@ builder.build()
 - **`environment(environment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig)`** - Sets the cache configuration
 - **`telemetry(telemetry)`** - Sets the telemetry implementation
-- **`build()`** - Builds and returns the configured client
+- **`build()`** - Builds and returns the configured client. **Single-use:** `build()` moves the `telemetry` and context ID provider implementations into the client rather than copying them, so that a builder still awaiting garbage collection cannot keep those objects alive past shutdown. Calling `build()` a second time on the same builder returns a client with no-op telemetry and no context ID provider.
 
 | Configuration  | Type                       | Description                                                                                            |
 | -------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
