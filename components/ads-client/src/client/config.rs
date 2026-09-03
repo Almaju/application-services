@@ -4,16 +4,11 @@
 */
 
 use crate::mars::Environment;
-use crate::telemetry::Telemetry;
 
-pub struct AdsClientConfig<T>
-where
-    T: Telemetry,
-{
+pub struct AdsClientConfig {
     pub cache_config: Option<AdsCacheConfig>,
     pub context_id_provider: Option<Box<dyn super::ContextIdProvider>>,
     pub environment: Environment,
-    pub telemetry: T,
 }
 
 #[derive(Clone, Debug)]

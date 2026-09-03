@@ -25,7 +25,6 @@ Use the `MozAdsClientBuilder` to configure and create the client. The builder pr
 val client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.PROD)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build()
 ```
 
@@ -58,7 +57,6 @@ Builder for configuring and creating the ads client. Use the fluent builder patt
 class MozAdsClientBuilder {
     fun environment(environment: MozAdsEnvironment): MozAdsClientBuilder
     fun cacheConfig(cacheConfig: MozAdsCacheConfig): MozAdsClientBuilder
-    fun telemetry(telemetry: MozAdsTelemetry): MozAdsClientBuilder
     fun build(): MozAdsClient
 }
 ```
@@ -68,59 +66,28 @@ class MozAdsClientBuilder {
 - **`MozAdsClientBuilder()`** - Creates a new builder with default values
 - **`environment(environment: MozAdsEnvironment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig: MozAdsCacheConfig)`** - Sets the cache configuration
-- **`telemetry(telemetry: MozAdsTelemetry)`** - Sets the telemetry implementation
 - **`build()`** - Builds and returns the configured client
 
 | Configuration  | Type                  | Description                                                                                            |
 | -------------- | --------------------- | ------------------------------------------------------------------------------------------------------ |
 | `environment`  | `MozAdsEnvironment`   | Selects which MARS environment to connect to. Unless in a dev build, this value can only ever be Prod. Defaults to Prod. |
 | `cacheConfig`  | `MozAdsCacheConfig?`  | Optional configuration for the internal cache.                                                         |
-| `telemetry`    | `MozAdsTelemetry?`    | Optional telemetry instance for recording metrics. If not provided, a no-op implementation is used.    |
 
 ---
 
-## `MozAdsTelemetry`
+## Telemetry
 
-Telemetry interface for recording ads client metrics. You must provide an implementation of this interface to the `MozAdsClientBuilder` to enable telemetry collection. If no telemetry instance is provided, a no-op implementation is used and no metrics will be recorded.
+The ads client records its own metrics. The metrics themselves are declared in
+[`metrics.yaml`](../metrics.yaml) and recorded from Rust through
+[glean-sym][glean-sym], which resolves Glean's FFI symbols out of the host
+application at runtime — so they land in the same Glean instance, and the same
+`metrics` ping, as everything the app records itself.
 
-```kotlin
-interface MozAdsTelemetry {
-    fun recordBuildCacheError(label: String, value: String)
-    fun recordClientError(label: String, value: String)
-    fun recordClientOperationTotal(label: String)
-    fun recordDeserializationError(label: String, value: String)
-    fun recordHttpCacheOutcome(label: String, value: String)
-}
-```
+There is nothing to implement and nothing to pass to the builder. Recording is
+enabled on Android and iOS; on other platforms every recording site compiles to
+a no-op.
 
-#### Implementation Example
-
-```kotlin
-import mozilla.appservices.adsclient.MozAdsTelemetry
-import org.mozilla.appservices.ads_client.GleanMetrics.AdsClient
-
-class AdsClientTelemetry : MozAdsTelemetry {
-    override fun recordBuildCacheError(label: String, value: String) {
-        AdsClient.buildCacheError[label].set(value)
-    }
-
-    override fun recordClientError(label: String, value: String) {
-        AdsClient.clientError[label].set(value)
-    }
-
-    override fun recordClientOperationTotal(label: String) {
-        AdsClient.clientOperationTotal[label].add()
-    }
-
-    override fun recordDeserializationError(label: String, value: String) {
-        AdsClient.deserializationError[label].set(value)
-    }
-
-    override fun recordHttpCacheOutcome(label: String, value: String) {
-        AdsClient.httpCacheOutcome[label].set(value)
-    }
-}
-```
+[glean-sym]: https://github.com/mozilla/glean/tree/main/glean-core/glean-sym
 
 ---
 
@@ -156,12 +123,9 @@ val cache = MozAdsCacheConfig(
     maxSizeMib = 20L                 // 20 MiB
 )
 
-val telemetry = AdsClientTelemetry()
-
 val client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.PROD)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build()
 ```
 
@@ -523,12 +487,9 @@ val cache = MozAdsCacheConfig(
     maxSizeMib = 20L                 // 20 MiB
 )
 
-val telemetry = AdsClientTelemetry()
-
 val client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.PROD)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build()
 ```
 

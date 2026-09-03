@@ -16,7 +16,6 @@ Top-level client object for requesting ads and recording lifecycle events.
 const client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.Prod)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build();
 ```
 
@@ -28,7 +27,6 @@ Use the `MozAdsClientBuilder` to configure and create the client. The builder pr
 const client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.Prod)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build();
 ```
 
@@ -76,12 +74,6 @@ builder.environment(environment)
 builder.cacheConfig(cacheConfig)
 
 /**
- * @param {MozAdsTelemetry} telemetry
- * @returns {MozAdsClientBuilder}
- */
-builder.telemetry(telemetry)
-
-/**
  * @returns {MozAdsClient}
  */
 builder.build()
@@ -92,57 +84,28 @@ builder.build()
 - **`MozAdsClientBuilder()`** - Creates a new builder with default values
 - **`environment(environment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig)`** - Sets the cache configuration
-- **`telemetry(telemetry)`** - Sets the telemetry implementation
 - **`build()`** - Builds and returns the configured client
 
 | Configuration  | Type                       | Description                                                                                            |
 | -------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `environment`  | `MozAdsEnvironment`        | Selects which MARS environment to connect to. Unless in a dev build, this value can only ever be Prod. Defaults to Prod. |
 | `cacheConfig`  | `MozAdsCacheConfig \| null`| Optional configuration for the internal cache.                                                         |
-| `telemetry`    | `MozAdsTelemetry \| null`  | Optional telemetry instance for recording metrics. If not provided, a no-op implementation is used.    |
 
 ---
 
-## `MozAdsTelemetry`
+## Telemetry
 
-Telemetry interface for recording ads client metrics. You must provide an implementation of this interface to the `MozAdsClientBuilder` to enable telemetry collection. If no telemetry instance is provided, a no-op implementation is used and no metrics will be recorded.
+The ads client records its own metrics. The metrics themselves are declared in
+[`metrics.yaml`](../metrics.yaml) and recorded from Rust through
+[glean-sym][glean-sym], which resolves Glean's FFI symbols out of the host
+application at runtime — so they land in the same Glean instance, and the same
+`metrics` ping, as everything the app records itself.
 
-```javascript
-/**
- * @typedef {Object} MozAdsTelemetry
- * @property {function(string, string): void} recordBuildCacheError
- * @property {function(string, string): void} recordClientError
- * @property {function(string): void} recordClientOperationTotal
- * @property {function(string, string): void} recordDeserializationError
- * @property {function(string, string): void} recordHttpCacheOutcome
- */
-```
+There is nothing to implement and nothing to pass to the builder. Recording is
+enabled on Android and iOS; on other platforms every recording site compiles to
+a no-op.
 
-#### Implementation Example
-
-```javascript
-class AdsClientTelemetry {
-    recordBuildCacheError(label, value) {
-        // Bind to your telemetry system
-    }
-
-    recordClientError(label, value) {
-        // Bind to your telemetry system
-    }
-
-    recordClientOperationTotal(label) {
-        // Bind to your telemetry system
-    }
-
-    recordDeserializationError(label, value) {
-        // Bind to your telemetry system
-    }
-
-    recordHttpCacheOutcome(label, value) {
-        // Bind to your telemetry system
-    }
-}
-```
+[glean-sym]: https://github.com/mozilla/glean/tree/main/glean-core/glean-sym
 
 ---
 
@@ -179,12 +142,9 @@ const cache = MozAdsCacheConfig({
     maxSizeMib: 20                 // 20 MiB
 });
 
-const telemetry = new AdsClientTelemetry();
-
 const client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.Prod)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build();
 ```
 
@@ -566,12 +526,9 @@ const cache = MozAdsCacheConfig({
     maxSizeMib: 20                 // 20 MiB
 });
 
-const telemetry = new AdsClientTelemetry();
-
 const client = MozAdsClientBuilder()
     .environment(MozAdsEnvironment.Prod)
     .cacheConfig(cache)
-    .telemetry(telemetry)
     .build();
 ```
 
