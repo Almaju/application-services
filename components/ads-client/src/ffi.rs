@@ -4,13 +4,11 @@
 */
 
 pub mod error;
-pub mod telemetry;
 
 use std::sync::Arc;
 
 use crate::client::config::{AdsCacheConfig, AdsClientConfig};
 use crate::client::{AdsClient, ContextIdProvider};
-use crate::ffi::telemetry::MozAdsTelemetryWrapper;
 use crate::http_cache::CachePolicy;
 use crate::mars::ad_request::{
     AdContentCategory, AdPlacementRequest, AdRequestFlags, IABContentTaxonomy,
@@ -26,7 +24,6 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
-pub use telemetry::MozAdsTelemetry;
 
 // TODO: Temporary workaround for HNT requirements — do not use for new integrations.
 // Context ID management should remain internal to the ads client and this interface should be removed.
@@ -108,7 +105,6 @@ struct MozAdsClientBuilderInner {
     cache_config: Option<MozAdsCacheConfig>,
     context_id_provider: Option<Arc<dyn MozAdsContextIdProvider>>,
     environment: Option<MozAdsEnvironment>,
-    telemetry: Option<Arc<dyn MozAdsTelemetry>>,
 }
 
 impl Default for MozAdsClientBuilder {
@@ -134,11 +130,6 @@ impl MozAdsClientBuilder {
                 .map(MozAdsContextIdProviderWrapper::new)
                 .map(Into::into),
             environment: inner.environment.unwrap_or_default().into(),
-            telemetry: inner
-                .telemetry
-                .clone()
-                .map(MozAdsTelemetryWrapper::new)
-                .unwrap_or_else(MozAdsTelemetryWrapper::noop),
         };
         let client = AdsClient::new(client_config);
         MozAdsClient {
@@ -161,11 +152,6 @@ impl MozAdsClientBuilder {
 
     pub fn environment(self: Arc<Self>, environment: MozAdsEnvironment) -> Arc<Self> {
         self.0.lock().environment = Some(environment);
-        self
-    }
-
-    pub fn telemetry(self: Arc<Self>, telemetry: Box<dyn MozAdsTelemetry>) -> Arc<Self> {
-        self.0.lock().telemetry = Some(Arc::from(telemetry));
         self
     }
 }

@@ -25,31 +25,21 @@ use self::{
 };
 use crate::{
     http_cache::{HttpCache, RequestHash},
-    telemetry::Telemetry,
     CachePolicy,
 };
 use url::Url;
 use viaduct::{Headers, Request};
 
-pub struct MARSClient<T>
-where
-    T: Clone + Telemetry,
-{
+pub struct MARSClient {
     environment: Environment,
-    telemetry: T,
-    transport: MARSTransport<T>,
+    transport: MARSTransport,
 }
 
-impl<T> MARSClient<T>
-where
-    T: Clone + Telemetry,
-{
-    pub fn new(environment: Environment, http_cache: Option<HttpCache>, telemetry: T) -> Self {
-        let transport = MARSTransport::new(http_cache, telemetry.clone());
+impl MARSClient {
+    pub fn new(environment: Environment, http_cache: Option<HttpCache>) -> Self {
         Self {
             environment,
-            telemetry,
-            transport,
+            transport: MARSTransport::new(http_cache),
         }
     }
 
@@ -90,7 +80,7 @@ where
         }
 
         let response = self.transport.send(ad_request, &cache_policy, ohttp)?;
-        let ads = AdResponse::<A>::parse(response.json()?, &self.telemetry)?;
+        let ads = AdResponse::<A>::parse(response.json()?)?;
         Ok((ads, request_hash))
     }
 
@@ -149,11 +139,6 @@ where
         }
         self.transport.fire(request, ohttp).map_err(Into::into)
     }
-
-    #[cfg(test)]
-    pub fn get_telemetry(&self) -> T {
-        self.telemetry.clone()
-    }
 }
 
 #[cfg(test)]
@@ -161,18 +146,13 @@ mod tests {
 
     use super::ad_response::AdImage;
     use super::*;
-    use crate::ffi::telemetry::MozAdsTelemetryWrapper;
     use crate::test_utils::{
         get_example_happy_image_response, make_happy_placement_requests, TEST_CONTEXT_ID,
     };
     use mockito::mock;
 
-    fn make_test_client(http_cache: Option<HttpCache>) -> MARSClient<MozAdsTelemetryWrapper> {
-        MARSClient::new(
-            Environment::Test,
-            http_cache,
-            MozAdsTelemetryWrapper::noop(),
-        )
+    fn make_test_client(http_cache: Option<HttpCache>) -> MARSClient {
+        MARSClient::new(Environment::Test, http_cache)
     }
 
     #[test]

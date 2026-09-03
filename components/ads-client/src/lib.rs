@@ -19,11 +19,16 @@ mod client;
 mod ffi;
 pub mod http_cache;
 mod mars;
-pub mod telemetry;
+mod telemetry;
 
 pub use ffi::*;
 
-use crate::ffi::telemetry::MozAdsTelemetryWrapper;
+/// Metrics generated from `metrics.yaml` by `glean_parser`, see `build.rs`.
+#[cfg(glean_sym)]
+#[allow(clippy::all)] // Don't lint generated code.
+mod glean_metrics {
+    include!(concat!(env!("OUT_DIR"), "/glean_metrics.rs"));
+}
 
 #[cfg(test)]
 mod test_utils;
@@ -38,7 +43,7 @@ uniffi::custom_type!(AdsClientUrl, String, {
 
 #[derive(uniffi::Object)]
 pub struct MozAdsClient {
-    inner: Mutex<AdsClient<MozAdsTelemetryWrapper>>,
+    inner: Mutex<AdsClient>,
 }
 
 #[uniffi::export]

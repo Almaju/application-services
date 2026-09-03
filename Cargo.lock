@@ -24,6 +24,8 @@ dependencies = [
  "chrono",
  "context_id",
  "error-support",
+ "glean-build",
+ "glean-sym",
  "mockall",
  "mockito",
  "once_cell",
