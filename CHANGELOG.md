@@ -11,7 +11,7 @@
 ### Ads-Client
 
 - Added `blocks: Vec<String>` to `ffi::MozAdsRequestOptions`, `AdsClient::request*_ads`, `MARSClient::fetch_ads`, `mars::AdRequest`, and `mars::AdRequest::try_new`. This is serialized and passed to MARS so that it can remove blocks server-side.
-- ⚠️ **Breaking change**: removed the `MozAdsTelemetry` callback interface and `MozAdsClientBuilder::telemetry()`. Metrics are now recorded from Rust through [glean-sym](https://github.com/mozilla/glean/tree/main/glean-core/glean-sym), so consumers no longer implement or pass anything. Recording is enabled on Android and iOS; elsewhere every recording site compiles to a no-op.
+- ⚠️ **Breaking change**: removed the `MozAdsTelemetry` callback interface and `MozAdsClientBuilder::telemetry()`. Metrics are now recorded from Rust through [glean-sym](https://github.com/mozilla/glean/tree/main/glean-core/glean-sym), so consumers no longer implement or pass anything. Recording is enabled on Android, iOS, and on desktop when the component is built as part of Firefox; in a build with no Glean to talk to every recording site compiles to a no-op.
 
 # v156.0 (_2026-08-27_)
 

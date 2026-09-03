@@ -8,8 +8,9 @@ exclude = ["/android"]
 [features]
 dev = []
 default = ["glean-sym"]
-# Record metrics through glean-sym (mobile only, see the note on the dependency
-# below). With this off, every recording site compiles down to a no-op.
+# Record metrics through glean-sym where the build can reach a Glean (see
+# `glean_sym_enabled` in build.rs). With this off, every recording site
+# compiles down to a no-op.
 glean-sym = ["dep:glean-sym"]
 
 [dependencies]
@@ -34,9 +35,10 @@ uuid = { version = "1.3", features = ["v4"] }
 viaduct = { path = "../viaduct", features = ["ohttp"] }
 sql-support = { path = "../support/sql" }
 
-# glean-sym looks Glean's FFI symbols up in the host application at runtime, so
-# it only makes sense where that application embeds Glean: Android and iOS.
-[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+# Everywhere but Windows, where glean-sym does not compile. Which of these
+# targets actually record through it is decided in `build.rs`, which sets
+# `cfg(glean_sym)`.
+[target.'cfg(unix)'.dependencies]
 glean-sym = { git = "https://github.com/mozilla/glean", tag = "v68.0.0", optional = true }
 
 [dev-dependencies]

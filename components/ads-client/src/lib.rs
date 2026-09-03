@@ -24,7 +24,7 @@ mod telemetry;
 pub use ffi::*;
 
 /// Metrics generated from `metrics.yaml` by `glean_parser`, see `build.rs`.
-#[cfg(all(feature = "glean-sym", any(target_os = "android", target_os = "ios")))]
+#[cfg(glean_sym)]
 #[allow(clippy::all)] // Don't lint generated code.
 mod glean_metrics {
     include!(concat!(env!("OUT_DIR"), "/glean_metrics.rs"));

@@ -84,8 +84,10 @@ application at runtime — so they land in the same Glean instance, and the same
 `metrics` ping, as everything the app records itself.
 
 There is nothing to implement and nothing to pass to the builder. Recording is
-enabled on Android and iOS; on other platforms every recording site compiles to
-a no-op.
+enabled on Android and iOS, and on desktop when the component is built as part
+of Firefox — in every case the surrounding application is the one that
+initializes Glean. In a build with no Glean to talk to, every recording site
+compiles to a no-op.
 
 [glean-sym]: https://github.com/mozilla/glean/tree/main/glean-core/glean-sym
 

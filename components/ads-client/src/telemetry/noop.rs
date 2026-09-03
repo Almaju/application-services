@@ -3,8 +3,9 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! The backend used wherever glean-sym is not available: desktop, the `cargo
-//! test` host, and anything built with `--no-default-features`.
+//! The backend for builds with no Glean to talk to: a standalone `cargo build`
+//! or `cargo test`, Windows (where glean-sym does not compile), and anything
+//! built with `--no-default-features`. See `glean_sym_enabled` in `build.rs`.
 //!
 //! Recording sites stay in the code and stay type-checked; the values are
 //! dropped here.

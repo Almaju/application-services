@@ -6,10 +6,15 @@
 //! Metric recording for the ads client.
 //!
 //! The metrics themselves are declared in `metrics.yaml` and recorded straight
-//! from Rust: on Android and iOS through [`glean-sym`], which resolves Glean's
-//! FFI symbols out of the host application at runtime, and elsewhere through a
-//! no-op backend. Consumers pass us nothing and implement nothing — recording a
-//! metric is a plain function call from wherever the interesting thing happened.
+//! from Rust through [`glean-sym`], which resolves Glean's FFI symbols out of
+//! the surrounding application at runtime. Consumers pass us nothing and
+//! implement nothing — recording a metric is a plain function call from
+//! wherever the interesting thing happened.
+//!
+//! Which builds actually reach Glean is decided by `build.rs`, which sets
+//! `cfg(glean_sym)`: Android and iOS, where the megazord sits next to the app's
+//! Glean, and desktop when gecko is building us, where we are linked into the
+//! same libxul. Everywhere else the backend is a no-op.
 //!
 //! Every function here is infallible and silent by design. Telemetry must never
 //! change the outcome of the operation it is describing.
@@ -20,14 +25,14 @@ use std::fmt::Display;
 
 use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
-#[cfg(all(feature = "glean-sym", any(target_os = "android", target_os = "ios")))]
+#[cfg(glean_sym)]
 #[path = "telemetry/glean.rs"]
 mod backend;
-#[cfg(not(all(feature = "glean-sym", any(target_os = "android", target_os = "ios"))))]
+#[cfg(not(glean_sym))]
 #[path = "telemetry/noop.rs"]
 mod backend;
 
-#[cfg(all(feature = "glean-sym", any(target_os = "android", target_os = "ios")))]
+#[cfg(glean_sym)]
 pub(crate) mod labeled;
 
 /// A client operation, as labeled by `ads_client.client_operation_total` and

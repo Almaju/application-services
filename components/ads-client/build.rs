@@ -11,16 +11,15 @@ const GENERATED_IMPORT: &str = "use glean_sym::{metrics::*, types::*};";
 
 fn main() {
     println!("cargo:rerun-if-changed=metrics.yaml");
+    println!("cargo:rerun-if-env-changed=MOZ_TOPOBJDIR");
+    println!("cargo:rustc-check-cfg=cfg(glean_sym)");
 
-    // glean-sym is a mobile-only dependency, so only generate metrics there.
-    // Everywhere else `telemetry::backend` is the no-op and nothing includes
-    // the generated file.
-    if !matches!(
-        env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("android" | "ios")
-    ) {
+    // One decision, in one place: `cfg(glean_sym)` is the only thing the crate
+    // itself checks.
+    if !glean_sym_enabled() {
         return;
     }
+    println!("cargo:rustc-cfg=glean_sym");
 
     Builder::default()
         .file("metrics.yaml")
@@ -29,6 +28,34 @@ fn main() {
         .expect("Error generating Glean Rust bindings");
 
     patch_labeled_metric_import();
+}
+
+/// Whether to record metrics through glean-sym for this build.
+///
+/// glean-sym looks Glean's FFI entry points up in the process at runtime and
+/// panics if it cannot find them, so this must be true only where we are
+/// certain we are running inside an application that embeds Glean.
+fn glean_sym_enabled() -> bool {
+    if env::var_os("CARGO_FEATURE_GLEAN_SYM").is_none() {
+        return false;
+    }
+
+    match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        // The megazord is loaded alongside the app's own Glean.
+        Ok("android" | "ios") => true,
+        // On desktop we are linked into libxul, so Glean is in the same
+        // process — but only when gecko is the one building us. A standalone
+        // `cargo build` of this crate has no Glean to talk to.
+        Ok("linux" | "macos") => is_gecko_build(),
+        // Windows is missing: glean-sym does not compile there
+        // (`compile_error!("This crate is not implemented for Windows")`).
+        _ => false,
+    }
+}
+
+/// Whether gecko is building us, by the same signal `rc_crypto` uses.
+fn is_gecko_build() -> bool {
+    env::var_os("MOZ_TOPOBJDIR").is_some()
 }
 
 /// Bring our `LabeledMetric` stand-in into scope in the generated module.
