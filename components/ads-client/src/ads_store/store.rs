@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use crate::ads_store::StorableAd;
+use crate::ads::Ads;
 use crate::common::bytesize::ByteSize;
 use crate::common::clock::Clock;
 use crate::mars::error::FetchAdsError;
@@ -77,7 +77,7 @@ impl AdsStoreHolder {
         Ok(ByteSize::b(size_bytes_ads))
     }
 
-    pub fn lookup(&self, placement_id: &PlacementId) -> Result<Option<StorableAd>, FetchAdsError> {
+    pub fn lookup(&self, placement_id: &PlacementId) -> Result<Option<Ads>, FetchAdsError> {
         #[cfg(test)]
         if *self.fault.lock() == FaultKind::Lookup {
             return Err(Self::forced_fault_error("forced lookup failure").into());
@@ -97,12 +97,8 @@ impl AdsStoreHolder {
         Ok(res.map(|x| serde_json::from_slice(&x)).transpose()?)
     }
 
-    /// Upsert an object into the store.
-    pub fn store_ad(
-        &self,
-        placement_id: &PlacementId,
-        ad: StorableAd,
-    ) -> Result<(), FetchAdsError> {
+    /// Upsert the ads for a placement, replacing any ads already stored for it.
+    pub fn store_ad(&self, placement_id: &PlacementId, ad: Ads) -> Result<(), FetchAdsError> {
         #[cfg(test)]
         if *self.fault.lock() == FaultKind::Store {
             return Err(Self::forced_fault_error("forced store failure").into());
@@ -181,13 +177,12 @@ mod tests {
     use super::*;
     use crate::{
         ads_store::connection_initializer::AdsStoreConnectionInitializer,
-        mars::ad_response::{AdCallbacks, AdImage},
+        mars::ad_response::{AdCallbacks, AdImage, AdSpoc, SpocFrequencyCaps, SpocRanking},
     };
     use sql_support::open_database;
     use url::Url;
 
-    // Create a sample ad for tests. The body defaults to an example serialized AdImage (if body is None).
-    fn create_test_raw_ad(placement_id: &str) -> (PlacementId, StorableAd) {
+    fn create_test_raw_ad(placement_id: &str) -> (PlacementId, Ads) {
         let base_url = mockito::server_url();
         let ad = AdImage {
             url: "https://ads.fakeexample.org/example_ad_1".to_string(),
@@ -201,7 +196,35 @@ mod tests {
                 report: Some(Url::parse(&format!("{}/report/example_ad_1", base_url)).unwrap()),
             },
         };
-        (PlacementId::new(placement_id), StorableAd::Image(ad))
+        (PlacementId::new(placement_id), Ads::Image(vec![ad]))
+    }
+
+    fn create_test_spoc(n: u32) -> AdSpoc {
+        AdSpoc {
+            block_key: format!("block_key{n}"),
+            callbacks: AdCallbacks {
+                click: Url::parse(&format!("https://example.com/click{n}")).unwrap(),
+                impression: Url::parse(&format!("https://example.com/impression{n}")).unwrap(),
+                report: Some(Url::parse(&format!("https://example.com/report{n}")).unwrap()),
+            },
+            caps: SpocFrequencyCaps {
+                cap_key: format!("cap_key{n}"),
+                day: 10,
+            },
+            domain: format!("{n}.example.com"),
+            excerpt: format!("excerpt{n}"),
+            format: "spoc".into(),
+            image_url: format!("https://example.com/image{n}.png"),
+            ranking: SpocRanking {
+                priority: n,
+                personalization_models: None,
+                item_score: 1.0,
+            },
+            sponsor: format!("sponsor{n}"),
+            sponsored_by_override: None,
+            title: format!("title{n}"),
+            url: format!("https://example.com/ad{n}"),
+        }
     }
 
     fn create_test_store() -> AdsStoreHolder {
@@ -269,6 +292,38 @@ mod tests {
 
         let retrieved = store.lookup(&placement).unwrap().unwrap();
         assert_eq!(retrieved, ad);
+    }
+
+    #[test]
+    fn test_store_keeps_every_ad_for_a_placement() {
+        let store = create_test_store();
+        let placement = PlacementId::new("mock_spoc_1");
+        let ads = Ads::Spoc(vec![
+            create_test_spoc(1),
+            create_test_spoc(2),
+            create_test_spoc(3),
+        ]);
+
+        store.store_ad(&placement, ads.clone()).unwrap();
+
+        assert_eq!(store.lookup(&placement).unwrap(), Some(ads));
+    }
+
+    #[test]
+    fn test_store_replaces_ads_for_a_placement() {
+        let store = create_test_store();
+        let placement = PlacementId::new("mock_spoc_1");
+        store
+            .store_ad(
+                &placement,
+                Ads::Spoc(vec![create_test_spoc(1), create_test_spoc(2)]),
+            )
+            .unwrap();
+
+        let refreshed = Ads::Spoc(vec![create_test_spoc(3)]);
+        store.store_ad(&placement, refreshed.clone()).unwrap();
+
+        assert_eq!(store.lookup(&placement).unwrap(), Some(refreshed));
     }
 
     #[test]

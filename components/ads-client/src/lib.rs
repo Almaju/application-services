@@ -15,6 +15,8 @@ use client::AdsClient;
 use http_cache::CachePolicy;
 use mars::ad_request::{AdPlacementRequest, AdRequestFlags};
 #[cfg(feature = "stateful")]
+pub mod ads;
+#[cfg(feature = "stateful")]
 pub mod ads_store;
 mod client;
 pub mod common;

@@ -2,12 +2,9 @@ pub mod builder;
 pub mod connection_initializer;
 pub mod store;
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
     ads_store::{builder::AdsStoreBuilder, store::AdsStoreHolder},
     common::bytesize::ByteSize,
-    mars::ad_response::{AdImage, AdSpoc, AdTile},
 };
 use std::path::Path;
 
@@ -28,13 +25,6 @@ impl AsRef<str> for PlacementId {
     fn as_ref(&self) -> &str {
         &self.0
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum StorableAd {
-    Image(AdImage),
-    Spoc(AdSpoc),
-    Tile(AdTile),
 }
 
 pub struct AdsStore {
@@ -66,6 +56,7 @@ impl AdsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ads::Ads;
     use crate::mars::ad_response::{AdCallbacks, AdImage};
     use url::Url;
 
@@ -81,7 +72,7 @@ mod tests {
         let store: AdsStore = AdsStore::builder("test_clear.db").build().unwrap();
 
         let base_url = mockito::server_url();
-        let ad = StorableAd::Image(AdImage {
+        let ad = Ads::Image(vec![AdImage {
             url: "https://ads.fakeexample.org/example_ad_1".to_string(),
             image_url: "https://ads.fakeexample.org/example_image_1".to_string(),
             format: "billboard".to_string(),
@@ -92,7 +83,7 @@ mod tests {
                 impression: Url::parse(&format!("{}/impression/example_ad_1", base_url)).unwrap(),
                 report: Some(Url::parse(&format!("{}/report/example_ad_1", base_url)).unwrap()),
             },
-        });
+        }]);
         let placement_id = PlacementId::new("mock_billboard_1");
         store.holder.store_ad(&placement_id, ad.clone()).unwrap();
 
@@ -113,7 +104,7 @@ mod tests {
         let store: AdsStore = AdsStore::builder("test_invalidate.db").build().unwrap();
 
         let base_url = mockito::server_url();
-        let ad = StorableAd::Image(AdImage {
+        let ad = Ads::Image(vec![AdImage {
             url: "https://ads.fakeexample.org/example_ad_1".to_string(),
             image_url: "https://ads.fakeexample.org/example_image_1".to_string(),
             format: "billboard".to_string(),
@@ -124,7 +115,7 @@ mod tests {
                 impression: Url::parse(&format!("{}/impression/example_ad_1", base_url)).unwrap(),
                 report: Some(Url::parse(&format!("{}/report/example_ad_1", base_url)).unwrap()),
             },
-        });
+        }]);
 
         let placement_1 = PlacementId::new("mock_billboard_1");
         let placement_2 = PlacementId::new("mock_billboard_2");
