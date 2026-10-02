@@ -9,7 +9,6 @@ pub mod telemetry;
 use crate::client::config::AdsStoreConfig;
 use crate::client::config::{AdsCacheConfig, AdsClientConfig};
 use crate::client::AdsClient;
-use crate::ffi::telemetry::MozAdsTelemetryWrapper;
 use crate::http_cache::CachePolicy;
 use crate::mars::ad_request::{
     AdContentCategory, AdPlacementRequest, AdRequestFlags, IABContentTaxonomy,
@@ -101,20 +100,22 @@ impl MozAdsClientBuilder {
 
     pub fn build(&self) -> MozAdsClient {
         let mut inner = self.0.lock();
-        let telemetry = inner
-            .telemetry
-            .take()
-            .map(MozAdsTelemetryWrapper::new)
-            .unwrap_or_else(MozAdsTelemetryWrapper::noop);
+        // Telemetry is a process-wide singleton: the callback given to this
+        // builder (taken, so the builder does not keep it alive) receives the
+        // metrics recorded by every client from now on.
+        let telemetry = inner.telemetry.take().map(|callback| {
+            let weak = Arc::downgrade(&callback);
+            crate::telemetry::install(callback);
+            weak
+        });
         let client_config = AdsClientConfig {
             cache_config: inner.cache_config.clone().map(Into::into),
             environment: inner.environment.clone().unwrap_or_default().into(),
-            telemetry: telemetry.clone(),
             #[cfg(feature = "stateful")]
             store_config: inner.store_config.clone().map(Into::into),
         };
         let client = AdsClient::new(client_config);
-        let shutdown_references = client.shutdown_references();
+        let shutdown_references = client.shutdown_references(telemetry);
         MozAdsClient {
             inner: Mutex::new(client),
             shutdown_references,
@@ -477,6 +478,7 @@ mod tests {
 
     #[test]
     fn test_telemetry_not_held_by_builder() {
+        let _lock = crate::telemetry::test_lock();
         // Related to Bug 2064543
         // The builder can hold a reference to the passed telemetry, meaning that if the builder still exists, `shutdown` doesn't drop all references.
 

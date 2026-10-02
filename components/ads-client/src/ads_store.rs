@@ -83,26 +83,20 @@ impl AdsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ffi::telemetry::MozAdsTelemetryWrapper,
-        mars::ad_response::{AdCallbacks, AdImage},
-    };
+    use crate::mars::ad_response::{AdCallbacks, AdImage};
     use url::Url;
     use url_macro::url;
 
     #[test]
     fn test_ads_store_creation() {
         // Test that AdsStore can be created successfully with test config
-        let store: Result<AdsStore, _> =
-            AdsStore::builder("test_store.db").build(MozAdsTelemetryWrapper::noop());
+        let store: Result<AdsStore, _> = AdsStore::builder("test_store.db").build();
         assert!(store.is_ok());
     }
 
     #[test]
     fn test_clear_store() {
-        let store: AdsStore = AdsStore::builder("test_clear.db")
-            .build(MozAdsTelemetryWrapper::noop())
-            .unwrap();
+        let store: AdsStore = AdsStore::builder("test_clear.db").build().unwrap();
 
         let base_url = mockito::server_url();
         let ad = StorableAd::Image(AdImage {
@@ -134,9 +128,7 @@ mod tests {
 
     #[test]
     fn test_invalidate_by_id() {
-        let store: AdsStore = AdsStore::builder("test_invalidate.db")
-            .build(MozAdsTelemetryWrapper::noop())
-            .unwrap();
+        let store: AdsStore = AdsStore::builder("test_invalidate.db").build().unwrap();
 
         let base_url = mockito::server_url();
         let ad = StorableAd::Image(AdImage {

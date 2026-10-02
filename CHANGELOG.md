@@ -2,6 +2,10 @@
 
 [Full Changelog](In progress)
 
+### Ads-Client
+
+- Telemetry is now recorded through a process-wide singleton (`ads_client::telemetry::record_*`) instead of a `Telemetry` value threaded through every client, store and transport. This is the API the crate will keep once metrics are recorded through glean-sym; until then it still forwards to the `MozAdsTelemetry` callback. The binding API is unchanged, but the callback given to `MozAdsClientBuilder::telemetry()` now receives metrics from every client in the process, replacing any callback installed earlier, and `MozAdsClient::shutdown()` only drops it if no other client has replaced it since. `MozAdsTelemetryWrapper` and the `Telemetry` trait are removed.
+
 # v158.0 (_2026-09-24_)
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v157.0...v158.0)
