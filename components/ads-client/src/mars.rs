@@ -25,9 +25,10 @@ use self::{
     preflight::PreflightRequest,
     transport::MARSTransport,
 };
+#[cfg(feature = "stateful")]
+use crate::telemetry;
 use crate::{
     http_cache::{HttpCache, RequestHash},
-    telemetry::Telemetry,
     CachePolicy,
 };
 #[cfg(feature = "stateful")]
@@ -35,25 +36,16 @@ use std::collections::HashMap;
 use url::Url;
 use viaduct::{Headers, Request};
 
-pub struct MARSClient<T>
-where
-    T: Clone + Telemetry,
-{
+pub struct MARSClient {
     environment: Environment,
-    telemetry: T,
-    transport: MARSTransport<T>,
+    transport: MARSTransport,
 }
 
-impl<T> MARSClient<T>
-where
-    T: Clone + Telemetry,
-{
-    pub fn new(environment: Environment, http_cache: Option<HttpCache>, telemetry: T) -> Self {
-        let transport = MARSTransport::new(http_cache, telemetry.clone());
+impl MARSClient {
+    pub fn new(environment: Environment, http_cache: Option<HttpCache>) -> Self {
         Self {
             environment,
-            telemetry,
-            transport,
+            transport: MARSTransport::new(http_cache),
         }
     }
 
@@ -113,7 +105,7 @@ where
                         .filter_map(|v| match serde_json::from_value(v) {
                             Ok(ad) => Some(ad),
                             Err(e) => {
-                                self.telemetry.record(&e);
+                                telemetry::record_invalid_ad_item(&e);
                                 None
                             }
                         })
@@ -125,7 +117,7 @@ where
                         .filter_map(|v| match serde_json::from_value(v) {
                             Ok(ad) => Some(ad),
                             Err(e) => {
-                                self.telemetry.record(&e);
+                                telemetry::record_invalid_ad_item(&e);
                                 None
                             }
                         })
@@ -137,7 +129,7 @@ where
                         .filter_map(|v| match serde_json::from_value(v) {
                             Ok(ad) => Some(ad),
                             Err(e) => {
-                                self.telemetry.record(&e);
+                                telemetry::record_invalid_ad_item(&e);
                                 None
                             }
                         })
@@ -179,7 +171,7 @@ where
         }
 
         let response = self.transport.send(ad_request, &cache_policy, ohttp)?;
-        let ads = AdResponse::<A>::parse(response.json()?, &self.telemetry)?;
+        let ads = AdResponse::<A>::parse(response.json()?)?;
         Ok((ads, request_hash))
     }
 
@@ -238,11 +230,6 @@ where
         }
         self.transport.fire(request, ohttp).map_err(Into::into)
     }
-
-    #[cfg(test)]
-    pub fn get_telemetry(&self) -> T {
-        self.telemetry.clone()
-    }
 }
 
 #[cfg(test)]
@@ -250,18 +237,13 @@ mod tests {
 
     use super::ad_response::AdImage;
     use super::*;
-    use crate::ffi::telemetry::MozAdsTelemetryWrapper;
     use crate::test_utils::{
         get_example_happy_image_response, make_happy_placement_requests, TEST_CONTEXT_ID,
     };
     use mockito::mock;
 
-    fn make_test_client(http_cache: Option<HttpCache>) -> MARSClient<MozAdsTelemetryWrapper> {
-        MARSClient::new(
-            Environment::Test,
-            http_cache,
-            MozAdsTelemetryWrapper::noop(),
-        )
+    fn make_test_client(http_cache: Option<HttpCache>) -> MARSClient {
+        MARSClient::new(Environment::Test, http_cache)
     }
 
     #[test]
