@@ -11,11 +11,7 @@ mod store;
 mod strategy;
 mod ttl;
 
-use self::{
-    builder::HttpCacheBuilder,
-    store::HttpCacheStore,
-    strategy::{CacheFirst, NetworkFirst},
-};
+use self::{builder::HttpCacheBuilder, store::HttpCacheStore, strategy::CacheableRequest};
 use crate::bytesize::ByteSize;
 
 use std::hash::Hash;
@@ -34,6 +30,14 @@ pub type HttpCacheSendResult =
 pub enum CachePolicy {
     CacheFirst { ttl: Option<Duration> },
     NetworkFirst { ttl: Option<Duration> },
+}
+
+impl CachePolicy {
+    fn ttl(&self) -> Option<Duration> {
+        match self {
+            Self::CacheFirst { ttl } | Self::NetworkFirst { ttl } => *ttl,
+        }
+    }
 }
 
 impl Default for CachePolicy {
@@ -69,33 +73,23 @@ impl HttpCache {
         item: T,
         policy: &CachePolicy,
     ) -> HttpCacheSendResult {
-        let hash = RequestHash::new(&item);
-        let request = item.into();
+        let request = CacheableRequest {
+            default_ttl: self.default_ttl,
+            explicit_ttl: policy.ttl(),
+            hash: RequestHash::new(&item),
+            request: item.into(),
+        };
         let mut outcomes = vec![];
 
-        // Clean up expired entries before applying the policy
         if let Err(e) = self.store.delete_expired_entries() {
             outcomes.push(CacheOutcome::CleanupFailed(e));
         }
 
-        // Apply the cache policy and collect outcomes
-        let (response, mut strategy_outcomes) = match policy {
-            CachePolicy::CacheFirst { ttl } => CacheFirst {
-                default_ttl: self.default_ttl,
-                explicit_ttl: *ttl,
-                hash,
-                request,
-            }
-            .apply(client, &self.store),
-            CachePolicy::NetworkFirst { ttl } => NetworkFirst {
-                default_ttl: self.default_ttl,
-                explicit_ttl: *ttl,
-                hash,
-                request,
-            }
-            .apply(client, &self.store),
+        let (response, strategy_outcomes) = match policy {
+            CachePolicy::CacheFirst { .. } => request.cache_first(client, &self.store),
+            CachePolicy::NetworkFirst { .. } => request.network_first(client, &self.store),
         }?;
-        outcomes.append(&mut strategy_outcomes);
+        outcomes.extend(strategy_outcomes);
 
         // Trim the cache to the max size only when something was actually stored
         if outcomes
