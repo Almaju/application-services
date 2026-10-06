@@ -11,15 +11,17 @@ use super::{CacheOutcome, HttpCacheSendResult};
 use std::time::Duration;
 use viaduct::{Client, Request};
 
-pub struct CacheFirst {
+/// A request on its way through the cache, carrying what every policy needs:
+/// the key it is cached under and the TTLs that decide how long it stays.
+pub struct CacheableRequest {
     pub default_ttl: Duration,
     pub explicit_ttl: Option<Duration>,
     pub hash: RequestHash,
     pub request: Request,
 }
 
-impl CacheFirst {
-    pub fn apply(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
+impl CacheableRequest {
+    pub fn cache_first(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
         let mut outcomes = vec![];
         match store.lookup(&self.hash) {
             Ok(Some(response)) => return Ok((response, vec![CacheOutcome::Hit])),
@@ -27,27 +29,12 @@ impl CacheFirst {
             Ok(None) => {}
         }
 
-        let network = NetworkFirst {
-            default_ttl: self.default_ttl,
-            explicit_ttl: self.explicit_ttl,
-            hash: self.hash,
-            request: self.request,
-        };
-        let (response, mut network_outcomes) = network.apply(client, store)?;
-        outcomes.append(&mut network_outcomes);
+        let (response, network_outcomes) = self.network_first(client, store)?;
+        outcomes.extend(network_outcomes);
         Ok((response, outcomes))
     }
-}
 
-pub struct NetworkFirst {
-    pub default_ttl: Duration,
-    pub explicit_ttl: Option<Duration>,
-    pub hash: RequestHash,
-    pub request: Request,
-}
-
-impl NetworkFirst {
-    pub fn apply(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
+    pub fn network_first(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
         let response = client.send_sync(self.request)?;
         let cache_control = CacheControl::from(&response);
         let outcome = if cache_control.should_cache() {
