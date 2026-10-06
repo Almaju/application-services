@@ -23,6 +23,8 @@
 //! [`glean-sym`]: https://github.com/mozilla/glean/tree/main/glean-core/glean-sym
 //! [`MozAdsTelemetry`]: crate::ffi::telemetry::MozAdsTelemetry
 
+// rabot: allow-file(free-function) recording is a free function call from anywhere, like a `tracing` macro, matching the API glean-sym will use
+
 use std::fmt::Display;
 
 #[cfg(feature = "stateful")]
@@ -37,7 +39,7 @@ pub(crate) use backend::{install, uninstall};
 
 /// A client operation, as labeled by `ads_client.client_operation_total` and
 /// `ads_client.client_error`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientOperation {
     New,
     RecordClick,

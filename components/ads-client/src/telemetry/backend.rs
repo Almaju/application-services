@@ -20,12 +20,15 @@ use parking_lot::RwLock;
 
 use crate::ffi::telemetry::MozAdsTelemetry;
 
+// rabot: allow(global-state) telemetry is a process-wide singleton by design, as it will be with glean-sym
 static CALLBACK: RwLock<Option<Arc<dyn MozAdsTelemetry>>> = RwLock::new(None);
 
 /// Makes `callback` the destination of every metric recorded from now on,
 /// replacing any callback installed before it.
 pub fn install(callback: Arc<dyn MozAdsTelemetry>) {
-    *CALLBACK.write() = Some(callback);
+    // Dropping a UniFFI callback calls into foreign code, so let the replaced
+    // one drop after the lock is released.
+    let _replaced = CALLBACK.write().replace(callback);
 }
 
 /// Drops the installed callback if it is `callback`, after which recording is
@@ -35,13 +38,18 @@ pub fn install(callback: Arc<dyn MozAdsTelemetry>) {
 /// each client drops the one it installed when it shuts down. A callback that
 /// has since been replaced by another client's is left alone.
 pub fn uninstall(callback: &Weak<dyn MozAdsTelemetry>) {
-    let mut installed = CALLBACK.write();
-    if installed
-        .as_ref()
-        .is_some_and(|current| Weak::ptr_eq(&Arc::downgrade(current), callback))
-    {
-        *installed = None;
-    }
+    // As in `install`, the removed callback drops after the lock is released.
+    let _removed = {
+        let mut installed = CALLBACK.write();
+        let is_ours = installed
+            .as_ref()
+            .is_some_and(|current| Weak::ptr_eq(&Arc::downgrade(current), callback));
+        if is_ours {
+            installed.take()
+        } else {
+            None
+        }
+    };
 }
 
 fn with_callback(f: impl FnOnce(&dyn MozAdsTelemetry)) {
