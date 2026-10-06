@@ -18,9 +18,29 @@ use std::sync::{Arc, Weak};
 
 use parking_lot::RwLock;
 
-use crate::ffi::telemetry::MozAdsTelemetry;
+/// Receives the ads client's metrics, for the app to record in Glean.
+#[uniffi::export(callback_interface)]
+pub trait MozAdsTelemetry: Send + Sync {
+    fn record_build_cache_error(&self, label: String, value: String);
+    fn record_client_error(&self, label: String, value: String);
+    fn record_client_operation_total(&self, label: String);
+    fn record_deserialization_error(&self, label: String, value: String);
+    fn record_http_cache_outcome(&self, label: String, value: String);
+}
 
-// rabot: allow(global-state) telemetry is a process-wide singleton by design, as it will be with glean-sym
+#[cfg(test)]
+pub struct NoopMozAdsTelemetry;
+
+#[cfg(test)]
+impl MozAdsTelemetry for NoopMozAdsTelemetry {
+    fn record_build_cache_error(&self, _label: String, _value: String) {}
+    fn record_client_error(&self, _label: String, _value: String) {}
+    fn record_client_operation_total(&self, _label: String) {}
+    fn record_deserialization_error(&self, _label: String, _value: String) {}
+    fn record_http_cache_outcome(&self, _label: String, _value: String) {}
+}
+
+// By design: telemetry is a process-wide singleton, as it will be with glean-sym.
 static CALLBACK: RwLock<Option<Arc<dyn MozAdsTelemetry>>> = RwLock::new(None);
 
 /// Makes `callback` the destination of every metric recorded from now on,
@@ -92,7 +112,6 @@ pub fn test_lock() -> parking_lot::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ffi::telemetry::NoopMozAdsTelemetry;
     use crate::telemetry::{record_client_operation, ClientOperation};
     use parking_lot::Mutex;
 

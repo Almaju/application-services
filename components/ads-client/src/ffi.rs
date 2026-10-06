@@ -4,7 +4,6 @@
 */
 
 pub mod error;
-pub mod telemetry;
 #[cfg(feature = "stateful")]
 use crate::client::config::AdsStoreConfig;
 use crate::client::config::{AdsCacheConfig, AdsClientConfig};
@@ -26,8 +25,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Weak;
 
+pub use crate::telemetry::MozAdsTelemetry;
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
-pub use telemetry::MozAdsTelemetry;
 
 #[derive(Default, uniffi::Record)]
 pub struct MozAdsRequestOptions {
@@ -473,7 +472,7 @@ impl From<&MozAdsPlacementRequestWithCount> for AdPlacementRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ffi::telemetry::NoopMozAdsTelemetry, MozAdsClientBuilder};
+    use crate::{telemetry::NoopMozAdsTelemetry, MozAdsClientBuilder};
     use std::sync::Arc;
 
     #[test]

@@ -6,7 +6,6 @@
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
 use crate::common::bytesize::ByteSize;
-use crate::ffi::telemetry::MozAdsTelemetry;
 use crate::http_cache::{CachePolicy, HttpCache};
 use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags};
 use crate::mars::ad_response::{AdImage, AdResponse, AdResponseValue, AdSpoc, AdTile};
@@ -15,7 +14,7 @@ use crate::mars::{MARSClient, ReportReason};
 #[cfg(feature = "stateful")]
 use crate::shutdown::AdsStoreShutdown;
 use crate::shutdown::ShutdownReferences;
-use crate::telemetry::{self, ClientOperation};
+use crate::telemetry::{self, ClientOperation, MozAdsTelemetry};
 use config::AdsClientConfig;
 use context_id::{ContextIDComponent, DefaultContextIdCallback};
 use error::RequestAdsError;
@@ -85,7 +84,7 @@ impl AdsClient {
                 .and_then(|x| match AdsStore::builder(x.db_path).build() {
                     Ok(store) => Some(store),
                     Err(e) => {
-                        telemetry::record_build_store_error(&e);
+                        telemetry::record_build_cache_error(&e);
                         None
                     }
                 });

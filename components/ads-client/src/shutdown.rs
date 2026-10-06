@@ -6,8 +6,7 @@ use std::sync::Weak;
 
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
-use crate::ffi::telemetry::MozAdsTelemetry;
-use crate::telemetry;
+use crate::telemetry::{self, MozAdsTelemetry};
 
 pub struct ShutdownReferences {
     #[cfg(feature = "stateful")]
@@ -70,7 +69,7 @@ impl AdsStoreShutdown {
 }
 #[cfg(test)]
 mod tests {
-    use crate::{ffi::telemetry::NoopMozAdsTelemetry, MozAdsCacheConfig, MozAdsClientBuilder};
+    use crate::{telemetry::NoopMozAdsTelemetry, MozAdsCacheConfig, MozAdsClientBuilder};
     use std::{
         sync::{mpsc, Arc},
         thread,
