@@ -2,6 +2,10 @@
 
 [Full Changelog](In progress)
 
+### Ads-Client
+
+- Telemetry is now a process-wide singleton internally; the binding API is unchanged, but the `MozAdsTelemetry` callback now receives metrics from every client in the process.
+
 # v158.0 (_2026-09-24_)
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v157.0...v158.0)
