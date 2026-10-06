@@ -20,12 +20,13 @@
 //! Every function here is infallible and silent by design. Telemetry must never
 //! change the outcome of the operation it is describing.
 //!
-//! This module depends on nothing else in the crate: the types it records
-//! implement its traits where they are defined.
-//!
 //! [`glean-sym`]: https://github.com/mozilla/glean/tree/main/glean-core/glean-sym
 
 use std::fmt::Display;
+
+#[cfg(feature = "stateful")]
+use crate::ads_store::builder::AdsStoreBuilderError;
+use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
 mod backend;
 
@@ -33,20 +34,6 @@ pub use backend::MozAdsTelemetry;
 pub(crate) use backend::{install, uninstall};
 #[cfg(test)]
 pub(crate) use backend::{test_lock, NoopMozAdsTelemetry};
-
-/// A failure to build one of the client's databases, as labeled by
-/// `ads_client.build_cache_error`. The value recorded is its `Display`.
-pub trait BuildCacheError: Display {
-    fn label(&self) -> &'static str;
-}
-
-/// The result of an HTTP cache read, as labeled by
-/// `ads_client.http_cache_outcome`.
-pub trait HttpCacheOutcome {
-    fn label(&self) -> &'static str;
-    /// The error behind the outcome, or an empty string if there was none.
-    fn value(&self) -> String;
-}
 
 /// A client operation, as labeled by `ads_client.client_operation_total` and
 /// `ads_client.client_error`.
@@ -85,16 +72,50 @@ pub fn record_client_error(operation: ClientOperation, error: &impl Display) {
     backend::client_error(operation.label(), error.to_string());
 }
 
-/// Records a failure to build the HTTP cache or the ads store against
+// By design: a free function, so recording a metric is one call from anywhere.
+/// Records a failure to build the HTTP cache against
 /// `ads_client.build_cache_error`.
-pub fn record_build_cache_error(error: &impl BuildCacheError) {
-    backend::build_cache_error(error.label(), error.to_string());
+pub fn record_build_cache_error(error: &HttpCacheBuilderError) {
+    let label = match error {
+        HttpCacheBuilderError::Database(_) => "database_error",
+        HttpCacheBuilderError::EmptyDbPath => "empty_db_path",
+        HttpCacheBuilderError::InvalidMaxSize { .. } => "invalid_max_size",
+        HttpCacheBuilderError::InvalidTtl { .. } => "invalid_ttl",
+    };
+    backend::build_cache_error(label, error.to_string());
 }
 
+// By design: a free function, so recording a metric is one call from anywhere.
+/// Records a failure to build the ads store.
+///
+/// TODO: add a metric for the ads store to `metrics.yaml`. Until then its
+/// errors are recorded against `ads_client.build_cache_error`, under
+/// `store_`-prefixed labels.
+#[cfg(feature = "stateful")]
+pub fn record_ads_store_error(error: &AdsStoreBuilderError) {
+    let label = match error {
+        AdsStoreBuilderError::Database(_) => "store_database_error",
+        AdsStoreBuilderError::EmptyDbPath => "store_empty_db_path",
+        AdsStoreBuilderError::InvalidMaxSize { .. } => "store_invalid_max_size",
+    };
+    backend::build_cache_error(label, error.to_string());
+}
+
+// By design: a free function, so recording a metric is one call from anywhere.
 /// Records the result of an HTTP cache read against
 /// `ads_client.http_cache_outcome`.
-pub fn record_http_cache_outcome(outcome: &impl HttpCacheOutcome) {
-    backend::http_cache_outcome(outcome.label(), outcome.value());
+pub fn record_http_cache_outcome(outcome: &CacheOutcome) {
+    let (label, value) = match outcome {
+        CacheOutcome::CleanupFailed(e) => ("cleanup_failed", e.to_string()),
+        CacheOutcome::Hit => ("hit", String::new()),
+        CacheOutcome::LookupFailed(e) => ("lookup_failed", e.to_string()),
+        CacheOutcome::MissNotCacheable => ("miss_not_cacheable", String::new()),
+        CacheOutcome::MissStored => ("miss_stored", String::new()),
+        CacheOutcome::NoCache => ("no_cache", String::new()),
+        CacheOutcome::StoreFailed(e) => ("store_failed", e.to_string()),
+        CacheOutcome::TrimFailed(e) => ("trim_failed", e.to_string()),
+    };
+    backend::http_cache_outcome(label, value);
 }
 
 /// Records an ad item we could not deserialize against

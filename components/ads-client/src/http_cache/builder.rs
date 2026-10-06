@@ -6,7 +6,6 @@ use super::connection_initializer::HttpCacheConnectionInitializer;
 use super::store::HttpCacheStore;
 use crate::common::bytesize::ByteSize;
 use crate::http_cache::HttpCache;
-use crate::telemetry;
 use rusqlite::Connection;
 use sql_support::open_database;
 use std::path::PathBuf;
@@ -40,17 +39,6 @@ pub enum HttpCacheBuilderError {
         min_ttl: String,
         ttl: u64,
     },
-}
-
-impl telemetry::BuildCacheError for HttpCacheBuilderError {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Database(_) => "database_error",
-            Self::EmptyDbPath => "empty_db_path",
-            Self::InvalidMaxSize { .. } => "invalid_max_size",
-            Self::InvalidTtl { .. } => "invalid_ttl",
-        }
-    }
 }
 
 pub struct HttpCacheBuilder {

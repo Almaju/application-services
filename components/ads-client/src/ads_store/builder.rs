@@ -31,16 +31,6 @@ pub enum AdsStoreBuilderError {
     },
 }
 
-impl telemetry::BuildCacheError for AdsStoreBuilderError {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Database(_) => "store_database_error",
-            Self::EmptyDbPath => "store_empty_db_path",
-            Self::InvalidMaxSize { .. } => "store_invalid_max_size",
-        }
-    }
-}
-
 pub struct AdsStoreBuilder {
     db_path: PathBuf,
     max_size: Option<ByteSize>,
@@ -69,7 +59,7 @@ impl AdsStoreBuilder {
         if !cfg!(test) {
             match open_database::open_database(&self.db_path, &initializer) {
                 Ok(conn) => return Ok(conn),
-                Err(e) => telemetry::record_build_cache_error(&AdsStoreBuilderError::from(e)),
+                Err(e) => telemetry::record_ads_store_error(&AdsStoreBuilderError::from(e)),
             }
         }
 

@@ -84,7 +84,7 @@ impl AdsClient {
                 .and_then(|x| match AdsStore::builder(x.db_path).build() {
                     Ok(store) => Some(store),
                     Err(e) => {
-                        telemetry::record_build_cache_error(&e);
+                        telemetry::record_ads_store_error(&e);
                         None
                     }
                 });
