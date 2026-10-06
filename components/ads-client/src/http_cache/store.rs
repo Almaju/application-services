@@ -10,7 +10,7 @@ use crate::{
 };
 use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
-use viaduct::{Header, Response};
+use viaduct::{Header, Method, Response};
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,29 +118,31 @@ impl HttpCacheStore {
                 let url_str: String = row.get(4)?;
 
                 let headers = serde_json::from_slice::<HashMap<String, String>>(&response_headers)
-                    .map(|map| {
-                        map.into_iter()
-                            .filter_map(|(n, v)| Header::new(n, v).ok())
-                            .collect::<Vec<_>>()
-                            .into()
-                    })
-                    .unwrap_or_else(|_| viaduct::Headers::new());
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Blob,
+                            Box::new(e),
+                        )
+                    })?
+                    .into_iter()
+                    .filter_map(|(n, v)| Header::new(n, v).ok())
+                    .collect::<Vec<_>>()
+                    .into();
 
-                let request_method = match method_str.as_str() {
-                    "GET" => viaduct::Method::Get,
-                    "HEAD" => viaduct::Method::Head,
-                    "POST" => viaduct::Method::Post,
-                    "PUT" => viaduct::Method::Put,
-                    "DELETE" => viaduct::Method::Delete,
-                    "PATCH" => viaduct::Method::Patch,
-                    _ => viaduct::Method::Get,
-                };
+                let request_method = Self::parse_method(&method_str).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        format!("unknown request method in cache: {method_str}").into(),
+                    )
+                })?;
 
-                let url = url::Url::parse(&url_str).map_err(|_| {
+                let url = url::Url::parse(&url_str).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
                         4,
                         rusqlite::types::Type::Text,
-                        format!("invalid URL in cache: {url_str}").into(),
+                        Box::new(e),
                     )
                 })?;
 
@@ -253,6 +255,22 @@ impl HttpCacheStore {
             },
             Some(msg.to_string()),
         )
+    }
+
+    /// The inverse of `Method::as_str`, which is how `store_with_ttl` writes the method.
+    fn parse_method(method: &str) -> Option<Method> {
+        match method {
+            "CONNECT" => Some(Method::Connect),
+            "DELETE" => Some(Method::Delete),
+            "GET" => Some(Method::Get),
+            "HEAD" => Some(Method::Head),
+            "OPTIONS" => Some(Method::Options),
+            "PATCH" => Some(Method::Patch),
+            "POST" => Some(Method::Post),
+            "PUT" => Some(Method::Put),
+            "TRACE" => Some(Method::Trace),
+            _ => None,
+        }
     }
 }
 
@@ -515,6 +533,73 @@ mod tests {
         let retrieved = store.lookup(&hash).unwrap().unwrap();
         assert_eq!(retrieved.status, 200);
         assert_eq!(retrieved.body, b"test response");
+    }
+
+    #[test]
+    fn test_lookup_round_trips_every_request_method() {
+        let store = create_test_store();
+
+        for method in [
+            Method::Connect,
+            Method::Delete,
+            Method::Get,
+            Method::Head,
+            Method::Options,
+            Method::Patch,
+            Method::Post,
+            Method::Put,
+            Method::Trace,
+        ] {
+            let hash = RequestHash::new(&method.as_str());
+            let response = Response {
+                request_method: method,
+                ..create_test_response(200, b"test response")
+            };
+            store
+                .store_with_ttl(&hash, &response, &Duration::from_secs(300))
+                .unwrap();
+
+            let retrieved = store.lookup(&hash).unwrap().unwrap();
+            assert_eq!(retrieved.request_method, method);
+        }
+    }
+
+    #[test]
+    fn test_lookup_rejects_corrupt_rows() {
+        use rusqlite::types::Value;
+
+        for (column, value) in [
+            ("request_method", Value::Text("BREW".into())),
+            ("request_url", Value::Text("not a url".into())),
+            ("response_headers", Value::Blob(b"not json".to_vec())),
+        ] {
+            let store = create_test_store();
+            let request = create_test_request("https://example.com/api", b"body");
+            let hash = hash_for_request(&request);
+            store
+                .store_with_ttl(
+                    &hash,
+                    &create_test_response(200, b"test response"),
+                    &Duration::from_secs(300),
+                )
+                .unwrap();
+            store
+                .conn
+                .lock()
+                .execute(
+                    &format!("UPDATE http_cache SET {column} = ?1"),
+                    rusqlite::params![value],
+                )
+                .unwrap();
+
+            assert!(
+                matches!(
+                    store.lookup(&hash),
+                    Err(rusqlite::Error::FromSqlConversionFailure(..))
+                ),
+                "corrupt {column} should fail the lookup"
+            );
+        }
     }
 
     #[test]
