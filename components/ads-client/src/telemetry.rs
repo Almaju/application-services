@@ -13,7 +13,7 @@
 //! This is the same API the crate will expose once metrics are recorded
 //! straight from Rust through [`glean-sym`]. Until then, the backend forwards
 //! to the [`MozAdsTelemetry`] callback the consumer hands to
-//! `MozAdsClientBuilder::telemetry()`; see `telemetry/callback.rs`. Moving to
+//! `MozAdsClientBuilder::telemetry()`; see `telemetry/backend.rs`. Moving to
 //! glean-sym means swapping that backend for one that talks to the generated
 //! metrics, and none of the recording sites have to change.
 //!
@@ -29,7 +29,6 @@ use std::fmt::Display;
 use crate::ads_store::builder::AdsStoreBuilderError;
 use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
-#[path = "telemetry/callback.rs"]
 mod backend;
 
 #[cfg(test)]

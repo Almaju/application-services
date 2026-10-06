@@ -3,7 +3,7 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! The callback backend: one function per metric in `metrics.yaml`, each
+//! The telemetry backend: one function per metric in `metrics.yaml`, each
 //! forwarded to the process-wide [`MozAdsTelemetry`] callback.
 //!
 //! The function signatures match the glean-sym backend this will be replaced
