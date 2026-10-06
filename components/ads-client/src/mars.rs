@@ -25,8 +25,6 @@ use self::{
     preflight::PreflightRequest,
     transport::MARSTransport,
 };
-#[cfg(feature = "stateful")]
-use crate::telemetry;
 use crate::{
     http_cache::{HttpCache, RequestHash},
     CachePolicy,
@@ -105,7 +103,7 @@ impl MARSClient {
                         .filter_map(|v| match serde_json::from_value(v) {
                             Ok(ad) => Some(ad),
                             Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
+                                crate::telemetry::record_invalid_ad_item(&e);
                                 None
                             }
                         })
@@ -117,7 +115,7 @@ impl MARSClient {
                         .filter_map(|v| match serde_json::from_value(v) {
                             Ok(ad) => Some(ad),
                             Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
+                                crate::telemetry::record_invalid_ad_item(&e);
                                 None
                             }
                         })
@@ -129,7 +127,7 @@ impl MARSClient {
                         .filter_map(|v| match serde_json::from_value(v) {
                             Ok(ad) => Some(ad),
                             Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
+                                crate::telemetry::record_invalid_ad_item(&e);
                                 None
                             }
                         })
