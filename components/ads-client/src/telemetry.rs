@@ -85,14 +85,12 @@ pub fn record_client_error(operation: ClientOperation, error: &impl Display) {
     backend::client_error(operation.label(), error.to_string());
 }
 
-// By design: a free function, so recording a metric is one call from anywhere.
 /// Records a failure to build the HTTP cache or the ads store against
 /// `ads_client.build_cache_error`.
 pub fn record_build_cache_error(error: &impl BuildCacheError) {
     backend::build_cache_error(error.label(), error.to_string());
 }
 
-// By design: a free function, so recording a metric is one call from anywhere.
 /// Records the result of an HTTP cache read against
 /// `ads_client.http_cache_outcome`.
 pub fn record_http_cache_outcome(outcome: &impl HttpCacheOutcome) {
