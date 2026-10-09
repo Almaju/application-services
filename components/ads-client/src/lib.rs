@@ -27,7 +27,6 @@ pub mod shutdown;
 pub mod telemetry;
 
 use crate::shutdown::ShutdownReferences;
-pub use ffi::telemetry::MozAdsTelemetryWrapper;
 pub use ffi::*;
 
 #[cfg(test)]
@@ -43,8 +42,8 @@ uniffi::custom_type!(AdsClientUrl, String, {
 
 #[derive(uniffi::Object)]
 pub struct MozAdsClient {
-    inner: Mutex<AdsClient<MozAdsTelemetryWrapper>>,
-    shutdown_references: ShutdownReferences<MozAdsTelemetryWrapper>,
+    inner: Mutex<AdsClient>,
+    shutdown_references: ShutdownReferences,
 }
 
 #[uniffi::export]

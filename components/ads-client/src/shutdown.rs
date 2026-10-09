@@ -2,22 +2,25 @@
 use parking_lot::Mutex;
 #[cfg(feature = "stateful")]
 use std::sync::Arc;
+use std::sync::Weak;
 
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
-use crate::telemetry::Telemetry;
+use crate::telemetry::{self, MozAdsTelemetry};
 
-pub struct ShutdownReferences<T: Telemetry> {
+pub struct ShutdownReferences {
     #[cfg(feature = "stateful")]
     ads_cache_shutdown: AdsStoreShutdown,
-    telemetry: T,
+    // The telemetry callback this client installed, if any. Weak so that we
+    // never keep it alive ourselves: the telemetry singleton owns it.
+    telemetry: Option<Weak<dyn MozAdsTelemetry>>,
 }
 
-impl<T: Telemetry> ShutdownReferences<T> {
+impl ShutdownReferences {
     pub fn new(
-        telemetry: T,
+        telemetry: Option<Weak<dyn MozAdsTelemetry>>,
         #[cfg(feature = "stateful")] ads_cache_shutdown: AdsStoreShutdown,
-    ) -> ShutdownReferences<T> {
+    ) -> ShutdownReferences {
         ShutdownReferences {
             #[cfg(feature = "stateful")]
             ads_cache_shutdown,
@@ -28,8 +31,10 @@ impl<T: Telemetry> ShutdownReferences<T> {
     // Shutdown anything that needs to be shut down safely and drop references to telemetry callbacks.
     // Should be called only when dropping the ads client. This may be extended to drop more things.
     pub fn shutdown(&self) -> Result<(), rusqlite::Error> {
-        // Drop telemetry (within the telemetry wrapper)
-        self.telemetry.shutdown();
+        // Drop the telemetry callback this client installed, unless another client has replaced it.
+        if let Some(telemetry) = &self.telemetry {
+            telemetry::uninstall(telemetry);
+        }
 
         #[cfg(feature = "stateful")]
         self.ads_cache_shutdown.shutdown()?;
@@ -64,7 +69,7 @@ impl AdsStoreShutdown {
 }
 #[cfg(test)]
 mod tests {
-    use crate::{ffi::telemetry::NoopMozAdsTelemetry, MozAdsCacheConfig, MozAdsClientBuilder};
+    use crate::{telemetry::NoopMozAdsTelemetry, MozAdsCacheConfig, MozAdsClientBuilder};
     use std::{
         sync::{mpsc, Arc},
         thread,
@@ -107,6 +112,7 @@ mod tests {
 
     #[test]
     fn test_shutdown_telemetry_basic() {
+        let _lock = crate::telemetry::test_lock();
         viaduct_dev::init_backend_dev();
 
         // test with client created from config with no cache
@@ -142,6 +148,7 @@ mod tests {
 
     #[test]
     fn test_shutdown_is_idempotent() {
+        let _lock = crate::telemetry::test_lock();
         viaduct_dev::init_backend_dev();
 
         let builder = Arc::new(MozAdsClientBuilder::new())
