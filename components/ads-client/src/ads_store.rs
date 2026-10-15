@@ -7,6 +7,7 @@ use crate::{
     ads_store::{builder::AdsStoreBuilder, store::AdsStoreHolder},
     bytesize::ByteSize,
 };
+use sql_support::open_database;
 use std::path::Path;
 
 pub struct AdsStore {
@@ -21,12 +22,12 @@ impl AdsStore {
         AdsStoreBuilder::new(db_path.as_ref())
     }
 
-    pub fn clear(&self) -> Result<(), rusqlite::Error> {
+    pub fn clear(&self) -> Result<(), open_database::Error> {
         self.holder.clear_all()?;
         Ok(())
     }
 
-    pub fn invalidate_by_id(&self, placement_id: &PlacementId) -> Result<(), rusqlite::Error> {
+    pub fn invalidate_by_id(&self, placement_id: &PlacementId) -> Result<(), open_database::Error> {
         self.holder.invalidate_ad_by_id(placement_id)?;
         Ok(())
     }
@@ -35,29 +36,26 @@ impl AdsStore {
         self.is_memory
     }
 
-    pub fn shutdown_db(self) -> Result<(), rusqlite::Error> {
-        self.holder.close()
+    pub fn shutdown_db(&self) {
+        self.holder.close();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ffi::telemetry::MozAdsTelemetryWrapper, test_utils::get_example_happy_image_ads};
+    use crate::test_utils::get_example_happy_image_ads;
 
     #[test]
     fn test_ads_store_creation() {
         // Test that AdsStore can be created successfully with test config
-        let store: Result<AdsStore, _> =
-            AdsStore::builder("test_store.db").build(MozAdsTelemetryWrapper::noop());
+        let store: Result<AdsStore, _> = AdsStore::builder("test_store.db").build();
         assert!(store.is_ok());
     }
 
     #[test]
     fn test_clear_store() {
-        let store: AdsStore = AdsStore::builder("test_clear.db")
-            .build(MozAdsTelemetryWrapper::noop())
-            .unwrap();
+        let store: AdsStore = AdsStore::builder("test_clear.db").build().unwrap();
 
         let (placement_id, ad) = get_example_happy_image_ads("mock_billboard_1");
         store.holder.store_ad(&placement_id, ad.clone()).unwrap();
@@ -76,9 +74,7 @@ mod tests {
 
     #[test]
     fn test_invalidate_by_id() {
-        let store: AdsStore = AdsStore::builder("test_invalidate.db")
-            .build(MozAdsTelemetryWrapper::noop())
-            .unwrap();
+        let store: AdsStore = AdsStore::builder("test_invalidate.db").build().unwrap();
 
         let (placement_1, ad_1) = get_example_happy_image_ads("mock_billboard_1");
         let (placement_2, ad_2) = get_example_happy_image_ads("mock_billboard_2");
