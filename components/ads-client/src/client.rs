@@ -18,7 +18,7 @@ use context_id::{ContextIDComponent, ContextIdCallback};
 use error::RequestAdsError;
 use sql_support::open_database;
 use std::collections::HashMap;
-#[cfg(feature = "stateful")]
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -31,12 +31,20 @@ const DEFAULT_TTL_SECONDS: u64 = 300;
 const DEFAULT_MAX_CACHE_SIZE_MIB: u64 = 10;
 const DEFAULT_ROTATION_DAYS: u8 = 3;
 
-/// Counts the context ids issued, for `ads_client.context_id_rotations`.
-struct AdsContextIdCallback;
+/// Measures how long each context ID is used, for
+/// `ads_client.context_id_lifetime`.
+#[derive(Default)]
+pub(crate) struct AdsContextIdCallback {
+    /// When the current context ID was issued, in Unix seconds.
+    issued_at: Arc<AtomicI64>,
+}
 
 impl ContextIdCallback for AdsContextIdCallback {
-    fn persist(&self, _context_id: String, _creation_date: i64) {
-        telemetry::note_context_id_issued();
+    fn persist(&self, _context_id: String, creation_date: i64) {
+        let previous = self.issued_at.swap(creation_date, Ordering::Relaxed);
+        if previous > 0 {
+            telemetry::record_context_id_lifetime(creation_date - previous);
+        }
     }
 
     fn rotated(&self, _old_context_id: String) {}
@@ -47,15 +55,19 @@ pub struct AdsClient {
     ads_store: Arc<Option<AdsStore>>,
     client: MARSClient,
     context_id_component: ContextIDComponent,
+    context_id_issued_at: Arc<AtomicI64>,
 }
 
 impl AdsClient {
     pub fn new(client_config: AdsClientConfig) -> Self {
+        let context_id_issued_at = Arc::new(AtomicI64::new(0));
         let context_id_component = ContextIDComponent::new(
             &Uuid::new_v4().to_string(),
             0,
             cfg!(test),
-            Box::new(AdsContextIdCallback),
+            Box::new(AdsContextIdCallback {
+                issued_at: context_id_issued_at.clone(),
+            }),
         );
 
         let environment = client_config.environment;
@@ -105,6 +117,7 @@ impl AdsClient {
             ads_store: Arc::new(ads_store),
             client,
             context_id_component,
+            context_id_issued_at,
         }
     }
 
@@ -303,6 +316,11 @@ impl AdsClient {
     }
 
     pub fn shutdown(&self) {
+        // The current context ID ends with the client.
+        let issued_at = self.context_id_issued_at.load(Ordering::Relaxed);
+        if issued_at > 0 {
+            telemetry::record_context_id_lifetime(chrono::Utc::now().timestamp() - issued_at);
+        }
         telemetry::shutdown();
         telemetry::uninstall();
 
@@ -378,6 +396,7 @@ mod tests {
                 false,
                 Box::new(context_id::DefaultContextIdCallback),
             ),
+            context_id_issued_at: Default::default(),
         }
     }
 

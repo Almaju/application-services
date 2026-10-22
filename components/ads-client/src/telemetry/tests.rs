@@ -82,7 +82,8 @@ fn test_successful_request() {
     let durations = h.capture.durations.lock().clone();
     assert_eq!(durations.len(), 1);
     assert_eq!(durations[0].0, RequestDuration::Direct);
-    assert!(*h.capture.context_id_rotations.lock() >= 1);
+    // The context ID is still in use.
+    assert!(h.capture.context_id_lifetimes.lock().is_empty());
     assert!(h.capture.expected_errors.lock().is_empty());
     assert!(h.capture.error_reports.lock().is_empty());
 }
@@ -106,7 +107,6 @@ fn test_server_error_is_expected() {
     assert_eq!(events[0].kind, "http_server");
     assert_eq!(events[0].operation, "request_image_ads");
     assert_eq!(events[0].stage, "request");
-    assert_eq!(events[0].source, Some("network"));
     assert_eq!(events[0].code.as_deref(), Some("503"));
     assert!(events[0].fatal);
     assert!(h.capture.error_reports.lock().is_empty());
@@ -229,6 +229,8 @@ fn test_repeats_are_sent_at_shutdown() {
     assert_eq!(h.capture.error_reports.lock().len(), 1);
 
     client.shutdown().unwrap();
+    // The client's context ID ends with it, minutes after it was issued.
+    assert!(h.capture.context_id_lifetimes.lock().contains(&0));
     let reports = h.capture.error_reports.lock().clone();
     assert_eq!(reports.len(), 2);
     assert_eq!(reports[1].1, "shutdown");
@@ -269,7 +271,7 @@ fn test_builder_installs_the_sink_until_shutdown() {
 
     impl MozAdsTelemetrySink for RecordingSink {
         fn accumulate_request_duration(&self, _duration: MozAdsRequestDuration, _millis: i64) {}
-        fn add_context_id_rotations(&self, _amount: i32) {}
+        fn accumulate_context_id_lifetime(&self, _minutes: i64) {}
         fn add_to_rate(&self, rate: MozAdsRate, numerator: i32, denominator: i32) {
             self.0.lock().rates.push((rate, numerator, denominator));
         }
@@ -296,4 +298,18 @@ fn test_builder_installs_the_sink_until_shutdown() {
 
     client.shutdown().unwrap();
     assert!(sink::sink().is_none());
+}
+
+#[test]
+fn test_context_id_lifetime_on_rotation() {
+    use crate::client::error::ComponentError;
+    use context_id::ContextIdCallback;
+
+    let h = harness();
+    let callback = crate::client::AdsContextIdCallback::default();
+    callback.persist("first".into(), 1_000);
+    callback.persist("second".into(), 1_000 + 3 * 24 * 60 * 60);
+    super::begin(super::Operation::ClearCache, false).finish(&Ok::<(), ComponentError>(()), None);
+
+    assert_eq!(*h.capture.context_id_lifetimes.lock(), vec![3 * 24 * 60]);
 }

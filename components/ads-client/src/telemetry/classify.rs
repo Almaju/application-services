@@ -44,18 +44,17 @@ pub enum ErrorKind {
     HttpThrottled,
     NetworkOther,
     Offline,
-    OhttpConfig,
     OhttpRelay,
     Proxy,
     Shutdown,
-    StorageBusy,
-    StorageDowngrade,
+    StorageFull,
     Timeout,
     Tls,
     // Unexpected.
     CacheConfig,
     ContextId,
     DbCorrupt,
+    DbLocked,
     DbRecovery,
     HttpBadRequest,
     HttpUnexpectedStatus,
@@ -67,13 +66,15 @@ pub enum ErrorKind {
     InvalidResponse,
     InvalidUrl,
     Misconfigured,
+    OhttpConfig,
     OhttpProtocol,
     SqlError,
+    StorageDowngrade,
 }
 
 impl ErrorKind {
     #[cfg(test)]
-    pub const ALL: [ErrorKind; 32] = [
+    pub const ALL: [ErrorKind; 33] = [
         Self::CallbackGone,
         Self::Cancelled,
         Self::Connection,
@@ -82,17 +83,16 @@ impl ErrorKind {
         Self::HttpThrottled,
         Self::NetworkOther,
         Self::Offline,
-        Self::OhttpConfig,
         Self::OhttpRelay,
         Self::Proxy,
         Self::Shutdown,
-        Self::StorageBusy,
-        Self::StorageDowngrade,
+        Self::StorageFull,
         Self::Timeout,
         Self::Tls,
         Self::CacheConfig,
         Self::ContextId,
         Self::DbCorrupt,
+        Self::DbLocked,
         Self::DbRecovery,
         Self::HttpBadRequest,
         Self::HttpUnexpectedStatus,
@@ -104,8 +104,10 @@ impl ErrorKind {
         Self::InvalidResponse,
         Self::InvalidUrl,
         Self::Misconfigured,
+        Self::OhttpConfig,
         Self::OhttpProtocol,
         Self::SqlError,
+        Self::StorageDowngrade,
     ];
 
     pub fn tier(self) -> Tier {
@@ -118,17 +120,16 @@ impl ErrorKind {
             | Self::HttpThrottled
             | Self::NetworkOther
             | Self::Offline
-            | Self::OhttpConfig
             | Self::OhttpRelay
             | Self::Proxy
             | Self::Shutdown
-            | Self::StorageBusy
-            | Self::StorageDowngrade
+            | Self::StorageFull
             | Self::Timeout
             | Self::Tls => Tier::Expected,
             Self::CacheConfig
             | Self::ContextId
             | Self::DbCorrupt
+            | Self::DbLocked
             | Self::DbRecovery
             | Self::HttpBadRequest
             | Self::HttpUnexpectedStatus
@@ -140,8 +141,10 @@ impl ErrorKind {
             | Self::InvalidResponse
             | Self::InvalidUrl
             | Self::Misconfigured
+            | Self::OhttpConfig
             | Self::OhttpProtocol
-            | Self::SqlError => Tier::Unexpected,
+            | Self::SqlError
+            | Self::StorageDowngrade => Tier::Unexpected,
         }
     }
 
@@ -153,6 +156,7 @@ impl ErrorKind {
             Self::Connection => "connection",
             Self::ContextId => "context_id",
             Self::DbCorrupt => "db_corrupt",
+            Self::DbLocked => "db_locked",
             Self::DbRecovery => "db_recovery",
             Self::Dns => "dns",
             Self::HttpBadRequest => "http_bad_request",
@@ -175,7 +179,7 @@ impl ErrorKind {
             Self::Proxy => "proxy",
             Self::Shutdown => "shutdown",
             Self::SqlError => "sql_error",
-            Self::StorageBusy => "storage_busy",
+            Self::StorageFull => "storage_full",
             Self::StorageDowngrade => "storage_downgrade",
             Self::Timeout => "timeout",
             Self::Tls => "tls",
@@ -482,6 +486,8 @@ impl Classify for ViaductError {
                     None => classified,
                 }
             }
+            // A down gateway (an outage) and a bad config (a bug) look the
+            // same until viaduct reports the status, so treat both as a bug.
             Self::OhttpConfigFetchFailed(_) => Classified::new(
                 ErrorKind::OhttpConfig,
                 "ViaductError::OhttpConfigFetchFailed",
@@ -575,10 +581,9 @@ fn classify_sqlite(error: &rusqlite::Error) -> Classified {
         return Classified::new(ErrorKind::SqlError, "rusqlite::Error", "SQLite error");
     };
     let kind = match failure.code {
-        ErrorCode::DatabaseBusy
-        | ErrorCode::DatabaseLocked
-        | ErrorCode::DiskFull
-        | ErrorCode::SystemIoFailure => ErrorKind::StorageBusy,
+        // We own every connection, with a busy timeout: contention is a bug.
+        ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => ErrorKind::DbLocked,
+        ErrorCode::DiskFull | ErrorCode::SystemIoFailure => ErrorKind::StorageFull,
         // By design: ErrorCode is non-exhaustive. Anything else is a bug.
         _ => ErrorKind::SqlError,
     };
@@ -755,7 +760,7 @@ mod tests {
             Some("/Users/someone/profile/ads.db".into()),
         );
         let classified = open_database::Error::SqlError(busy).classify();
-        assert_eq!(classified.kind, ErrorKind::StorageBusy);
+        assert_eq!(classified.kind, ErrorKind::DbLocked);
         assert_eq!(classified.code.as_deref(), Some("5"));
         assert!(!format!("{classified:?}").contains("someone"));
 

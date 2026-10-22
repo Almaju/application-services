@@ -11,12 +11,13 @@
 
 use std::cell::RefCell;
 use std::panic::Location;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
+
+use parking_lot::Mutex;
 
 use super::classify::Classify;
 use super::report::{self, ErrorSite};
-use super::sink::{self, sink, Rate, RequestDuration};
+use super::sink::{self, sink, Rate, RequestDuration, Sink};
 use crate::http_cache::CacheOutcome;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,19 +145,11 @@ impl OpState {
     }
 
     fn site(&self, fatal: bool, location: &'static Location<'static>) -> ErrorSite {
-        let source = match (self.stage, self.cache_hit) {
-            (Some(Stage::Request | Stage::Parse), true) => Some("cache"),
-            (Some(Stage::Request | Stage::Parse | Stage::Preflight | Stage::Callback), _) => {
-                Some("network")
-            }
-            _ => None,
-        };
         ErrorSite {
             fatal,
             location: format!("{}:{}", short_path(location.file()), location.line()),
             ohttp: self.ohttp,
             operation: self.operation.as_str(),
-            source,
             stage: self.stage.unwrap_or(Stage::Start).as_str(),
             steps: self.steps.clone(),
         }
@@ -167,7 +160,10 @@ thread_local! {
     static CURRENT: RefCell<Option<OpState>> = const { RefCell::new(None) };
 }
 
-static CONTEXT_ID_ROTATIONS: AtomicI32 = AtomicI32::new(0);
+/// Context ID lifetimes waiting for the end of an operation, in minutes.
+static CONTEXT_ID_LIFETIMES: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+/// Lifetimes kept while no operation ends, e.g. a client rebuilt in a loop.
+const MAX_PENDING_LIFETIMES: usize = 16;
 
 /// Starts following a public operation. Call [`OpScope::finish`] with its
 /// result.
@@ -223,10 +219,7 @@ impl OpScope {
                 let millis = i64::try_from(self.started.elapsed().as_millis()).unwrap_or(i64::MAX);
                 sink.accumulate_duration(duration, millis);
             }
-            let rotations = CONTEXT_ID_ROTATIONS.swap(0, Ordering::Relaxed);
-            if rotations > 0 {
-                sink.add_context_id_rotations(rotations);
-            }
+            send_context_id_lifetimes(sink.as_ref());
         }
         report::flush(sink.as_deref(), "error", false);
     }
@@ -295,14 +288,29 @@ pub fn report_side_error(stage: Stage, error: &impl Classify) {
     report::report(error.classify(), site);
 }
 
-pub fn note_context_id_issued() {
-    CONTEXT_ID_ROTATIONS.fetch_add(1, Ordering::Relaxed);
+/// Records how long a context ID was used, when it is replaced or when its
+/// client shuts down.
+pub fn record_context_id_lifetime(seconds: i64) {
+    let mut lifetimes = CONTEXT_ID_LIFETIMES.lock();
+    if lifetimes.len() < MAX_PENDING_LIFETIMES {
+        lifetimes.push(seconds.max(0) / 60);
+    }
+}
+
+fn send_context_id_lifetimes(sink: &dyn Sink) {
+    for minutes in std::mem::take(&mut *CONTEXT_ID_LIFETIMES.lock()) {
+        sink.accumulate_context_id_lifetime(minutes);
+    }
 }
 
 /// Sends repeat counts that are still waiting for a ping, then drops the
 /// sink, which UniFFI requires before shutdown.
 pub fn shutdown() {
-    report::flush(sink().as_deref(), "shutdown", true);
+    let sink = sink();
+    if let Some(sink) = &sink {
+        send_context_id_lifetimes(sink.as_ref());
+    }
+    report::flush(sink.as_deref(), "shutdown", true);
     sink::uninstall();
 }
 

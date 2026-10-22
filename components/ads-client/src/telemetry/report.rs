@@ -33,7 +33,6 @@ pub struct ErrorSite {
     pub location: String,
     pub ohttp: bool,
     pub operation: &'static str,
-    pub source: Option<&'static str>,
     pub stage: &'static str,
     pub steps: Vec<String>,
 }
@@ -138,7 +137,6 @@ impl Reporter {
             kind: classified.kind.as_str(),
             ohttp: site.ohttp,
             operation: site.operation,
-            source: site.source,
             stage: site.stage,
         });
     }
@@ -229,7 +227,6 @@ mod tests {
             location: "lib.rs:1".into(),
             ohttp: false,
             operation: "request_spoc_ads",
-            source: Some("network"),
             stage: "parse",
             steps: vec![],
         }

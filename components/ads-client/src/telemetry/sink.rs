@@ -37,13 +37,13 @@ pub struct ExpectedErrorEvent {
     pub kind: &'static str,
     pub ohttp: bool,
     pub operation: &'static str,
-    pub source: Option<&'static str>,
     pub stage: &'static str,
 }
 
 pub trait Sink: Send + Sync {
     fn accumulate_duration(&self, duration: RequestDuration, millis: i64);
-    fn add_context_id_rotations(&self, amount: i32);
+    /// Accumulates how long a context ID was used, in minutes.
+    fn accumulate_context_id_lifetime(&self, minutes: i64);
     fn add_to_rate(&self, rate: Rate, numerator: i32, denominator: i32);
     fn record_expected_error(&self, event: ExpectedErrorEvent);
     /// Sets `ads_client.error_reports` and submits the `ads-client-errors` ping.
@@ -97,7 +97,7 @@ pub fn replace_with_none() -> Restore {
 #[derive(Default)]
 pub struct Capture {
     pub durations: parking_lot::Mutex<Vec<(RequestDuration, i64)>>,
-    pub context_id_rotations: parking_lot::Mutex<i32>,
+    pub context_id_lifetimes: parking_lot::Mutex<Vec<i64>>,
     pub rates: parking_lot::Mutex<Vec<(Rate, i32, i32)>>,
     pub expected_errors: parking_lot::Mutex<Vec<ExpectedErrorEvent>>,
     pub error_reports: parking_lot::Mutex<Vec<(serde_json::Value, &'static str)>>,
@@ -120,8 +120,8 @@ impl Sink for Capture {
     fn accumulate_duration(&self, duration: RequestDuration, millis: i64) {
         self.durations.lock().push((duration, millis));
     }
-    fn add_context_id_rotations(&self, amount: i32) {
-        *self.context_id_rotations.lock() += amount;
+    fn accumulate_context_id_lifetime(&self, minutes: i64) {
+        self.context_id_lifetimes.lock().push(minutes);
     }
     fn add_to_rate(&self, rate: Rate, numerator: i32, denominator: i32) {
         self.rates.lock().push((rate, numerator, denominator));

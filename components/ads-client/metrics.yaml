@@ -214,11 +214,17 @@ ads_client:
     notification_emails: *emails
     expires: never
 
-  context_id_rotations:
-    type: counter
+  context_id_lifetime:
+    type: custom_distribution
+    range_min: 1
+    range_max: 129600
+    bucket_count: 60
+    histogram_type: exponential
+    unit: minutes
     description: >
-      New context IDs issued, when a client is built or when the current one
-      is rotated.
+      How long a context ID was used, in minutes: from when it was issued to
+      when a new one replaced it or its client shut down. IDs that end because
+      the app process is killed are not recorded.
     bugs: *bugs
     data_reviews: *data_reviews
     data_sensitivity: [technical]
@@ -246,9 +252,6 @@ ads_client:
         type: string
         description: >
           The HTTP status, network error code or SQLite error code, if any.
-      source:
-        type: string
-        description: Whether the response came from the `network` or the `cache`.
       ohttp:
         type: boolean
         description: Whether the operation was sent through OHTTP.

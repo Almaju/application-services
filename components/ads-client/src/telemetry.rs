@@ -49,7 +49,7 @@ pub use backend::Telemetry;
 pub(crate) use backend::{install, uninstall};
 pub(crate) use classify::{InvalidAdItems, InvalidPlacement};
 pub(crate) use scope::{
-    begin, note_cache_outcome, note_context_id_issued, note_main_request, report_side_error,
+    begin, note_cache_outcome, note_main_request, record_context_id_lifetime, report_side_error,
     shutdown, Operation, Stage,
 };
 

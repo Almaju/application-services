@@ -47,8 +47,8 @@ class AdsClientTelemetrySink : MozAdsTelemetrySink {
         metric.accumulateSingleSample(millis)
     }
 
-    override fun addContextIdRotations(amount: Int) {
-        AdsClient.contextIdRotations.add(amount)
+    override fun accumulateContextIdLifetime(minutes: Long) {
+        AdsClient.contextIdLifetime.accumulateSingleSample(minutes)
     }
 
     override fun addToRate(rate: MozAdsRate, numerator: Int, denominator: Int) {
@@ -71,7 +71,6 @@ class AdsClientTelemetrySink : MozAdsTelemetrySink {
                 kind = error.kind,
                 ohttp = error.ohttp,
                 operation = error.operation,
-                source = error.source,
                 stage = error.stage,
             ),
         )

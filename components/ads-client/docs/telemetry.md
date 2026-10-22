@@ -2,7 +2,7 @@
 
 The ads client records three kinds of telemetry, defined in `metrics.yaml` and `pings.yaml`. It hands them to the `MozAdsTelemetrySink` the app passes to `MozAdsClientBuilder::telemetry_sink()`, which records them in Glean; on Android, that is `AdsClientTelemetrySink`.
 
-1. **Success metrics**, in the `metrics` ping: request, impression and click success rates, fill rate, cache hit rate, request latency (direct and OHTTP) and the number of context IDs issued.
+1. **Success metrics**, in the `metrics` ping: request, impression and click success rates, fill rate, cache hit rate, request latency (direct and OHTTP) and how long a context ID is used.
 2. **Expected errors**: errors a healthy client, server and network can still produce. Each one is an `ads_client.expected_error` event.
 3. **Unexpected errors**: errors that point to a bug or a broken contract. Each distinct one is a record in `ads_client.error_reports`, sent in the `ads-client-errors` ping.
 
@@ -60,14 +60,12 @@ The `kind` extra of `ads_client.expected_error`.
 | `proxy` | The proxy failed. |
 | `cancelled` | The request was cancelled. |
 | `network_other` | Any other transport failure, including every failure on iOS, whose backend does not report a cause. |
-| `ohttp_config` | The OHTTP config could not be fetched. |
 | `ohttp_relay` | The OHTTP relay failed. |
 | `http_server` | The server answered 5xx. |
 | `http_throttled` | The server answered 429. |
 | `callback_gone` | A callback URL answered 404 or 410. |
 | `shutdown` | The database was closed for shutdown. |
-| `storage_busy` | The database was busy, locked or full, or the disk failed. |
-| `storage_downgrade` | The database was written by a newer version. |
+| `storage_full` | The disk is full or failed. |
 
 `code` holds the HTTP status, the network error code (`0x…` on Desktop, `gv:0x…` on Android) or the SQLite extended code.
 
@@ -80,6 +78,7 @@ The `kind` field of the `ads_client.error_reports` records.
 | `cache_config` | The cache or store configuration is invalid. |
 | `context_id` | The context ID could not be obtained. |
 | `db_corrupt` | The database is corrupt. |
+| `db_locked` | The database was busy or locked. We own every connection, so this is a concurrency bug. |
 | `db_recovery` | A corrupt database could not be deleted. |
 | `http_bad_request` | The server answered 400. |
 | `http_unexpected_status` | The server answered any other unsuccessful status. |
@@ -91,8 +90,10 @@ The `kind` field of the `ads_client.error_reports` records.
 | `invalid_response` | The ad response did not deserialize. |
 | `invalid_url` | A URL did not parse. |
 | `misconfigured` | The network stack is not set up as the client needs. |
+| `ohttp_config` | The OHTTP config could not be fetched. A down gateway and a bad config look the same until viaduct reports the status. |
 | `ohttp_protocol` | The OHTTP response could not be decapsulated. |
 | `sql_error` | Any other SQLite error. |
+| `storage_downgrade` | The database was written by a newer version, so the cache is unusable. |
 
 ## Error records
 

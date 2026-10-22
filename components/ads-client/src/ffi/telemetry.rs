@@ -74,7 +74,6 @@ pub struct MozAdsExpectedError {
     pub kind: String,
     pub ohttp: bool,
     pub operation: String,
-    pub source: Option<String>,
     pub stage: String,
 }
 
@@ -84,7 +83,8 @@ pub struct MozAdsExpectedError {
 pub trait MozAdsTelemetrySink: Send + Sync {
     /// Accumulates one sample, in milliseconds.
     fn accumulate_request_duration(&self, duration: MozAdsRequestDuration, millis: i64);
-    fn add_context_id_rotations(&self, amount: i32);
+    /// Accumulates how long a context ID was used, in minutes.
+    fn accumulate_context_id_lifetime(&self, minutes: i64);
     fn add_to_rate(&self, rate: MozAdsRate, numerator: i32, denominator: i32);
     fn record_expected_error(&self, error: MozAdsExpectedError);
     /// Sets `ads_client.error_reports` to `json` and submits the
@@ -109,8 +109,8 @@ impl Sink for MozAdsTelemetrySinkWrapper {
         self.0.accumulate_request_duration(duration, millis);
     }
 
-    fn add_context_id_rotations(&self, amount: i32) {
-        self.0.add_context_id_rotations(amount);
+    fn accumulate_context_id_lifetime(&self, minutes: i64) {
+        self.0.accumulate_context_id_lifetime(minutes);
     }
 
     fn add_to_rate(&self, rate: Rate, numerator: i32, denominator: i32) {
@@ -131,7 +131,6 @@ impl Sink for MozAdsTelemetrySinkWrapper {
             kind: event.kind.to_string(),
             ohttp: event.ohttp,
             operation: event.operation.to_string(),
-            source: event.source.map(str::to_string),
             stage: event.stage.to_string(),
         });
     }
