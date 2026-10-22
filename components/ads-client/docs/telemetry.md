@@ -1,6 +1,6 @@
 # Telemetry
 
-The ads client records three kinds of telemetry, defined in `metrics.yaml` and `pings.yaml`. It hands them to the `MozAdsTelemetrySink` the app passes to `MozAdsClientBuilder::telemetry_sink()`, which records them in Glean; on Android, that is `AdsClientTelemetrySink`.
+The ads client records three kinds of telemetry, defined in `glean/metrics.yaml` and `glean/pings.yaml`. On Android and iOS, it records them in Glean itself, through glean-sym. Desktop, where glean-sym does not run yet, passes a `MozAdsTelemetrySink` to `MozAdsClientBuilder::telemetry_sink()` and records them in Glean from JavaScript. A sink, when passed, is used in place of glean-sym.
 
 1. **Success metrics**, in the `metrics` ping: request, impression and click success rates, fill rate, cache hit rate, request latency (direct and OHTTP) and how long a context ID is used.
 2. **Expected errors**: errors a healthy client, server and network can still produce. Each one is an `ads_client.expected_error` event.
@@ -10,7 +10,7 @@ The ads client records three kinds of telemetry, defined in `metrics.yaml` and `
 
 No error message is recorded except serde's, after `src/telemetry/scrub.rs` has removed its values. URLs, response bodies, paths, placement IDs and context IDs are never recorded.
 
-The first five metrics in `metrics.yaml` (`build_cache_error`, `client_error`, `client_operation_total`, `deserialization_error` and `http_cache_outcome`) are the previous set, recorded through the `MozAdsTelemetry` callback until the new set has replaced them.
+The metrics in `metrics.yaml` are the previous set, recorded through the `MozAdsTelemetry` callback until the new set has replaced them.
 
 The values below are the only ones recorded. A test fails when the code records a value that is not listed here.
 
@@ -131,3 +131,4 @@ Each record in `ads_client.error_reports` holds:
 - At most 10 distinct unexpected errors per process. Later ones only increase `dropped`.
 - At most 5 `ads-client-errors` pings per process.
 - Nothing is sent while the client is being built: errors from that step go out at the end of the first operation.
+- On Android, glean-sym is not called until GeckoView has loaded Glean.

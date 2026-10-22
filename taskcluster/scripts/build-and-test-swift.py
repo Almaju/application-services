@@ -112,7 +112,6 @@ def generate_glean_metrics(args):
         str,
         [
             ROOT_DIR / "components/ads-client/metrics.yaml",
-            ROOT_DIR / "components/ads-client/pings.yaml",
             ROOT_DIR / "components/nimbus/metrics.yaml",
             ROOT_DIR / "components/nimbus/pings.yaml",
             ROOT_DIR / "components/logins/metrics.yaml",

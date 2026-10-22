@@ -93,7 +93,7 @@ builder.build()
 - **`environment(environment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig)`** - Sets the cache configuration
 - **`telemetry(telemetry)`** - Sets the telemetry implementation
-- **`telemetrySink(sink)`** - Sets where the success metrics, expected errors and unexpected errors go (see [telemetry.md](telemetry.md))
+- **`telemetrySink(sink)`** - Sets where the success metrics, expected errors and unexpected errors go when glean-sym is not built in, as on Desktop (see [telemetry.md](telemetry.md))
 - **`build()`** - Builds and returns the configured client
 
 | Configuration  | Type                       | Description                                                                                            |
@@ -101,7 +101,7 @@ builder.build()
 | `environment`  | `MozAdsEnvironment`        | Selects which MARS environment to connect to. Unless in a dev build, this value can only ever be Prod. Defaults to Prod. |
 | `cacheConfig`  | `MozAdsCacheConfig \| null`| Optional configuration for the internal cache.                                                         |
 | `telemetry`    | `MozAdsTelemetry \| null`  | Optional telemetry instance for recording metrics. Telemetry is process-wide: the most recently built client's instance receives metrics from every client.    |
-| `telemetrySink` | `MozAdsTelemetrySink \| null` | Optional sink for the metrics described in [telemetry.md](telemetry.md). Process-wide like `telemetry`, and dropped when a client shuts down. |
+| `telemetrySink` | `MozAdsTelemetrySink \| null` | Optional sink for the metrics described in [telemetry.md](telemetry.md), used in place of glean-sym. Only needed on Desktop. Process-wide like `telemetry`, and dropped when a client shuts down. |
 
 ---
 

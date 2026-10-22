@@ -90,9 +90,12 @@ pub fn report(classified: Classified, site: ErrorSite) {
 }
 
 /// Sends what was reported since the last call to `sink`, or drops it when
-/// no sink is installed. The ping only goes out when a new error was seen, or
+/// there is no sink. Keeps it until `sink` is ready. The ping only goes out when a new error was seen, or
 /// when `force` is set.
 pub fn flush(sink: Option<&dyn Sink>, reason: &'static str, force: bool) {
+    if sink.is_some_and(|sink| !sink.ready()) {
+        return;
+    }
     let mut reporter = REPORTER.lock();
     let expected = std::mem::take(&mut reporter.expected);
     let Some(sink) = sink else {

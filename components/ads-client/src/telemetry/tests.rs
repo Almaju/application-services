@@ -297,7 +297,7 @@ fn test_builder_installs_the_sink_until_shutdown() {
     assert_eq!(recorded.lock().reports.len(), 1);
 
     client.shutdown().unwrap();
-    assert!(sink::sink().is_none());
+    assert!(sink::installed().is_none());
 }
 
 #[test]

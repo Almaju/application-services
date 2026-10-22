@@ -197,7 +197,9 @@ impl OpScope {
         }
 
         let sink = sink();
-        if let Some(sink) = &sink {
+        // By design: when the app's Glean is not ready yet, the success
+        // metrics of this operation are dropped rather than buffered.
+        if let Some(sink) = sink.as_ref().filter(|sink| sink.ready()) {
             let ok = result.is_ok();
             if let Some(rate) = self.operation.success_rate() {
                 sink.add_to_rate(rate, i32::from(ok), 1);

@@ -12,18 +12,16 @@
 //!
 //! Two sets of metrics are recorded while the second replaces the first:
 //!
-//! - The `record_*` functions record the metrics declared first in
-//!   `metrics.yaml` through the [`Telemetry`] callback the consumer hands to
+//! - The `record_*` functions record the metrics in `metrics.yaml` through
+//!   the [`Telemetry`] callback the consumer hands to
 //!   `MozAdsClientBuilder::telemetry()`; see `telemetry/backend.rs`.
-//! - [`begin`], [`step!`] and [`report_side_error`] record the rest of
-//!   `metrics.yaml` and the `ads-client-errors` ping through the sink the
-//!   consumer hands to `MozAdsClientBuilder::telemetry_sink()`; see
+//! - `begin`, `step!` and `report_side_error` record the metrics in
+//!   `glean/metrics.yaml` and the `ads-client-errors` ping: through
+//!   [`glean-sym`] on Android and iOS, or through the sink the consumer hands
+//!   to `MozAdsClientBuilder::telemetry_sink()` on Desktop; see
 //!   `telemetry/sink.rs`. They come in three tiers: success metrics, expected
 //!   errors (`classify.rs` decides which errors those are) and unexpected
 //!   errors, sent as a list (`report.rs`). `docs/telemetry.md` describes them.
-//!
-//! Moving to [`glean-sym`] means swapping the sink for one that talks to the
-//! generated metrics, and none of the recording sites have to change.
 //!
 //! Every function here is infallible and silent by design. Telemetry must never
 //! change the outcome of the operation it is describing.
@@ -36,6 +34,8 @@ use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
 mod backend;
 mod classify;
+#[cfg(feature = "glean-sym")]
+mod glean;
 mod report;
 mod scope;
 mod scrub;
