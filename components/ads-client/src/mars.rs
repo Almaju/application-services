@@ -26,10 +26,9 @@ use self::{
 };
 #[cfg(feature = "stateful")]
 use crate::ads::{Ads, PlacementId};
-#[cfg(feature = "stateful")]
-use crate::telemetry;
 use crate::{
     http_cache::{HttpCache, RequestHash},
+    telemetry::{self, Stage},
     CachePolicy,
 };
 #[cfg(feature = "stateful")]
@@ -68,6 +67,7 @@ impl MARSClient {
     where
         A: AdResponseValue,
     {
+        telemetry::step!(Stage::BuildRequest);
         let mut ad_request = AdRequest::try_new(
             blocks,
             context_id,
@@ -85,7 +85,9 @@ impl MARSClient {
                 .extend(Headers::try_from(self.fetch_preflight()?)?);
         }
 
+        telemetry::step!(Stage::Request);
         let response = self.transport.send(ad_request, &cache_policy, ohttp)?;
+        telemetry::step!(Stage::Parse);
         let ads = AdResponse::<A>::parse(response.json()?)?;
         Ok((ads, request_hash))
     }
@@ -214,6 +216,7 @@ impl MARSClient {
     }
 
     fn fetch_preflight(&self) -> Result<preflight::PreflightResponse, CallbackRequestError> {
+        telemetry::step!(Stage::Preflight);
         let response = self.transport.send(
             PreflightRequest(self.environment.clone().into_url("ads-preflight")),
             &CachePolicy::CacheFirst { ttl: None },
@@ -233,6 +236,7 @@ impl MARSClient {
                 .headers
                 .extend(Headers::try_from(self.fetch_preflight()?)?);
         }
+        telemetry::step!(Stage::Callback);
         self.transport.fire(request, ohttp).map_err(Into::into)
     }
 }

@@ -2,6 +2,11 @@
 
 [Full Changelog](In progress)
 
+## ✨ What's Changed ✨
+
+### Ads-Client
+- Unexpected errors, such as responses that do not deserialize or SQL errors, are now sent as a list of records in a new `ads-client-errors` ping, through the `MozAdsTelemetrySink` set with `MozAdsClientBuilder::telemetry_sink()` (`AdsClientTelemetrySink` on Android). The `MozAdsTelemetry` metrics only get expected errors (see `components/ads-client/docs/telemetry.md`).
+
 # v160.0 (_2026-10-22_)
 
 ## ⚠️ Breaking Changes ⚠️

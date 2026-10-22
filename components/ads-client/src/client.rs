@@ -12,7 +12,7 @@ use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelev
 use crate::mars::ad_response::{AdResponse, AdResponseValue};
 use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
 use crate::mars::{MARSClient, ReportReason};
-use crate::telemetry::{self, ClientOperation};
+use crate::telemetry::{self, ClientOperation, Stage};
 use config::AdsClientConfig;
 use context_id::{ContextIDComponent, DefaultContextIdCallback};
 use error::RequestAdsError;
@@ -68,6 +68,7 @@ impl AdsClient {
                 Ok(cache) => Some(cache),
                 Err(e) => {
                     telemetry::record_build_cache_error(&e);
+                    telemetry::report_side_error(Stage::Open, &e);
                     None
                 }
             }
@@ -81,6 +82,7 @@ impl AdsClient {
                     Ok(store) => Some(store),
                     Err(e) => {
                         telemetry::record_ads_store_error(&e);
+                        telemetry::report_side_error(Stage::Open, &e);
                         None
                     }
                 });
@@ -290,6 +292,7 @@ impl AdsClient {
     }
 
     pub fn shutdown(&self) {
+        telemetry::shutdown();
         telemetry::uninstall();
 
         #[cfg(feature = "stateful")]
@@ -313,6 +316,7 @@ impl AdsClient {
         A: AdResponseValue,
     {
         let context_id = if relevance.is_empty() {
+            telemetry::step!(Stage::ContextId);
             Some(self.get_context_id()?)
         } else {
             None

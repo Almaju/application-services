@@ -88,10 +88,6 @@ pub(super) fn client_operation_total(label: &str) {
     with_callback(|cb| cb.record_client_operation_total(label));
 }
 
-pub(super) fn deserialization_error(label: &str, value: String) {
-    with_callback(|cb| cb.record_deserialization_error(label, fit(value)));
-}
-
 pub(super) fn http_cache_outcome(label: &str, value: String) {
     with_callback(|cb| cb.record_http_cache_outcome(label, fit(value)));
 }

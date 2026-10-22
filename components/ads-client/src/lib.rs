@@ -13,6 +13,7 @@ use url::Url as AdsClientUrl;
 use client::AdsClient;
 use http_cache::CachePolicy;
 use mars::ad_request::{AdPlacementRequest, AdRequestFlags};
+use telemetry::Operation;
 mod ads;
 #[cfg(feature = "stateful")]
 pub mod ads_store;
@@ -47,11 +48,12 @@ pub struct MozAdsClient {
 #[uniffi::export]
 impl MozAdsClient {
     pub fn clear_cache(&self) -> AdsClientApiResult<()> {
-        self.inner
-            .clear_cache()
-            .map_err(|e| MozAdsClientApiError::Other {
-                reason: format!("Failed to clear cache: {}", e),
-            })
+        let scope = telemetry::begin(Operation::ClearCache);
+        let result = self.inner.clear_cache();
+        scope.finish(&result);
+        result.map_err(|e| MozAdsClientApiError::Other {
+            reason: format!("Failed to clear cache: {}", e),
+        })
     }
 
     #[handle_error(ComponentError)]
@@ -61,12 +63,17 @@ impl MozAdsClient {
         click_url: String,
         options: Option<MozAdsCallbackOptions>,
     ) -> AdsClientApiResult<()> {
-        let url = AdsClientUrl::parse(&click_url)
-            .map_err(|e| ComponentError::RecordClick(CallbackRequestError::InvalidUrl(e).into()))?;
         let ohttp = options.map(|o| o.ohttp).unwrap_or(false);
-        self.inner
-            .record_click(url, ohttp)
-            .map_err(ComponentError::RecordClick)
+        let scope = telemetry::begin(Operation::RecordClick);
+        let result = AdsClientUrl::parse(&click_url)
+            .map_err(|e| ComponentError::RecordClick(CallbackRequestError::InvalidUrl(e).into()))
+            .and_then(|url| {
+                self.inner
+                    .record_click(url, ohttp)
+                    .map_err(ComponentError::RecordClick)
+            });
+        scope.finish(&result);
+        result
     }
 
     #[handle_error(ComponentError)]
@@ -76,13 +83,19 @@ impl MozAdsClient {
         impression_url: String,
         options: Option<MozAdsCallbackOptions>,
     ) -> AdsClientApiResult<()> {
-        let url = AdsClientUrl::parse(&impression_url).map_err(|e| {
-            ComponentError::RecordImpression(CallbackRequestError::InvalidUrl(e).into())
-        })?;
         let ohttp = options.map(|o| o.ohttp).unwrap_or(false);
-        self.inner
-            .record_impression(url, ohttp)
-            .map_err(ComponentError::RecordImpression)
+        let scope = telemetry::begin(Operation::RecordImpression);
+        let result = AdsClientUrl::parse(&impression_url)
+            .map_err(|e| {
+                ComponentError::RecordImpression(CallbackRequestError::InvalidUrl(e).into())
+            })
+            .and_then(|url| {
+                self.inner
+                    .record_impression(url, ohttp)
+                    .map_err(ComponentError::RecordImpression)
+            });
+        scope.finish(&result);
+        result
     }
 
     #[handle_error(ComponentError)]
@@ -93,12 +106,17 @@ impl MozAdsClient {
         reason: MozAdsReportReason,
         options: Option<MozAdsCallbackOptions>,
     ) -> AdsClientApiResult<()> {
-        let url = AdsClientUrl::parse(&report_url)
-            .map_err(|e| ComponentError::ReportAd(CallbackRequestError::InvalidUrl(e).into()))?;
         let ohttp = options.map(|o| o.ohttp).unwrap_or(false);
-        self.inner
-            .report_ad(url, reason.into(), ohttp)
-            .map_err(ComponentError::ReportAd)
+        let scope = telemetry::begin(Operation::ReportAd);
+        let result = AdsClientUrl::parse(&report_url)
+            .map_err(|e| ComponentError::ReportAd(CallbackRequestError::InvalidUrl(e).into()))
+            .and_then(|url| {
+                self.inner
+                    .report_ad(url, reason.into(), ohttp)
+                    .map_err(ComponentError::ReportAd)
+            });
+        scope.finish(&result);
+        result
     }
 
     #[handle_error(ComponentError)]
@@ -114,11 +132,13 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let response = self
+        let scope = telemetry::begin(Operation::RequestImageAds);
+        let result = self
             .inner
             .request_image_ads(requests, flags, cache_policy, ohttp, blocks)
-            .map_err(ComponentError::RequestAds)?;
-        Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
+            .map_err(ComponentError::RequestAds);
+        scope.finish(&result);
+        Ok(result?.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
     #[handle_error(ComponentError)]
@@ -134,11 +154,13 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let response = self
+        let scope = telemetry::begin(Operation::RequestSpocAds);
+        let result = self
             .inner
             .request_spoc_ads(requests, flags, cache_policy, ohttp, blocks)
-            .map_err(ComponentError::RequestAds)?;
-        Ok(response
+            .map_err(ComponentError::RequestAds);
+        scope.finish(&result);
+        Ok(result?
             .into_iter()
             .map(|(k, v)| (k, v.into_iter().map(|spoc| spoc.into()).collect()))
             .collect())
@@ -157,11 +179,13 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let response = self
+        let scope = telemetry::begin(Operation::RequestSpocOrImageAds);
+        let result = self
             .inner
             .request_spoc_or_image_ads(requests, flags, cache_policy, ohttp, blocks)
-            .map_err(ComponentError::RequestAds)?;
-        Ok(response
+            .map_err(ComponentError::RequestAds);
+        scope.finish(&result);
+        Ok(result?
             .into_iter()
             .map(|(k, v)| (k, v.into_iter().map(|spoc| spoc.into()).collect()))
             .collect())
@@ -181,11 +205,13 @@ impl MozAdsClient {
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
         let relevance = options.relevance;
-        let response = self
+        let scope = telemetry::begin(Operation::RequestTileAds);
+        let result = self
             .inner
             .request_tile_ads(requests, flags, cache_policy, ohttp, blocks, relevance)
-            .map_err(ComponentError::RequestAds)?;
-        Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
+            .map_err(ComponentError::RequestAds);
+        scope.finish(&result);
+        Ok(result?.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
     // Allows the ads-client to unload some references and prepare for a safe shutdown.

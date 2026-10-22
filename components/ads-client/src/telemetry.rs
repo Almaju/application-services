@@ -10,13 +10,18 @@
 //! `tracing` macro. Nothing has to be threaded through the clients, stores or
 //! transports.
 //!
-//! This is the same API the crate will expose once metrics are recorded
-//! straight from Rust through [`glean-sym`]. Until then, the backend forwards
-//! to the [`Telemetry`] implementation the FFI layer installs, which wraps the
-//! callback the consumer hands to `MozAdsClientBuilder::telemetry()`; see
-//! `telemetry/backend.rs`. Moving to
-//! glean-sym means swapping that backend for one that talks to the generated
-//! metrics, and none of the recording sites have to change.
+//! Errors are split in two while the new telemetry replaces the old:
+//!
+//! - The `record_*` functions record the metrics in `metrics.yaml` through
+//!   the [`Telemetry`] callback the consumer hands to
+//!   `MozAdsClientBuilder::telemetry()`; see `telemetry/backend.rs`. They now
+//!   only get expected errors, such as timeouts and 5xx responses.
+//! - `begin`, `step!` and `report_side_error` send unexpected errors, such as
+//!   responses that do not deserialize or SQL errors, as a list of records in
+//!   the `ads-client-errors` ping, through the sink the consumer hands to
+//!   `MozAdsClientBuilder::telemetry_sink()`; see `report.rs` and
+//!   `sink.rs`. `classify.rs` decides which errors are unexpected, and
+//!   `docs/telemetry.md` describes the records.
 //!
 //! Every function here is infallible and silent by design. Telemetry must never
 //! change the outcome of the operation it is describing.
@@ -26,13 +31,34 @@
 use std::fmt::Display;
 
 use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
+use classify::{Classify, Tier};
 
 mod backend;
+mod classify;
+mod report;
+mod scope;
+mod scrub;
+pub(crate) mod sink;
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 pub(crate) use backend::test_lock;
 pub use backend::Telemetry;
 pub(crate) use backend::{install, uninstall};
+pub(crate) use classify::{InvalidAdItems, InvalidPlacement};
+pub(crate) use scope::{begin, note_cache_outcome, report_side_error, shutdown, Operation, Stage};
+
+/// Marks the step the current operation is at, for the operation's trace and
+/// to tell where an error happened.
+macro_rules! step {
+    ($stage:expr) => {
+        $crate::telemetry::step_at($stage, concat!(file!(), ":", line!()))
+    };
+}
+#[doc(hidden)]
+pub(crate) use scope::step as step_at;
+pub(crate) use step;
 
 /// A client operation, as labeled by `ads_client.client_operation_total` and
 /// `ads_client.client_error`.
@@ -91,20 +117,6 @@ impl BuildCacheErrorLabel {
     }
 }
 
-/// A label of `ads_client.deserialization_error`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeserializationErrorLabel {
-    InvalidAdItem,
-}
-
-impl DeserializationErrorLabel {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidAdItem => "invalid_ad_item",
-        }
-    }
-}
-
 /// A label of `ads_client.http_cache_outcome`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HttpCacheOutcomeLabel {
@@ -143,7 +155,11 @@ pub fn record_client_operation(operation: ClientOperation) {
 /// Records a failed operation against `ads_client.client_error`.
 ///
 /// Errors are recorded here even when they are also propagated to the consumer.
-pub fn record_client_error(operation: ClientOperation, error: &impl Display) {
+/// Unexpected errors are left to the `ads-client-errors` ping.
+pub fn record_client_error(operation: ClientOperation, error: &(impl Display + Classify)) {
+    if !is_expected(error) {
+        return;
+    }
     backend::client_error(operation.label(), error.to_string());
 }
 
@@ -151,6 +167,9 @@ pub fn record_client_error(operation: ClientOperation, error: &impl Display) {
 /// Records a failure to build the HTTP cache against
 /// `ads_client.build_cache_error`.
 pub fn record_build_cache_error(error: &HttpCacheBuilderError) {
+    if !is_expected(error) {
+        return;
+    }
     let label = match error {
         HttpCacheBuilderError::Database(_) => BuildCacheErrorLabel::DatabaseError,
         HttpCacheBuilderError::EmptyDbPath => BuildCacheErrorLabel::EmptyDbPath,
@@ -169,6 +188,9 @@ pub fn record_ads_store_error(error: &crate::ads_store::builder::AdsStoreBuilder
     // records through it.
     use crate::ads_store::builder::AdsStoreBuilderError;
 
+    if !is_expected(error) {
+        return;
+    }
     let label = match error {
         AdsStoreBuilderError::Database(_) => BuildCacheErrorLabel::StoreDatabaseError,
         AdsStoreBuilderError::EmptyDbPath => BuildCacheErrorLabel::StoreEmptyDbPath,
@@ -181,6 +203,19 @@ pub fn record_ads_store_error(error: &crate::ads_store::builder::AdsStoreBuilder
 /// Records the result of an HTTP cache read against
 /// `ads_client.http_cache_outcome`.
 pub fn record_http_cache_outcome(outcome: &CacheOutcome) {
+    let failure = match outcome {
+        CacheOutcome::CleanupFailed(e)
+        | CacheOutcome::LookupFailed(e)
+        | CacheOutcome::StoreFailed(e)
+        | CacheOutcome::TrimFailed(e) => Some(e),
+        CacheOutcome::Hit
+        | CacheOutcome::MissNotCacheable
+        | CacheOutcome::MissStored
+        | CacheOutcome::NoCache => None,
+    };
+    if failure.is_some_and(|e| !is_expected(e)) {
+        return;
+    }
     let (label, value) = match outcome {
         CacheOutcome::CleanupFailed(e) => (HttpCacheOutcomeLabel::CleanupFailed, e.to_string()),
         CacheOutcome::Hit => (HttpCacheOutcomeLabel::Hit, String::new()),
@@ -194,11 +229,23 @@ pub fn record_http_cache_outcome(outcome: &CacheOutcome) {
     backend::http_cache_outcome(label.as_str(), value);
 }
 
-/// Records an ad item we could not deserialize against
-/// `ads_client.deserialization_error`.
+/// Reports an ad item we could not deserialize, one item at a time. Prefer
+/// reporting [`InvalidAdItems`] once per response.
+#[cfg(feature = "stateful")]
+#[track_caller]
 pub fn record_invalid_ad_item(error: &serde_json::Error) {
-    backend::deserialization_error(
-        DeserializationErrorLabel::InvalidAdItem.as_str(),
-        error.to_string(),
+    report_side_error(
+        Stage::Parse,
+        &InvalidAdItems {
+            count: 1,
+            first: error,
+            first_index: None,
+            first_path: None,
+        },
     );
+}
+
+/// Whether `error` still goes to the `MozAdsTelemetry` metrics.
+fn is_expected(error: &impl Classify) -> bool {
+    error.classify().tier() == Tier::Expected
 }

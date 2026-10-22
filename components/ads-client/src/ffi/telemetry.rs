@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::telemetry::sink::Sink;
 use crate::telemetry::{self, Telemetry};
 
 /// Receives the ads client's metrics, for the app to record in Glean.
@@ -45,5 +46,28 @@ impl Telemetry for MozAdsTelemetryWrapper {
 
     fn record_http_cache_outcome(&self, label: &str, value: String) {
         self.0.record_http_cache_outcome(label.to_string(), value);
+    }
+}
+
+/// Receives the unexpected errors described in `docs/telemetry.md`, for the
+/// app to record in Glean.
+#[uniffi::export(callback_interface)]
+pub trait MozAdsTelemetrySink: Send + Sync {
+    /// Sets `ads_client.error_reports` to `json` and submits the
+    /// `ads-client-errors` ping with `reason`.
+    fn submit_error_reports(&self, json: String, reason: String);
+}
+
+/// Makes the consumer's sink the destination of the metrics recorded from now on.
+pub fn install_sink(sink: Arc<dyn MozAdsTelemetrySink>) {
+    telemetry::sink::install(MozAdsTelemetrySinkWrapper(sink));
+}
+
+/// Adapts the consumer's [`MozAdsTelemetrySink`] to the core [`Sink`] trait.
+struct MozAdsTelemetrySinkWrapper(Arc<dyn MozAdsTelemetrySink>);
+
+impl Sink for MozAdsTelemetrySinkWrapper {
+    fn submit_error_reports(&self, json: String, reason: &'static str) {
+        self.0.submit_error_reports(json, reason.to_string());
     }
 }

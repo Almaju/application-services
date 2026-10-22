@@ -5,7 +5,7 @@
 
 use crate::ads::{AdCallbacks, AdImage, AdImageOrSpoc, AdSpoc, AdTile};
 use crate::http_cache::RequestHash;
-use crate::telemetry;
+use crate::telemetry::{self, InvalidAdItems, InvalidPlacement, Stage};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -19,22 +19,43 @@ impl<A: AdResponseValue> AdResponse<A> {
     pub fn parse(data: serde_json::Value) -> Result<AdResponse<A>, serde_json::Error> {
         let raw: HashMap<String, serde_json::Value> = serde_json::from_value(data)?;
         let mut result = HashMap::new();
+        let mut invalid_items = 0;
+        let mut first_invalid = None;
 
         for (key, value) in raw {
-            if let serde_json::Value::Array(arr) = value {
-                let mut ads: Vec<A> = vec![];
-                for item in arr {
-                    match serde_json::from_value::<A>(item.clone()) {
-                        Ok(ad) => ads.push(ad),
-                        Err(e) => {
-                            telemetry::record_invalid_ad_item(&e);
-                        }
+            let serde_json::Value::Array(arr) = value else {
+                telemetry::report_side_error(Stage::Parse, &InvalidPlacement);
+                continue;
+            };
+            let mut ads: Vec<A> = vec![];
+            for (index, item) in arr.into_iter().enumerate() {
+                match serde_json::from_value::<A>(item.clone()) {
+                    Ok(ad) => ads.push(ad),
+                    Err(e) => {
+                        invalid_items += 1;
+                        first_invalid.get_or_insert((e, index, item));
                     }
                 }
-                if !ads.is_empty() {
-                    result.insert(key, ads);
-                }
             }
+            if !ads.is_empty() {
+                result.insert(key, ads);
+            }
+        }
+
+        if let Some((first, first_index, item)) = first_invalid {
+            // Only deserialized again, with its path, when it already failed.
+            let first_path = serde_path_to_error::deserialize::<_, A>(item)
+                .err()
+                .map(|e| e.path().to_string());
+            telemetry::report_side_error(
+                Stage::Parse,
+                &InvalidAdItems {
+                    count: invalid_items,
+                    first: &first,
+                    first_index: Some(first_index),
+                    first_path,
+                },
+            );
         }
 
         Ok(AdResponse { data: result })

@@ -6,6 +6,7 @@ package mozilla.appservices.adsclient
 
 import mozilla.appservices.adsclient.MozAdsTelemetry
 import org.mozilla.appservices.adsclient.GleanMetrics.AdsClient
+import org.mozilla.appservices.adsclient.GleanMetrics.Pings
 
 /**
  * AdsClientTelemetry is a thin wrapper used to expose
@@ -30,5 +31,20 @@ class AdsClientTelemetry : MozAdsTelemetry {
 
     override fun recordHttpCacheOutcome(label: String, value: String) {
         AdsClient.httpCacheOutcome[label].set(value)
+    }
+}
+
+/**
+ * Records the ads client's unexpected errors in Glean. Pass it to
+ * `MozAdsClientBuilder.telemetrySink()`.
+ */
+class AdsClientTelemetrySink : MozAdsTelemetrySink {
+    override fun submitErrorReports(json: String, reason: String) {
+        // The JSON already matches the metric's structure, so it is set as is
+        // rather than rebuilt into the generated classes.
+        AdsClient.errorReports.inner.setString(json)
+        Pings.adsClientErrors.submit(
+            Pings.adsClientErrorsReasonCodes.values().firstOrNull { it.name == reason },
+        )
     }
 }

@@ -12,7 +12,9 @@ ads_client:
     type: labeled_string
     description: >
       Errors encountered when building the HTTP cache, labeled by error type.
-      The string value contains the error message or error type.
+      The string value contains the error message or error type. Only
+      expected errors, such as a full disk; the others are in
+      `ads_client.error_reports`.
     labels:
       - builder_error
       - database_error
@@ -36,7 +38,9 @@ ads_client:
     description: >
       Errors encountered when using the ads client, labeled by operation type.
       The string value contains the error message or error type. Errors are
-      recorded even if they are propagated to the consumer.
+      recorded even if they are propagated to the consumer. Only expected
+      errors, such as timeouts or 5xx responses; the others are in
+      `ads_client.error_reports`.
     labels:
       - record_click
       - record_impression
@@ -83,7 +87,8 @@ ads_client:
       Deserialization errors encountered when parsing AdResponse data,
       labeled by error type. The string value contains the error message or
       details. Invalid ad items are skipped but these errors are tracked for
-      monitoring data quality issues.
+      monitoring data quality issues. No longer recorded: see
+      `ads_client.error_reports`.
     labels:
       - invalid_ad_item
       - invalid_array
@@ -105,7 +110,7 @@ ads_client:
     description: >
       The total number of outcomes encountered during read operations on the
       http cache, labeled by type. The string value contains the error message or
-      error type.
+      error type. Unexpected failures are in `ads_client.error_reports`.
     labels:
       - cleanup_failed
       - hit
@@ -120,6 +125,74 @@ ads_client:
       - https://github.com/mozilla/application-services/pull/7111
     data_sensitivity:
       - technical
+    notification_emails:
+      - ahanot@mozilla.com
+      - llisi@mozilla.com
+      - toast@mozilla.com
+    expires: never
+
+  error_reports:
+    type: object
+    lifetime: ping
+    send_in_pings:
+      - ads-client-errors
+    description: >
+      Errors that point to a bug or a broken contract, such as a response that
+      does not deserialize or an SQL error. One record per distinct error,
+      identified by its fingerprint `fp`; repeats only increase `count`. Records
+      hold no free text except a scrubbed message, and no URLs, response bodies,
+      paths or identifiers. The values of `kind`, `op`, `stage` and the
+      `context` keys are listed in `docs/telemetry.md`.
+    structure:
+      type: object
+      properties:
+        v:
+          type: number
+        dropped:
+          type: number
+        records:
+          type: array
+          items:
+            type: object
+            properties:
+              fp:
+                type: string
+              kind:
+                type: string
+              op:
+                type: string
+              stage:
+                type: string
+              fatal:
+                type: boolean
+              chain:
+                type: array
+                items:
+                  type: string
+              message:
+                type: string
+              location:
+                type: string
+              steps:
+                type: array
+                items:
+                  type: string
+              context:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    k:
+                      type: string
+                    v:
+                      type: string
+              count:
+                type: number
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_sensitivity: [technical]
     notification_emails:
       - ahanot@mozilla.com
       - llisi@mozilla.com
