@@ -185,8 +185,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        ads::AdSpoc,
+        ads::AdKind,
         ads_store::connection_initializer::AdsStoreConnectionInitializer,
+        mars::ad_response::AdSpoc,
         test_utils::{get_example_happy_image_ads, get_example_happy_spoc_response},
     };
     use rusqlite::OpenFlags;
@@ -274,6 +275,7 @@ mod tests {
             .data
             .into_values()
             .flatten()
+            .filter_map(AdSpoc::from_ad)
             .collect();
         assert!(spocs.len() > 1);
         let ads = Ads::Spocs(spocs);
@@ -291,6 +293,7 @@ mod tests {
             .data
             .into_values()
             .flatten()
+            .filter_map(AdSpoc::from_ad)
             .collect();
         store
             .store_ad(&placement, Ads::Spocs(spocs.clone()))

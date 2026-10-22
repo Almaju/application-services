@@ -3,7 +3,7 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use crate::mars::error::{FetchAdsError, RecordClickError, RecordImpressionError, ReportAdError};
+use crate::mars::error::{BuildRequestError, CallbackRequestError, FetchAdsError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -22,9 +22,33 @@ pub enum ComponentError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RequestAdsError {
+    #[error("Error building ad request: {0}")]
+    BuildRequest(#[from] BuildRequestError),
+
     #[error(transparent)]
     ContextId(#[from] context_id::ApiError),
 
     #[error("Error requesting ads from MARS: {0}")]
     FetchAds(#[from] FetchAdsError),
+
+    #[error("OHTTP preflight failed: {0}")]
+    Preflight(#[source] CallbackRequestError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RecordClickError {
+    #[error("Callback request to MARS failed: {0}")]
+    CallbackRequest(#[from] CallbackRequestError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RecordImpressionError {
+    #[error("Callback request to MARS failed: {0}")]
+    CallbackRequest(#[from] CallbackRequestError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReportAdError {
+    #[error("Callback request to MARS failed: {0}")]
+    CallbackRequest(#[from] CallbackRequestError),
 }
