@@ -15,74 +15,27 @@ use super::error::BuildRequestError;
 
 const ENDPOINT: &str = "/ads";
 
+/// Request body of `getAds` (the `AdRequest` schema).
+///
+/// `flags` is not in the published schema yet, but MARS reads it.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct AdRequest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_id: Option<String>,
-    /// Skipped to exclude from the request body
-    #[serde(skip)]
-    pub environment: Environment,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub flags: AdRequestFlags,
-    #[serde(skip)]
-    pub headers: Headers,
-    #[serde(skip)]
-    pub ohttp: bool,
     pub placements: Vec<AdPlacementRequest>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub relevance: AdRequestRelevance,
-}
-
-/// Hash implementation intentionally excludes `context_id` as it rotates
-/// on client re-instantiation and should not invalidate cached responses.
-/// `headers` are also excluded as they are request metadata, not cache keys.
-/// `flags` is hashed only when set so non-flag callers keep prior cache keys.
-/// If response shape ever varies, add a version to this hash for variant tracking.
-impl Hash for AdRequest {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        ENDPOINT.hash(state);
-        self.environment.hash(state);
-        if !self.flags.is_empty() {
-            // HashMap is unordered — sort by key for a stable hash.
-            let mut sorted: Vec<_> = self.flags.iter().collect();
-            sorted.sort_unstable_by_key(|(k, _)| k.as_str());
-            for (k, v) in sorted {
-                k.hash(state);
-                v.hash(state);
-            }
-        }
-        if !self.relevance.is_empty() {
-            // HashMap is unordered — sort by key for a stable hash.
-            let mut sorted: Vec<_> = self.relevance.iter().collect();
-            sorted.sort_unstable_by_key(|(k, _)| k.as_str());
-            for (k, v) in sorted {
-                k.hash(state);
-                v.to_bits().hash(state);
-            }
-        }
-        self.ohttp.hash(state);
-        self.placements.hash(state);
-    }
-}
-
-impl From<AdRequest> for Request {
-    fn from(ad_request: AdRequest) -> Self {
-        let url = ad_request.environment.clone().into_url(ENDPOINT);
-        let mut request = Request::post(url).json(&ad_request);
-        request.headers.extend(ad_request.headers);
-        request
-    }
 }
 
 impl AdRequest {
     pub fn try_new(
         blocks: Vec<String>,
         context_id: Option<String>,
-        environment: Environment,
         flags: AdRequestFlags,
-        ohttp: bool,
         placements: Vec<AdPlacementRequest>,
         relevance: AdRequestRelevance,
     ) -> Result<Self, BuildRequestError> {
@@ -90,47 +43,79 @@ impl AdRequest {
             return Err(BuildRequestError::EmptyConfig);
         };
 
-        let mut request = AdRequest {
-            blocks,
-            context_id,
-            environment,
-            flags,
-            headers: Headers::new(),
-            ohttp,
-            placements: vec![],
-            relevance,
-        };
-
-        let mut used_placement_ids: HashSet<String> = HashSet::new();
-
-        for ad_placement_request in placements {
-            if used_placement_ids.contains(&ad_placement_request.placement) {
+        let mut used_placement_ids: HashSet<&str> = HashSet::new();
+        for ad_placement_request in &placements {
+            if !used_placement_ids.insert(&ad_placement_request.placement) {
                 return Err(BuildRequestError::DuplicatePlacementId {
                     placement_id: ad_placement_request.placement.clone(),
                 });
             }
-
-            request.placements.push(AdPlacementRequest {
-                content: ad_placement_request
-                    .content
-                    .map(|iab_content| AdContentCategory {
-                        categories: iab_content.categories,
-                        taxonomy: iab_content.taxonomy,
-                    }),
-                count: ad_placement_request.count,
-                placement: ad_placement_request.placement.clone(),
-            });
-
-            used_placement_ids.insert(ad_placement_request.placement.clone());
         }
 
-        Ok(request)
+        Ok(AdRequest {
+            blocks,
+            context_id,
+            flags,
+            placements,
+            relevance,
+        })
+    }
+}
+
+/// A `getAds` call as it goes over the wire: the body, plus where and how it
+/// is sent. Its hash is the HTTP cache key.
+pub struct GetAdsRequest<'a> {
+    pub body: &'a AdRequest,
+    pub environment: &'a Environment,
+    pub headers: Headers,
+    pub ohttp: bool,
+}
+
+/// Hash implementation intentionally excludes `context_id` as it rotates
+/// on client re-instantiation and should not invalidate cached responses.
+/// `headers` are also excluded as they are request metadata, not cache keys.
+/// `flags` is hashed only when set so non-flag callers keep prior cache keys.
+/// If response shape ever varies, add a version to this hash for variant tracking.
+impl Hash for GetAdsRequest<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        ENDPOINT.hash(state);
+        self.environment.hash(state);
+        if !self.body.flags.is_empty() {
+            // HashMap is unordered — sort by key for a stable hash.
+            let mut sorted: Vec<_> = self.body.flags.iter().collect();
+            sorted.sort_unstable_by_key(|(k, _)| k.as_str());
+            for (k, v) in sorted {
+                k.hash(state);
+                v.hash(state);
+            }
+        }
+        if !self.body.relevance.is_empty() {
+            // HashMap is unordered — sort by key for a stable hash.
+            let mut sorted: Vec<_> = self.body.relevance.iter().collect();
+            sorted.sort_unstable_by_key(|(k, _)| k.as_str());
+            for (k, v) in sorted {
+                k.hash(state);
+                v.to_bits().hash(state);
+            }
+        }
+        self.ohttp.hash(state);
+        self.body.placements.hash(state);
+    }
+}
+
+impl From<GetAdsRequest<'_>> for Request {
+    fn from(get_ads: GetAdsRequest<'_>) -> Self {
+        let url = get_ads.environment.clone().into_url(ENDPOINT);
+        let mut request = Request::post(url).json(get_ads.body);
+        request.headers.extend(get_ads.headers);
+        request
     }
 }
 
 pub type AdRequestFlags = HashMap<String, bool>;
 pub type AdRequestRelevance = HashMap<String, f64>;
 
+/// The `AdPlacement` schema.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize)]
 pub struct AdPlacementRequest {
     pub content: Option<AdContentCategory>,
@@ -138,6 +123,7 @@ pub struct AdPlacementRequest {
     pub placement: String,
 }
 
+/// The `AdContent` schema.
 #[derive(Clone, Debug, Deserialize, Hash, PartialEq, Eq, Serialize)]
 pub struct AdContentCategory {
     pub categories: Vec<String>,
@@ -164,11 +150,24 @@ pub enum IABContentTaxonomy {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::TEST_CONTEXT_ID;
+    use crate::{http_cache::RequestHash, test_utils::TEST_CONTEXT_ID};
 
     use super::*;
     use serde_json::{json, to_value};
     use url::Url;
+
+    fn hash_for(body: &AdRequest, environment: &Environment, ohttp: bool) -> RequestHash {
+        RequestHash::new(&GetAdsRequest {
+            body,
+            environment,
+            headers: Headers::new(),
+            ohttp,
+        })
+    }
+
+    fn hash(body: &AdRequest) -> RequestHash {
+        hash_for(body, &Environment::Test, false)
+    }
 
     #[test]
     fn test_ad_placement_request_with_content_serialize() {
@@ -221,9 +220,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             HashMap::from([("contextual_placement".to_string(), true)]),
-            false,
             vec![
                 AdPlacementRequest {
                     content: Some(AdContentCategory {
@@ -249,10 +246,7 @@ mod tests {
         let expected_request = AdRequest {
             blocks: Default::default(),
             context_id: Some(TEST_CONTEXT_ID.to_string()),
-            environment: Environment::Test,
             flags: HashMap::from([("contextual_placement".to_string(), true)]),
-            headers: Headers::new(),
-            ohttp: false,
             placements: vec![
                 AdPlacementRequest {
                     content: Some(AdContentCategory {
@@ -282,9 +276,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -308,9 +300,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             HashMap::from([("contextual_placement".to_string(), false)]),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -333,9 +323,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -359,9 +347,7 @@ mod tests {
         let request = AdRequest::try_new(
             vec!["test".to_string()],
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -385,9 +371,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -409,9 +393,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -436,9 +418,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             None,
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -460,9 +440,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some("context-123".to_string()),
-            Environment::Test,
             HashMap::from([("contextual_placement".to_string(), true)]),
-            false,
             vec![
                 AdPlacementRequest {
                     content: None,
@@ -505,8 +483,6 @@ mod tests {
 
     #[test]
     fn test_contextual_placement_flag_produces_different_hash() {
-        use crate::http_cache::RequestHash;
-
         let make_placements = || {
             vec![AdPlacementRequest {
                 content: None,
@@ -518,9 +494,7 @@ mod tests {
         let req_off = AdRequest::try_new(
             Default::default(),
             Some("same-id".to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             make_placements(),
             AdRequestRelevance::default(),
         )
@@ -528,21 +502,17 @@ mod tests {
         let req_on = AdRequest::try_new(
             Default::default(),
             Some("same-id".to_string()),
-            Environment::Test,
             HashMap::from([("contextual_placement".to_string(), true)]),
-            false,
             make_placements(),
             AdRequestRelevance::default(),
         )
         .unwrap();
 
-        assert_ne!(RequestHash::new(&req_off), RequestHash::new(&req_on));
+        assert_ne!(hash(&req_off), hash(&req_on));
     }
 
     #[test]
     fn test_custom_env_produces_different_hash() {
-        use crate::http_cache::RequestHash;
-
         let make_placements = || {
             vec![AdPlacementRequest {
                 content: None,
@@ -551,28 +521,21 @@ mod tests {
             }]
         };
 
-        let req_http = AdRequest::try_new(
+        let request = AdRequest::try_new(
             Default::default(),
             Some("same-id".to_string()),
-            Environment::Custom(Url::parse("http://example.com").unwrap()),
             AdRequestFlags::default(),
-            false,
             make_placements(),
             AdRequestRelevance::default(),
         )
         .unwrap();
-        let req_https = AdRequest::try_new(
-            Default::default(),
-            Some("same-id".to_string()),
-            Environment::Custom(Url::parse("https://example.com").unwrap()),
-            AdRequestFlags::default(),
-            false,
-            make_placements(),
-            AdRequestRelevance::default(),
-        )
-        .unwrap();
+        let http = Environment::Custom(Url::parse("http://example.com").unwrap());
+        let https = Environment::Custom(Url::parse("https://example.com").unwrap());
 
-        assert_ne!(RequestHash::new(&req_http), RequestHash::new(&req_https));
+        assert_ne!(
+            hash_for(&request, &http, false),
+            hash_for(&request, &https, false)
+        );
     }
 
     #[test]
@@ -580,9 +543,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![
                 AdPlacementRequest {
                     content: Some(AdContentCategory {
@@ -611,9 +572,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![],
             AdRequestRelevance::default(),
         );
@@ -622,8 +581,6 @@ mod tests {
 
     #[test]
     fn test_context_id_ignored_in_hash() {
-        use crate::http_cache::RequestHash;
-
         let make_placements = || {
             vec![AdPlacementRequest {
                 content: None,
@@ -638,9 +595,7 @@ mod tests {
         let req1 = AdRequest::try_new(
             Default::default(),
             context_id_a,
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             make_placements(),
             AdRequestRelevance::default(),
         )
@@ -648,27 +603,21 @@ mod tests {
         let req2 = AdRequest::try_new(
             Default::default(),
             context_id_b,
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             make_placements(),
             AdRequestRelevance::default(),
         )
         .unwrap();
 
-        assert_eq!(RequestHash::new(&req1), RequestHash::new(&req2));
+        assert_eq!(hash(&req1), hash(&req2));
     }
 
     #[test]
     fn test_different_placements_produce_different_hash() {
-        use crate::http_cache::RequestHash;
-
         let req1 = AdRequest::try_new(
             Default::default(),
             Some("same-id".to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -681,9 +630,7 @@ mod tests {
         let req2 = AdRequest::try_new(
             Default::default(),
             Some("same-id".to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 3,
@@ -693,13 +640,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_ne!(RequestHash::new(&req1), RequestHash::new(&req2));
+        assert_ne!(hash(&req1), hash(&req2));
     }
 
     #[test]
     fn test_ohttp_flag_produces_different_hash() {
-        use crate::http_cache::RequestHash;
-
         let make_placements = || {
             vec![AdPlacementRequest {
                 content: None,
@@ -708,41 +653,28 @@ mod tests {
             }]
         };
 
-        let req_direct = AdRequest::try_new(
+        let request = AdRequest::try_new(
             Default::default(),
             Some("same-id".to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
-            make_placements(),
-            AdRequestRelevance::default(),
-        )
-        .unwrap();
-        let req_ohttp = AdRequest::try_new(
-            Default::default(),
-            Some("same-id".to_string()),
-            Environment::Test,
-            AdRequestFlags::default(),
-            true,
             make_placements(),
             AdRequestRelevance::default(),
         )
         .unwrap();
 
-        assert_ne!(RequestHash::new(&req_direct), RequestHash::new(&req_ohttp));
+        assert_ne!(
+            hash_for(&request, &Environment::Test, false),
+            hash_for(&request, &Environment::Test, true)
+        );
     }
 
     #[test]
     fn test_relevance_produces_different_hash() {
-        use crate::http_cache::RequestHash;
-
         let make_request = |relevance: AdRequestRelevance| {
             AdRequest::try_new(
                 Default::default(),
                 Some("same-id".to_string()),
-                Environment::Test,
                 AdRequestFlags::default(),
-                false,
                 vec![AdPlacementRequest {
                     content: None,
                     count: 1,
@@ -758,18 +690,13 @@ mod tests {
         let req_sports_lower = make_request(HashMap::from([("sports".to_string(), 0.5)]));
         let req_news = make_request(HashMap::from([("news".to_string(), 0.8)]));
 
-        assert_ne!(RequestHash::new(&req_none), RequestHash::new(&req_sports));
-        assert_ne!(
-            RequestHash::new(&req_sports),
-            RequestHash::new(&req_sports_lower)
-        );
-        assert_ne!(RequestHash::new(&req_sports), RequestHash::new(&req_news));
+        assert_ne!(hash(&req_none), hash(&req_sports));
+        assert_ne!(hash(&req_sports), hash(&req_sports_lower));
+        assert_ne!(hash(&req_sports), hash(&req_news));
     }
 
     #[test]
     fn test_relevance_hash_is_independent_of_insertion_order() {
-        use crate::http_cache::RequestHash;
-
         let keys = ["arts", "business", "news", "sports", "technology", "travel"];
 
         let mut forward = AdRequestRelevance::new();
@@ -785,9 +712,7 @@ mod tests {
             AdRequest::try_new(
                 Default::default(),
                 Some("same-id".to_string()),
-                Environment::Test,
                 AdRequestFlags::default(),
-                false,
                 vec![AdPlacementRequest {
                     content: None,
                     count: 1,
@@ -798,10 +723,7 @@ mod tests {
             .unwrap()
         };
 
-        assert_eq!(
-            RequestHash::new(&make_request(forward)),
-            RequestHash::new(&make_request(reverse)),
-        );
+        assert_eq!(hash(&make_request(forward)), hash(&make_request(reverse)),);
     }
 
     #[test]
@@ -811,9 +733,7 @@ mod tests {
         let request = AdRequest::try_new(
             Default::default(),
             Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
             AdRequestFlags::default(),
-            false,
             vec![AdPlacementRequest {
                 content: None,
                 count: 1,
@@ -823,18 +743,25 @@ mod tests {
         )
         .unwrap();
 
+        let get_ads = GetAdsRequest {
+            body: &request,
+            environment: &Environment::Test,
+            headers: Headers::new(),
+            ohttp: false,
+        };
+
         let mut full = DefaultHasher::new();
-        request.hash(&mut full);
+        get_ads.hash(&mut full);
 
         let mut without_endpoint = DefaultHasher::new();
-        request.environment.hash(&mut without_endpoint);
-        request.ohttp.hash(&mut without_endpoint);
-        request.placements.hash(&mut without_endpoint);
+        get_ads.environment.hash(&mut without_endpoint);
+        get_ads.ohttp.hash(&mut without_endpoint);
+        get_ads.body.placements.hash(&mut without_endpoint);
 
         assert_ne!(
             full.finish(),
             without_endpoint.finish(),
-            "ENDPOINT must contribute to AdRequest hash",
+            "ENDPOINT must contribute to GetAdsRequest hash",
         );
     }
 }

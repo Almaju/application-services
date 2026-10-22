@@ -32,17 +32,11 @@ pub enum CallbackRequestError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchAdsError {
-    #[error("Error building ad request: {0}")]
-    BuildRequest(#[from] BuildRequestError),
-
     #[error("Could not fetch ads, MARS responded with: {0}")]
     HTTPError(#[from] HTTPError),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-
-    #[error("OHTTP preflight failed: {0}")]
-    Preflight(#[from] CallbackRequestError),
 
     #[error("Error sending request: {0}")]
     Request(#[from] viaduct::ViaductError),
@@ -90,24 +84,6 @@ impl HTTPError {
         };
         Err(error)
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RecordClickError {
-    #[error("Callback request to MARS failed: {0}")]
-    CallbackRequest(#[from] CallbackRequestError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RecordImpressionError {
-    #[error("Callback request to MARS failed: {0}")]
-    CallbackRequest(#[from] CallbackRequestError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ReportAdError {
-    #[error("Callback request to MARS failed: {0}")]
-    CallbackRequest(#[from] CallbackRequestError),
 }
 
 #[derive(Debug, thiserror::Error)]

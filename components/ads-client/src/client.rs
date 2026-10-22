@@ -3,19 +3,20 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use crate::ads::{AdImage, AdImageOrSpoc, AdSpoc, AdTile};
+use crate::ads::{self, AdImageOrSpoc, AdKind};
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
 use crate::http_cache::{CachePolicy, HttpCache};
-use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelevance};
-use crate::mars::ad_response::{AdResponse, AdResponseValue};
-use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
+use crate::mars::ad_request::{AdPlacementRequest, AdRequest, AdRequestFlags, AdRequestRelevance};
+use crate::mars::ad_response::{AdImage, AdSpoc, AdTile};
+use crate::mars::error::CallbackRequestError;
+use crate::mars::preflight::PreflightResponse;
 use crate::mars::{MARSClient, ReportReason};
 use crate::telemetry::{self, ClientOperation};
 use config::AdsClientConfig;
 use context_id::{ContextIDComponent, DefaultContextIdCallback};
-use error::RequestAdsError;
+use error::{RecordClickError, RecordImpressionError, ReportAdError, RequestAdsError};
 use sql_support::open_database;
 use std::collections::HashMap;
 #[cfg(feature = "stateful")]
@@ -110,8 +111,8 @@ impl AdsClient {
         // if let Some(request_hash) = RequestHash::pop_from_url(&mut click_url) {
         //     let _ = self.client.invalidate_cache_by_hash(&request_hash);
         // }
-        self.client
-            .record_click(click_url, ohttp)
+        self.record_interaction(click_url, None, ohttp)
+            .map_err(RecordClickError::from)
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::RecordClick, e);
             })
@@ -154,8 +155,8 @@ impl AdsClient {
             impression_url
         };
 
-        self.client
-            .record_impression(impression_url, ohttp)
+        self.record_interaction(impression_url, None, ohttp)
+            .map_err(RecordImpressionError::from)
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::RecordImpression, e);
             })
@@ -170,8 +171,8 @@ impl AdsClient {
         reason: ReportReason,
         ohttp: bool,
     ) -> Result<(), ReportAdError> {
-        self.client
-            .report_ad(report_url, reason, ohttp)
+        self.record_interaction(report_url, Some(reason), ohttp)
+            .map_err(ReportAdError::from)
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::ReportAd, e);
             })
@@ -202,7 +203,7 @@ impl AdsClient {
                 telemetry::record_client_error(ClientOperation::RequestAds, e);
             })?;
         telemetry::record_client_operation(ClientOperation::RequestAds);
-        Ok(response.take_first())
+        Ok(ads::take_first(response))
     }
 
     // relevance is not implemented for spocs, using an empty HashMap.
@@ -226,9 +227,8 @@ impl AdsClient {
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::RequestAds, e);
             })
-            .map(|response| {
+            .inspect(|_| {
                 telemetry::record_client_operation(ClientOperation::RequestAds);
-                response.data
             })
     }
 
@@ -256,9 +256,8 @@ impl AdsClient {
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::RequestAds, e);
             })
-            .map(|response| {
+            .inspect(|_| {
                 telemetry::record_client_operation(ClientOperation::RequestAds);
-                response.data
             })
     }
 
@@ -285,7 +284,7 @@ impl AdsClient {
             })
             .map(|response| {
                 telemetry::record_client_operation(ClientOperation::RequestAds);
-                response.take_first()
+                ads::take_first(response)
             })
     }
 
@@ -300,6 +299,23 @@ impl AdsClient {
         self.client.shutdown_db();
     }
 
+    // OHTTP hides the caller's IP and user agent from MARS, so a direct
+    // preflight first gets a coarse location and user agent to send along.
+    fn preflight(&self, ohttp: bool) -> Result<Option<PreflightResponse>, CallbackRequestError> {
+        ohttp.then(|| self.client.fetch_preflight()).transpose()
+    }
+
+    fn record_interaction(
+        &self,
+        callback: Url,
+        reason: Option<ReportReason>,
+        ohttp: bool,
+    ) -> Result<(), CallbackRequestError> {
+        let preflight = self.preflight(ohttp)?;
+        self.client
+            .record_interaction(callback, reason, preflight, ohttp)
+    }
+
     fn request_ads<A>(
         &self,
         placements: Vec<AdPlacementRequest>,
@@ -308,28 +324,23 @@ impl AdsClient {
         ohttp: bool,
         blocks: Vec<String>,
         relevance: AdRequestRelevance,
-    ) -> Result<AdResponse<A>, RequestAdsError>
+    ) -> Result<HashMap<String, Vec<A>>, RequestAdsError>
     where
-        A: AdResponseValue,
+        A: AdKind,
     {
         let context_id = if relevance.is_empty() {
             Some(self.get_context_id()?)
         } else {
             None
         };
+        let ad_request = AdRequest::try_new(blocks, context_id, flags, placements, relevance)?;
+        let preflight = self.preflight(ohttp).map_err(RequestAdsError::Preflight)?;
 
         let cache_policy = options.unwrap_or_default();
-        let (mut response, request_hash) = self.client.fetch_ads::<A>(
-            context_id,
-            flags,
-            placements,
-            cache_policy,
-            ohttp,
-            blocks,
-            relevance,
-        )?;
-        response.enrich_callbacks(&request_hash);
-        Ok(response)
+        let (response, request_hash) =
+            self.client
+                .fetch_ads(&ad_request, preflight, &cache_policy, ohttp)?;
+        Ok(ads::select(response, &request_hash))
     }
 }
 
@@ -456,6 +467,54 @@ mod tests {
     }
 
     #[test]
+    fn test_request_spocs_drops_other_kinds_of_ads() {
+        viaduct_dev::init_backend_dev();
+
+        let spocs = get_example_happy_spoc_response().data;
+        let images = get_example_happy_image_response().data;
+        let body = HashMap::from([
+            (
+                "example_placement_1".to_string(),
+                [
+                    spocs["example_placement_1"].clone(),
+                    images["example_placement_1"].clone(),
+                ]
+                .concat(),
+            ),
+            (
+                "example_placement_2".to_string(),
+                images["example_placement_2"].clone(),
+            ),
+        ]);
+        let m = mockito::mock("POST", "/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&body).unwrap())
+            .create();
+
+        let mars_client = MARSClient::new(Environment::Test, None);
+        let ads_client = new_with_mars_client(mars_client);
+
+        let result = ads_client
+            .request_spoc_ads(
+                make_happy_placement_requests(),
+                AdRequestFlags::default(),
+                None,
+                false,
+                Default::default(),
+            )
+            .unwrap();
+
+        // The image is dropped, and so is the placement it leaves empty.
+        assert_eq!(result.keys().collect::<Vec<_>>(), ["example_placement_1"]);
+        assert_eq!(
+            result["example_placement_1"].len(),
+            spocs["example_placement_1"].len()
+        );
+        m.assert();
+    }
+
+    #[test]
     fn test_context_id_is_sent_to_mars() {
         viaduct_dev::init_backend_dev();
 
@@ -529,6 +588,46 @@ mod tests {
             HashMap::from([("sports".to_string(), 0.8)]),
         );
         assert!(result.is_ok());
+        m.assert();
+    }
+
+    #[test]
+    fn test_record_click_with_valid_url_should_succeed() {
+        viaduct_dev::init_backend_dev();
+        let m = mockito::mock("GET", "/click_callback_url")
+            .with_status(200)
+            .create();
+
+        let mars_client = MARSClient::new(Environment::Test, None);
+        let ads_client = new_with_mars_client(mars_client);
+        let url = Url::parse(&format!("{}/click_callback_url", &mockito::server_url())).unwrap();
+
+        assert!(ads_client.record_click(url, false).is_ok());
+        m.assert();
+    }
+
+    #[test]
+    fn test_report_ad_with_valid_url_should_succeed() {
+        viaduct_dev::init_backend_dev();
+        let m = mockito::mock("GET", "/report_ad_callback_url")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "reason".into(),
+                "not_interested".into(),
+            ))
+            .with_status(200)
+            .create();
+
+        let mars_client = MARSClient::new(Environment::Test, None);
+        let ads_client = new_with_mars_client(mars_client);
+        let url = Url::parse(&format!(
+            "{}/report_ad_callback_url",
+            &mockito::server_url()
+        ))
+        .unwrap();
+
+        assert!(ads_client
+            .report_ad(url, ReportReason::NotInterested, false)
+            .is_ok());
         m.assert();
     }
 

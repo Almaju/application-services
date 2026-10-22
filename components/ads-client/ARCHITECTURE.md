@@ -1,5 +1,13 @@
 # Architecture
 
+## Layers
+
+A call goes through three layers, each one using only the layer below it:
+
+1. **FFI** (`src/lib.rs`, `src/ffi.rs`): the `MozAds*` API consumers see, described below.
+2. **Client** (`src/client.rs`, `src/ads.rs`): the business logic. `AdsClient` builds the request (context ID, placement checks), runs the OHTTP preflight when needed, keeps the ads of the kind the caller asked for (`ads::select`), tags their callbacks and records telemetry.
+3. **MARS API** (`src/mars.rs`, `src/mars/`): a plain client for the [MARS API](https://ads.mozilla.org/assets/docs/openapi/mars-api.html). `MARSClient` has one method per operation (`fetch_ads` for `getAds`, `fetch_preflight`, `record_interaction`), and `src/mars/` holds the schemas they send and receive (`AdRequest`, `AdResponse` and its `Image`, `Spoc` and `Tile` ads). It sends what it is given and returns what MARS answers, so it can be read side by side with the spec.
+
 ## Type Separation: FFI Types vs Business Logic Types
 
 This component uses a clear separation between **FFI (Foreign Function Interface) types** and **business logic types**. This architectural decision provides several important benefits for maintainability, API stability, and development velocity.
@@ -110,6 +118,8 @@ pub fn request_ads(
 - `src/ffi.rs`: All UniFFI-exposed types (`MozAds*`), error types, and conversions
 - `src/lib.rs`: Public API entry point, handles FFI ↔ business logic conversions
 - `src/client/`: Business logic types and implementation
+- `src/ads.rs`: The ads callers get back, and how they are picked out of a MARS response
+- `src/mars/`: The MARS API client and its request and response schemas
 - `src/error.rs`: Internal error types (FFI errors are in `ffi.rs`)
 
 ### Guidelines for Developers
