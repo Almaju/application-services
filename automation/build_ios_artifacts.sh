@@ -12,6 +12,7 @@ export PROJECT=MozillaRustComponentsWrapper
     -g Glean \
     -o ./megazords/ios-rust/Sources/MozillaRustComponentsWrapper/Generated/Glean \
   "${SOURCE_ROOT}"/components/ads-client/metrics.yaml \
+  "${SOURCE_ROOT}"/components/ads-client/pings.yaml \
   "${SOURCE_ROOT}"/components/nimbus/metrics.yaml \
   "${SOURCE_ROOT}"/components/nimbus/pings.yaml \
   "${SOURCE_ROOT}"/components/logins/metrics.yaml \

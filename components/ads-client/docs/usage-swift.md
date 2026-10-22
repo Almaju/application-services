@@ -69,6 +69,7 @@ class MozAdsClientBuilder {
 - **`environment(environment: MozAdsEnvironment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig: MozAdsCacheConfig)`** - Sets the cache configuration
 - **`telemetry(telemetry: MozAdsTelemetry)`** - Sets the telemetry implementation
+- **`telemetrySink(sink: MozAdsTelemetrySink)`** - Sets where the success metrics, expected errors and unexpected errors go (see [telemetry.md](telemetry.md))
 - **`build()`** - Builds and returns the configured client
 
 | Configuration  | Type                  | Description                                                                                            |
@@ -76,6 +77,7 @@ class MozAdsClientBuilder {
 | `environment`  | `MozAdsEnvironment`   | Selects which MARS environment to connect to. Unless in a dev build, this value can only ever be Prod. Defaults to Prod. |
 | `cacheConfig`  | `MozAdsCacheConfig?`  | Optional configuration for the internal cache.                                                         |
 | `telemetry`    | `MozAdsTelemetry?`    | Optional telemetry instance for recording metrics. Telemetry is process-wide: the most recently built client's instance receives metrics from every client.    |
+| `telemetrySink` | `MozAdsTelemetrySink?` | Optional sink for the metrics described in [telemetry.md](telemetry.md). Process-wide like `telemetry`, and dropped when a client shuts down. |
 
 ---
 

@@ -12,9 +12,9 @@ use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelev
 use crate::mars::ad_response::{AdResponse, AdResponseValue};
 use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
 use crate::mars::{MARSClient, ReportReason};
-use crate::telemetry::{self, ClientOperation};
+use crate::telemetry::{self, ClientOperation, Stage};
 use config::AdsClientConfig;
-use context_id::{ContextIDComponent, DefaultContextIdCallback};
+use context_id::{ContextIDComponent, ContextIdCallback};
 use error::RequestAdsError;
 use sql_support::open_database;
 use std::collections::HashMap;
@@ -31,6 +31,17 @@ const DEFAULT_TTL_SECONDS: u64 = 300;
 const DEFAULT_MAX_CACHE_SIZE_MIB: u64 = 10;
 const DEFAULT_ROTATION_DAYS: u8 = 3;
 
+/// Counts the context ids issued, for `ads_client.context_id_rotations`.
+struct AdsContextIdCallback;
+
+impl ContextIdCallback for AdsContextIdCallback {
+    fn persist(&self, _context_id: String, _creation_date: i64) {
+        telemetry::note_context_id_issued();
+    }
+
+    fn rotated(&self, _old_context_id: String) {}
+}
+
 pub struct AdsClient {
     #[cfg(feature = "stateful")]
     ads_store: Arc<Option<AdsStore>>,
@@ -44,7 +55,7 @@ impl AdsClient {
             &Uuid::new_v4().to_string(),
             0,
             cfg!(test),
-            Box::new(DefaultContextIdCallback),
+            Box::new(AdsContextIdCallback),
         );
 
         let environment = client_config.environment;
@@ -68,6 +79,7 @@ impl AdsClient {
                 Ok(cache) => Some(cache),
                 Err(e) => {
                     telemetry::record_build_cache_error(&e);
+                    telemetry::report_side_error(Stage::Open, &e);
                     None
                 }
             }
@@ -81,6 +93,7 @@ impl AdsClient {
                     Ok(store) => Some(store),
                     Err(e) => {
                         telemetry::record_ads_store_error(&e);
+                        telemetry::report_side_error(Stage::Open, &e);
                         None
                     }
                 });
@@ -290,6 +303,7 @@ impl AdsClient {
     }
 
     pub fn shutdown(&self) {
+        telemetry::shutdown();
         telemetry::uninstall();
 
         #[cfg(feature = "stateful")]
@@ -313,6 +327,7 @@ impl AdsClient {
         A: AdResponseValue,
     {
         let context_id = if relevance.is_empty() {
+            telemetry::step!(Stage::ContextId);
             Some(self.get_context_id()?)
         } else {
             None
@@ -361,7 +376,7 @@ mod tests {
                 &Uuid::new_v4().to_string(),
                 0,
                 false,
-                Box::new(DefaultContextIdCallback),
+                Box::new(context_id::DefaultContextIdCallback),
             ),
         }
     }

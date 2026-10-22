@@ -28,6 +28,7 @@
 
 ### Ads-Client
 - Telemetry is now a process-wide singleton internally; the binding API is unchanged, but the `MozAdsTelemetry` callback now receives metrics from every client in the process.
+- New telemetry, passed to the `MozAdsTelemetrySink` set with `MozAdsClientBuilder::telemetry_sink()` (`AdsClientTelemetrySink` on Android): success metrics, an `expected_error` event and an `ads-client-errors` ping listing unexpected errors (see `components/ads-client/docs/telemetry.md`). The `MozAdsTelemetry` metrics are still recorded.
 - `request_spoc_or_image_ads` is added to return ads that may ambiguously be spocs or images.
 - Added support for relevance scores ([AC-205](https://mozilla-hub.atlassian.net/browse/AC-205)) ([AC-206](https://mozilla-hub.atlassian.net/browse/AC-206)) Accepts a HashMap<String, f64>.
 

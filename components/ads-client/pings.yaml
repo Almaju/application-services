@@ -1,0 +1,26 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+---
+$schema: moz://mozilla.org/schemas/glean/pings/2-0-0
+
+ads-client-errors:
+  description: >
+    Unexpected ads-client errors, as a list of records in
+    `ads_client.error_reports`. Sent at the end of an operation that hit an
+    error not seen before in this process, and at shutdown. At most 10 distinct
+    errors and 5 pings per process.
+  include_client_id: true
+  send_if_empty: false
+  reasons:
+    error: An error not seen before in this process happened.
+    shutdown: The client shut down with repeat counts still unsent.
+  bugs:
+    - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+  data_reviews:
+    - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+  notification_emails:
+    - ahanot@mozilla.com
+    - llisi@mozilla.com
+    - toast@mozilla.com

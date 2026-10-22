@@ -125,3 +125,202 @@ ads_client:
       - llisi@mozilla.com
       - toast@mozilla.com
     expires: never
+
+  request_success_rate:
+    type: rate
+    description: >
+      Ad requests (`request_*_ads`) that returned ads without error, out of
+      every ad request.
+    bugs: &bugs
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_reviews: &data_reviews
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_sensitivity: [technical, interaction]
+    notification_emails: &emails
+      - ahanot@mozilla.com
+      - llisi@mozilla.com
+      - toast@mozilla.com
+    expires: never
+
+  impression_success_rate:
+    type: rate
+    description: >
+      Impression callbacks answered with HTTP 200, out of every
+      `record_impression` call, including calls with an invalid URL.
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical, interaction]
+    notification_emails: *emails
+    expires: never
+
+  click_success_rate:
+    type: rate
+    description: >
+      Click callbacks answered with HTTP 200, out of every `record_click` call,
+      including calls with an invalid URL.
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical, interaction]
+    notification_emails: *emails
+    expires: never
+
+  fill_rate:
+    type: rate
+    description: >
+      On successful ad requests, the ads returned to the caller out of the ads
+      requested (the sum of `count` over the placements, 1 per image or tile
+      placement).
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical, interaction]
+    notification_emails: *emails
+    expires: never
+
+  cache_hit_rate:
+    type: rate
+    description: >
+      Cache-first ad requests answered from the HTTP cache and parsed
+      successfully, out of every cache-first ad request, including those made
+      while the cache is unavailable. OHTTP preflight requests are excluded.
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical]
+    notification_emails: *emails
+    expires: never
+
+  request_duration_direct:
+    type: timing_distribution
+    time_unit: millisecond
+    description: >
+      Time taken by ad requests sent without OHTTP that went to the network,
+      whether they succeeded or failed. Requests answered from the cache are
+      excluded.
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical]
+    notification_emails: *emails
+    expires: never
+
+  request_duration_ohttp:
+    type: timing_distribution
+    time_unit: millisecond
+    description: >
+      Time taken by ad requests sent through OHTTP that went to the network,
+      whether they succeeded or failed, including the preflight. Requests
+      answered from the cache are excluded.
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical]
+    notification_emails: *emails
+    expires: never
+
+  context_id_rotations:
+    type: counter
+    description: >
+      New context IDs issued, when a client is built or when the current one
+      is rotated.
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical]
+    notification_emails: *emails
+    expires: never
+
+  expected_error:
+    type: event
+    description: >
+      An error that a healthy client, server and network can still produce,
+      such as a timeout or a server error. Recorded at most 50 times per
+      operation and kind per process. The values of `operation`, `kind` and
+      `stage` are listed in `docs/telemetry.md`.
+    extra_keys:
+      operation:
+        type: string
+        description: The public operation that was running.
+      kind:
+        type: string
+        description: What went wrong, such as `timeout` or `http_server`.
+      stage:
+        type: string
+        description: The step the operation was at, such as `preflight` or `request`.
+      code:
+        type: string
+        description: >
+          The HTTP status, network error code or SQLite error code, if any.
+      source:
+        type: string
+        description: Whether the response came from the `network` or the `cache`.
+      ohttp:
+        type: boolean
+        description: Whether the operation was sent through OHTTP.
+      fatal:
+        type: boolean
+        description: Whether the operation failed because of this error.
+    in_session: false
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical, interaction]
+    notification_emails: *emails
+    expires: never
+
+  error_reports:
+    type: object
+    lifetime: ping
+    send_in_pings:
+      - ads-client-errors
+    description: >
+      Errors that point to a bug or a broken contract, such as a response that
+      does not deserialize or an SQL error. One record per distinct error,
+      identified by its fingerprint `fp`; repeats only increase `count`. Records
+      hold no free text except a scrubbed message, and no URLs, response bodies,
+      paths or identifiers. The values of `kind`, `op`, `stage` and the
+      `context` keys are listed in `docs/telemetry.md`.
+    structure:
+      type: object
+      properties:
+        v:
+          type: number
+        dropped:
+          type: number
+        records:
+          type: array
+          items:
+            type: object
+            properties:
+              fp:
+                type: string
+              kind:
+                type: string
+              op:
+                type: string
+              stage:
+                type: string
+              fatal:
+                type: boolean
+              chain:
+                type: array
+                items:
+                  type: string
+              message:
+                type: string
+              location:
+                type: string
+              steps:
+                type: array
+                items:
+                  type: string
+              context:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    k:
+                      type: string
+                    v:
+                      type: string
+              count:
+                type: number
+    bugs: *bugs
+    data_reviews: *data_reviews
+    data_sensitivity: [technical]
+    notification_emails: *emails
+    expires: never

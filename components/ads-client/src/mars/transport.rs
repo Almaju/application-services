@@ -61,6 +61,7 @@ impl MARSTransport {
             let (response, outcomes) = cache.send_with_policy(&client, request, policy)?;
             for outcome in &outcomes {
                 telemetry::record_http_cache_outcome(outcome);
+                telemetry::note_cache_outcome(outcome);
             }
             HTTPError::check(&response)?;
             Ok(response)

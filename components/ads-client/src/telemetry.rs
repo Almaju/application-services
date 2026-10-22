@@ -10,13 +10,20 @@
 //! `tracing` macro. Nothing has to be threaded through the clients, stores or
 //! transports.
 //!
-//! This is the same API the crate will expose once metrics are recorded
-//! straight from Rust through [`glean-sym`]. Until then, the backend forwards
-//! to the [`Telemetry`] implementation the FFI layer installs, which wraps the
-//! callback the consumer hands to `MozAdsClientBuilder::telemetry()`; see
-//! `telemetry/backend.rs`. Moving to
-//! glean-sym means swapping that backend for one that talks to the generated
-//! metrics, and none of the recording sites have to change.
+//! Two sets of metrics are recorded while the second replaces the first:
+//!
+//! - The `record_*` functions record the metrics declared first in
+//!   `metrics.yaml` through the [`Telemetry`] callback the consumer hands to
+//!   `MozAdsClientBuilder::telemetry()`; see `telemetry/backend.rs`.
+//! - [`begin`], [`step!`] and [`report_side_error`] record the rest of
+//!   `metrics.yaml` and the `ads-client-errors` ping through the sink the
+//!   consumer hands to `MozAdsClientBuilder::telemetry_sink()`; see
+//!   `telemetry/sink.rs`. They come in three tiers: success metrics, expected
+//!   errors (`classify.rs` decides which errors those are) and unexpected
+//!   errors, sent as a list (`report.rs`). `docs/telemetry.md` describes them.
+//!
+//! Moving to [`glean-sym`] means swapping the sink for one that talks to the
+//! generated metrics, and none of the recording sites have to change.
 //!
 //! Every function here is infallible and silent by design. Telemetry must never
 //! change the outcome of the operation it is describing.
@@ -28,11 +35,34 @@ use std::fmt::Display;
 use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
 mod backend;
+mod classify;
+mod report;
+mod scope;
+mod scrub;
+pub(crate) mod sink;
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 pub(crate) use backend::test_lock;
 pub use backend::Telemetry;
 pub(crate) use backend::{install, uninstall};
+pub(crate) use classify::{InvalidAdItems, InvalidPlacement};
+pub(crate) use scope::{
+    begin, note_cache_outcome, note_context_id_issued, note_main_request, report_side_error,
+    shutdown, Operation, Stage,
+};
+
+/// Marks the step the current operation is at, for the operation's trace and
+/// to tell where an error happened.
+macro_rules! step {
+    ($stage:expr) => {
+        $crate::telemetry::step_at($stage, concat!(file!(), ":", line!()))
+    };
+}
+#[doc(hidden)]
+pub(crate) use scope::step as step_at;
+pub(crate) use step;
 
 /// A client operation, as labeled by `ads_client.client_operation_total` and
 /// `ads_client.client_error`.
