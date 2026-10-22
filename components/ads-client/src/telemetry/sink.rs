@@ -3,12 +3,14 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! Where the metrics recorded by `scope.rs` and `report.rs` go: the [`Sink`]
-//! the FFI layer installs, which wraps the `MozAdsTelemetrySink` callback the
-//! consumer hands to `MozAdsClientBuilder::telemetry_sink()`.
+//! Where the metrics recorded by `scope.rs` and `report.rs` go:
 //!
-//! Until a sink is installed, and after it is uninstalled, recording is a
-//! no-op.
+//! - the `MozAdsTelemetrySink` callback the consumer hands to
+//!   `MozAdsClientBuilder::telemetry_sink()`, if any. Desktop does this, since
+//!   glean-sym does not run there yet;
+//! - otherwise Glean through glean-sym, when the `glean-sym` feature is on, as
+//!   on Android and iOS;
+//! - otherwise nowhere.
 
 use std::sync::Arc;
 
@@ -41,6 +43,10 @@ pub struct ExpectedErrorEvent {
 }
 
 pub trait Sink: Send + Sync {
+    /// Whether the app's Glean can be called yet.
+    fn ready(&self) -> bool {
+        true
+    }
     fn accumulate_duration(&self, duration: RequestDuration, millis: i64);
     /// Accumulates how long a context ID was used, in minutes.
     fn accumulate_context_id_lifetime(&self, minutes: i64);
@@ -50,23 +56,41 @@ pub trait Sink: Send + Sync {
     fn submit_error_reports(&self, json: String, reason: &'static str);
 }
 
-// By design: process-wide, like the `Telemetry` callback.
+// By design: process-wide, like the `Telemetry` callback and Glean.
 static SINK: RwLock<Option<Arc<dyn Sink>>> = RwLock::new(None);
 
-/// Makes `sink` the destination of every metric recorded from now on.
+/// Makes `sink` the destination of every metric recorded from now on, in
+/// place of glean-sym.
 pub fn install(sink: impl Sink + 'static) {
     // Dropping a UniFFI callback calls into foreign code, so let the replaced
     // one drop after the lock is released.
     let _replaced = SINK.write().replace(Arc::new(sink));
 }
 
-/// Drops the installed sink, after which recording is a no-op.
+/// Drops the installed sink, after which metrics go to glean-sym, if built
+/// in, or nowhere.
 pub fn uninstall() {
     let _removed = SINK.write().take();
 }
 
 pub fn sink() -> Option<Arc<dyn Sink>> {
+    installed().or_else(glean_sym)
+}
+
+pub fn installed() -> Option<Arc<dyn Sink>> {
     SINK.read().clone()
+}
+
+#[cfg(feature = "glean-sym")]
+fn glean_sym() -> Option<Arc<dyn Sink>> {
+    static GLEAN: std::sync::LazyLock<Arc<dyn Sink>> =
+        std::sync::LazyLock::new(|| Arc::new(super::glean::GleanSink));
+    Some(GLEAN.clone())
+}
+
+#[cfg(not(feature = "glean-sym"))]
+fn glean_sym() -> Option<Arc<dyn Sink>> {
+    None
 }
 
 /// Puts the previous sink back when dropped.
@@ -132,5 +156,22 @@ impl Sink for Capture {
     fn submit_error_reports(&self, json: String, reason: &'static str) {
         let value = serde_json::from_str(&json).expect("error reports are JSON");
         self.error_reports.lock().push((value, reason));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_installed_sink_comes_before_glean_sym() {
+        let _lock = crate::telemetry::test_lock();
+        let capture: Arc<dyn Sink> = Arc::new(Capture::default());
+        {
+            let _restore = replace(capture.clone());
+            assert!(Arc::ptr_eq(&sink().unwrap(), &capture));
+        }
+        let _restore = replace_with_none();
+        assert_eq!(sink().is_some(), cfg!(feature = "glean-sym"));
     }
 }

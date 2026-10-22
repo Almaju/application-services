@@ -143,8 +143,10 @@ impl MozAdsClientBuilder {
         self
     }
 
-    /// Receives the metrics described in `docs/telemetry.md`. Like
-    /// `telemetry`, it is process-wide and dropped when a client shuts down.
+    /// Receives the metrics described in `docs/telemetry.md`, in place of
+    /// glean-sym. Only needed where glean-sym does not run, such as Desktop.
+    /// Like `telemetry`, it is process-wide and dropped when a client shuts
+    /// down.
     pub fn telemetry_sink(self: Arc<Self>, sink: Box<dyn MozAdsTelemetrySink>) -> Arc<Self> {
         self.0.lock().telemetry_sink = Some(Arc::from(sink));
         self
