@@ -85,11 +85,10 @@ Telemetry interface for recording ads client metrics. You must provide an implem
 
 ```kotlin
 interface MozAdsTelemetry {
-    fun recordBuildCacheError(label: String, value: String)
     fun recordClientError(label: String, value: String)
     fun recordClientOperationTotal(label: String)
-    fun recordDeserializationError(label: String, value: String)
     fun recordHttpCacheOutcome(label: String, value: String)
+    fun recordUnexpectedError(kind: String, message: String)
 }
 ```
 
@@ -98,12 +97,9 @@ interface MozAdsTelemetry {
 ```kotlin
 import mozilla.appservices.adsclient.MozAdsTelemetry
 import org.mozilla.appservices.ads_client.GleanMetrics.AdsClient
+import org.mozilla.appservices.ads_client.GleanMetrics.Pings
 
 class AdsClientTelemetry : MozAdsTelemetry {
-    override fun recordBuildCacheError(label: String, value: String) {
-        AdsClient.buildCacheError[label].set(value)
-    }
-
     override fun recordClientError(label: String, value: String) {
         AdsClient.clientError[label].set(value)
     }
@@ -112,12 +108,13 @@ class AdsClientTelemetry : MozAdsTelemetry {
         AdsClient.clientOperationTotal[label].add()
     }
 
-    override fun recordDeserializationError(label: String, value: String) {
-        AdsClient.deserializationError[label].set(value)
-    }
-
     override fun recordHttpCacheOutcome(label: String, value: String) {
         AdsClient.httpCacheOutcome[label].set(value)
+    }
+
+    override fun recordUnexpectedError(kind: String, message: String) {
+        AdsClient.unexpectedError.set(AdsClient.UnexpectedErrorObject(kind = kind, message = message))
+        Pings.adsClientErrors.submit()
     }
 }
 ```

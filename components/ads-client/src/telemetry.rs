@@ -57,15 +57,14 @@ impl ClientOperation {
     }
 }
 
-/// A label of `ads_client.build_cache_error`.
+/// A `kind` of `ads_client.unexpected_error`, for a cache or store that could
+/// not be built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildCacheErrorLabel {
     DatabaseError,
     EmptyDbPath,
     InvalidMaxSize,
     InvalidTtl,
-    // TODO: these are not in `metrics.yaml`, so Glean records them as
-    // `__other__`. Give the ads store its own metric.
     #[cfg(feature = "stateful")]
     StoreDatabaseError,
     #[cfg(feature = "stateful")]
@@ -91,7 +90,8 @@ impl BuildCacheErrorLabel {
     }
 }
 
-/// A label of `ads_client.deserialization_error`.
+/// A `kind` of `ads_client.unexpected_error`, for a response we could not
+/// deserialize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeserializationErrorLabel {
     InvalidAdItem,
@@ -149,7 +149,7 @@ pub fn record_client_error(operation: ClientOperation, error: &impl Display) {
 
 // By design: a free function, so recording a metric is one call from anywhere.
 /// Records a failure to build the HTTP cache against
-/// `ads_client.build_cache_error`.
+/// `ads_client.unexpected_error`.
 pub fn record_build_cache_error(error: &HttpCacheBuilderError) {
     let label = match error {
         HttpCacheBuilderError::Database(_) => BuildCacheErrorLabel::DatabaseError,
@@ -157,12 +157,12 @@ pub fn record_build_cache_error(error: &HttpCacheBuilderError) {
         HttpCacheBuilderError::InvalidMaxSize { .. } => BuildCacheErrorLabel::InvalidMaxSize,
         HttpCacheBuilderError::InvalidTtl { .. } => BuildCacheErrorLabel::InvalidTtl,
     };
-    backend::build_cache_error(label.as_str(), error.to_string());
+    backend::unexpected_error(label.as_str(), error.to_string());
 }
 
 // By design: a free function, so recording a metric is one call from anywhere.
 /// Records a failure to build the ads store against
-/// `ads_client.build_cache_error`.
+/// `ads_client.unexpected_error`.
 #[cfg(feature = "stateful")]
 pub fn record_ads_store_error(error: &crate::ads_store::builder::AdsStoreBuilderError) {
     // By design: telemetry owns every label, even though the ads store
@@ -174,30 +174,34 @@ pub fn record_ads_store_error(error: &crate::ads_store::builder::AdsStoreBuilder
         AdsStoreBuilderError::EmptyDbPath => BuildCacheErrorLabel::StoreEmptyDbPath,
         AdsStoreBuilderError::InvalidMaxSize { .. } => BuildCacheErrorLabel::StoreInvalidMaxSize,
     };
-    backend::build_cache_error(label.as_str(), error.to_string());
+    backend::unexpected_error(label.as_str(), error.to_string());
 }
 
 // By design: a free function, so recording a metric is one call from anywhere.
 /// Records the result of an HTTP cache read against
-/// `ads_client.http_cache_outcome`.
+/// `ads_client.http_cache_outcome`, and its failure, if any, against
+/// `ads_client.unexpected_error`.
 pub fn record_http_cache_outcome(outcome: &CacheOutcome) {
-    let (label, value) = match outcome {
-        CacheOutcome::CleanupFailed(e) => (HttpCacheOutcomeLabel::CleanupFailed, e.to_string()),
-        CacheOutcome::Hit => (HttpCacheOutcomeLabel::Hit, String::new()),
-        CacheOutcome::LookupFailed(e) => (HttpCacheOutcomeLabel::LookupFailed, e.to_string()),
-        CacheOutcome::MissNotCacheable => (HttpCacheOutcomeLabel::MissNotCacheable, String::new()),
-        CacheOutcome::MissStored => (HttpCacheOutcomeLabel::MissStored, String::new()),
-        CacheOutcome::NoCache => (HttpCacheOutcomeLabel::NoCache, String::new()),
-        CacheOutcome::StoreFailed(e) => (HttpCacheOutcomeLabel::StoreFailed, e.to_string()),
-        CacheOutcome::TrimFailed(e) => (HttpCacheOutcomeLabel::TrimFailed, e.to_string()),
+    let (label, error) = match outcome {
+        CacheOutcome::CleanupFailed(e) => (HttpCacheOutcomeLabel::CleanupFailed, Some(e)),
+        CacheOutcome::Hit => (HttpCacheOutcomeLabel::Hit, None),
+        CacheOutcome::LookupFailed(e) => (HttpCacheOutcomeLabel::LookupFailed, Some(e)),
+        CacheOutcome::MissNotCacheable => (HttpCacheOutcomeLabel::MissNotCacheable, None),
+        CacheOutcome::MissStored => (HttpCacheOutcomeLabel::MissStored, None),
+        CacheOutcome::NoCache => (HttpCacheOutcomeLabel::NoCache, None),
+        CacheOutcome::StoreFailed(e) => (HttpCacheOutcomeLabel::StoreFailed, Some(e)),
+        CacheOutcome::TrimFailed(e) => (HttpCacheOutcomeLabel::TrimFailed, Some(e)),
     };
-    backend::http_cache_outcome(label.as_str(), value);
+    backend::http_cache_outcome(label.as_str(), String::new());
+    if let Some(error) = error {
+        backend::unexpected_error(label.as_str(), error.to_string());
+    }
 }
 
 /// Records an ad item we could not deserialize against
-/// `ads_client.deserialization_error`.
+/// `ads_client.unexpected_error`.
 pub fn record_invalid_ad_item(error: &serde_json::Error) {
-    backend::deserialization_error(
+    backend::unexpected_error(
         DeserializationErrorLabel::InvalidAdItem.as_str(),
         error.to_string(),
     );

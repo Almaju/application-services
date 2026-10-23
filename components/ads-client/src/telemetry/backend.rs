@@ -22,11 +22,10 @@ use crate::bytesize::ByteSize;
 
 /// Receives the ads client's metrics.
 pub trait Telemetry: Send + Sync {
-    fn record_build_cache_error(&self, label: &str, value: String);
     fn record_client_error(&self, label: &str, value: String);
     fn record_client_operation_total(&self, label: &str);
-    fn record_deserialization_error(&self, label: &str, value: String);
     fn record_http_cache_outcome(&self, label: &str, value: String);
+    fn record_unexpected_error(&self, kind: &str, message: String);
 }
 
 // By design: telemetry is a process-wide singleton, as it will be with glean-sym.
@@ -61,9 +60,12 @@ fn with_callback(f: impl FnOnce(&dyn Telemetry)) {
 /// `invalid_overflow` error (bug 2047640).
 const MAX_STRING_SIZE: ByteSize = ByteSize::b(255);
 
-/// Cuts `value` to fit in a Glean string, on a char boundary.
-fn fit(mut value: String) -> String {
-    let max = MAX_STRING_SIZE.as_u64() as usize;
+/// Longest `ads_client.unexpected_error` message.
+const MAX_MESSAGE_SIZE: ByteSize = ByteSize::kib(1);
+
+/// Cuts `value` to `max_size`, on a char boundary.
+fn fit(mut value: String, max_size: ByteSize) -> String {
+    let max = max_size.as_u64() as usize;
     if value.len() > max {
         // `str::floor_char_boundary` does this, but needs Rust 1.91 and
         // mozilla-central still builds with 1.90.
@@ -76,24 +78,20 @@ fn fit(mut value: String) -> String {
     value
 }
 
-pub(super) fn build_cache_error(label: &str, value: String) {
-    with_callback(|cb| cb.record_build_cache_error(label, fit(value)));
-}
-
 pub(super) fn client_error(label: &str, value: String) {
-    with_callback(|cb| cb.record_client_error(label, fit(value)));
+    with_callback(|cb| cb.record_client_error(label, fit(value, MAX_STRING_SIZE)));
 }
 
 pub(super) fn client_operation_total(label: &str) {
     with_callback(|cb| cb.record_client_operation_total(label));
 }
 
-pub(super) fn deserialization_error(label: &str, value: String) {
-    with_callback(|cb| cb.record_deserialization_error(label, fit(value)));
+pub(super) fn http_cache_outcome(label: &str, value: String) {
+    with_callback(|cb| cb.record_http_cache_outcome(label, fit(value, MAX_STRING_SIZE)));
 }
 
-pub(super) fn http_cache_outcome(label: &str, value: String) {
-    with_callback(|cb| cb.record_http_cache_outcome(label, fit(value)));
+pub(super) fn unexpected_error(kind: &str, message: String) {
+    with_callback(|cb| cb.record_unexpected_error(kind, fit(message, MAX_MESSAGE_SIZE)));
 }
 
 /// Serializes tests that install a callback, since they all share the one
@@ -107,29 +105,52 @@ pub fn test_lock() -> parking_lot::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::{record_client_operation, ClientOperation};
+    use crate::telemetry::{record_client_operation, record_invalid_ad_item, ClientOperation};
     use parking_lot::Mutex;
 
     #[derive(Clone, Default)]
     struct RecordingTelemetry(Arc<Mutex<Vec<String>>>);
 
     impl Telemetry for RecordingTelemetry {
-        fn record_build_cache_error(&self, _label: &str, _value: String) {}
         fn record_client_error(&self, _label: &str, _value: String) {}
         fn record_client_operation_total(&self, label: &str) {
             self.0.lock().push(label.to_string());
         }
-        fn record_deserialization_error(&self, _label: &str, _value: String) {}
         fn record_http_cache_outcome(&self, _label: &str, _value: String) {}
+        fn record_unexpected_error(&self, kind: &str, message: String) {
+            self.0.lock().push(format!("{kind}: {message}"));
+        }
     }
 
     #[test]
     fn test_fit_cuts_on_a_char_boundary() {
-        assert_eq!(fit("short".into()), "short");
-        assert_eq!(fit("a".repeat(300)).len() as u64, MAX_STRING_SIZE.as_u64());
-        let cut = fit("é".repeat(200));
+        assert_eq!(fit("short".into(), MAX_STRING_SIZE), "short");
+        assert_eq!(
+            fit("a".repeat(300), MAX_STRING_SIZE).len() as u64,
+            MAX_STRING_SIZE.as_u64()
+        );
+        let cut = fit("é".repeat(200), MAX_STRING_SIZE);
         assert_eq!(cut.len(), 254);
         assert!(cut.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn test_records_unexpected_errors() {
+        let _lock = test_lock();
+        let recording = RecordingTelemetry::default();
+        install(recording.clone());
+
+        let error = serde_json::from_str::<u32>(&format!("\"{}\"", "x".repeat(2000))).unwrap_err();
+        record_invalid_ad_item(&error);
+
+        let recorded = recording.0.lock().clone();
+        let message = recorded
+            .iter()
+            .find_map(|r| r.strip_prefix("invalid_ad_item: "))
+            .expect("the error is recorded");
+        assert!(message.starts_with("invalid type: string"));
+        assert_eq!(message.len() as u64, MAX_MESSAGE_SIZE.as_u64());
+        uninstall();
     }
 
     #[test]

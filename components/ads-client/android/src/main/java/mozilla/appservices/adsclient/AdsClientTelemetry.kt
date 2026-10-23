@@ -6,16 +6,13 @@ package mozilla.appservices.adsclient
 
 import mozilla.appservices.adsclient.MozAdsTelemetry
 import org.mozilla.appservices.adsclient.GleanMetrics.AdsClient
+import org.mozilla.appservices.adsclient.GleanMetrics.Pings
 
 /**
  * AdsClientTelemetry is a thin wrapper used to expose
  * callbacks used to emit telemetry events to Glean.
  */
 class AdsClientTelemetry : MozAdsTelemetry {
-    override fun recordBuildCacheError(label: String, value: String) {
-        AdsClient.buildCacheError[label].set(value)
-    }
-
     override fun recordClientError(label: String, value: String) {
         AdsClient.clientError[label].set(value)
     }
@@ -24,11 +21,12 @@ class AdsClientTelemetry : MozAdsTelemetry {
         AdsClient.clientOperationTotal[label].add()
     }
 
-    override fun recordDeserializationError(label: String, value: String) {
-        AdsClient.deserializationError[label].set(value)
-    }
-
     override fun recordHttpCacheOutcome(label: String, value: String) {
         AdsClient.httpCacheOutcome[label].set(value)
+    }
+
+    override fun recordUnexpectedError(kind: String, message: String) {
+        AdsClient.unexpectedError.set(AdsClient.UnexpectedErrorObject(kind = kind, message = message))
+        Pings.adsClientErrors.submit()
     }
 }
