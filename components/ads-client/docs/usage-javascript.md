@@ -110,11 +110,10 @@ Telemetry interface for recording ads client metrics. You must provide an implem
 ```javascript
 /**
  * @typedef {Object} MozAdsTelemetry
- * @property {function(string, string): void} recordBuildCacheError
  * @property {function(string, string): void} recordClientError
  * @property {function(string): void} recordClientOperationTotal
- * @property {function(string, string): void} recordDeserializationError
  * @property {function(string, string): void} recordHttpCacheOutcome
+ * @property {function(string, string): void} recordUnexpectedError
  */
 ```
 
@@ -122,10 +121,6 @@ Telemetry interface for recording ads client metrics. You must provide an implem
 
 ```javascript
 class AdsClientTelemetry {
-    recordBuildCacheError(label, value) {
-        // Bind to your telemetry system
-    }
-
     recordClientError(label, value) {
         // Bind to your telemetry system
     }
@@ -134,12 +129,12 @@ class AdsClientTelemetry {
         // Bind to your telemetry system
     }
 
-    recordDeserializationError(label, value) {
+    recordHttpCacheOutcome(label, value) {
         // Bind to your telemetry system
     }
 
-    recordHttpCacheOutcome(label, value) {
-        // Bind to your telemetry system
+    recordUnexpectedError(kind, message) {
+        // Set the object metric and submit the ads-client-errors ping
     }
 }
 ```

@@ -10,11 +10,12 @@ use crate::telemetry::{self, Telemetry};
 /// Receives the ads client's metrics, for the app to record in Glean.
 #[uniffi::export(callback_interface)]
 pub trait MozAdsTelemetry: Send + Sync {
-    fn record_build_cache_error(&self, label: String, value: String);
     fn record_client_error(&self, label: String, value: String);
     fn record_client_operation_total(&self, label: String);
-    fn record_deserialization_error(&self, label: String, value: String);
     fn record_http_cache_outcome(&self, label: String, value: String);
+    /// Sets `ads_client.unexpected_error` and submits the `ads-client-errors`
+    /// ping.
+    fn record_unexpected_error(&self, kind: String, message: String);
 }
 
 /// Makes the consumer's callback the destination of every metric recorded from now on.
@@ -26,10 +27,6 @@ pub fn install(callback: Arc<dyn MozAdsTelemetry>) {
 struct MozAdsTelemetryWrapper(Arc<dyn MozAdsTelemetry>);
 
 impl Telemetry for MozAdsTelemetryWrapper {
-    fn record_build_cache_error(&self, label: &str, value: String) {
-        self.0.record_build_cache_error(label.to_string(), value);
-    }
-
     fn record_client_error(&self, label: &str, value: String) {
         self.0.record_client_error(label.to_string(), value);
     }
@@ -38,12 +35,11 @@ impl Telemetry for MozAdsTelemetryWrapper {
         self.0.record_client_operation_total(label.to_string());
     }
 
-    fn record_deserialization_error(&self, label: &str, value: String) {
-        self.0
-            .record_deserialization_error(label.to_string(), value);
-    }
-
     fn record_http_cache_outcome(&self, label: &str, value: String) {
         self.0.record_http_cache_outcome(label.to_string(), value);
+    }
+
+    fn record_unexpected_error(&self, kind: &str, message: String) {
+        self.0.record_unexpected_error(kind.to_string(), message);
     }
 }

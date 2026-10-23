@@ -85,11 +85,10 @@ Telemetry protocol for recording ads client metrics. You must provide an impleme
 
 ```swift
 protocol MozAdsTelemetry {
-    func recordBuildCacheError(label: String, value: String)
     func recordClientError(label: String, value: String)
     func recordClientOperationTotal(label: String)
-    func recordDeserializationError(label: String, value: String)
     func recordHttpCacheOutcome(label: String, value: String)
+    func recordUnexpectedError(kind: String, message: String)
 }
 ```
 
@@ -100,10 +99,6 @@ import MozillaRustComponents
 import Glean
 
 public final class AdsClientTelemetry: MozAdsTelemetry {
-    public func recordBuildCacheError(label: String, value: String) {
-        AdsClientMetrics.buildCacheError[label].set(value)
-    }
-
     public func recordClientError(label: String, value: String) {
         AdsClientMetrics.clientError[label].set(value)
     }
@@ -112,12 +107,13 @@ public final class AdsClientTelemetry: MozAdsTelemetry {
         AdsClientMetrics.clientOperationTotal[label].add()
     }
 
-    public func recordDeserializationError(label: String, value: String) {
-        AdsClientMetrics.deserializationError[label].set(value)
-    }
-
     public func recordHttpCacheOutcome(label: String, value: String) {
         AdsClientMetrics.httpCacheOutcome[label].set(value)
+    }
+
+    public func recordUnexpectedError(kind: String, message: String) {
+        AdsClientMetrics.unexpectedError.set(.init(kind: kind, message: message))
+        GleanMetrics.Pings.shared.adsClientErrors.submit()
     }
 }
 ```

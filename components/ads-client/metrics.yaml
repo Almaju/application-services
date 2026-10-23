@@ -8,29 +8,6 @@ $schema: moz://mozilla.org/schemas/glean/metrics/2-0-0
 
 
 ads_client:
-  build_cache_error:
-    type: labeled_string
-    description: >
-      Errors encountered when building the HTTP cache, labeled by error type.
-      The string value contains the error message or error type.
-    labels:
-      - builder_error
-      - database_error
-      - empty_db_path
-      - invalid_max_size
-      - invalid_ttl
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - technical
-    notification_emails:
-      - ahanot@mozilla.com
-      - llisi@mozilla.com
-      - toast@mozilla.com
-    expires: never
-
   client_error:
     type: labeled_string
     description: >
@@ -77,29 +54,6 @@ ads_client:
       - toast@mozilla.com
     expires: never
 
-  deserialization_error:
-    type: labeled_string
-    description: >
-      Deserialization errors encountered when parsing AdResponse data,
-      labeled by error type. The string value contains the error message or
-      details. Invalid ad items are skipped but these errors are tracked for
-      monitoring data quality issues.
-    labels:
-      - invalid_ad_item
-      - invalid_array
-      - invalid_structure
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - technical
-    notification_emails:
-      - ahanot@mozilla.com
-      - llisi@mozilla.com
-      - toast@mozilla.com
-    expires: never
-
   http_cache_outcome:
     type: labeled_string
     description: >
@@ -118,6 +72,34 @@ ads_client:
       - https://github.com/mozilla/application-services/pull/7111
     data_reviews:
       - https://github.com/mozilla/application-services/pull/7111
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - ahanot@mozilla.com
+      - llisi@mozilla.com
+      - toast@mozilla.com
+    expires: never
+
+  unexpected_error:
+    type: object
+    lifetime: ping
+    send_in_pings:
+      - ads-client-errors
+    description: >
+      An error that points to a bug or a broken contract, such as an ad that
+      does not deserialize, an invalid cache configuration or an SQL error.
+      `kind` says which, `message` is the error's message, cut to 1 KiB.
+    structure:
+      type: object
+      properties:
+        kind:
+          type: string
+        message:
+          type: string
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
     data_sensitivity:
       - technical
     notification_emails:

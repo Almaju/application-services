@@ -2,6 +2,11 @@
 
 [Full Changelog](In progress)
 
+## ⚠️ Breaking Changes ⚠️
+
+### Ads-Client
+- Unexpected errors (invalid cache config, cache SQL failures, ads that do not deserialize) are now recorded in a new `ads_client.unexpected_error` object metric, sent in a new `ads-client-errors` ping. `MozAdsTelemetry` gains `recordUnexpectedError(kind, message)` and loses `recordBuildCacheError` and `recordDeserializationError` ([bug 2047640](https://bugzilla.mozilla.org/show_bug.cgi?id=2047640)).
+
 # v160.0 (_2026-10-22_)
 
 ## ⚠️ Breaking Changes ⚠️

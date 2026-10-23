@@ -22,11 +22,10 @@ pub const TEST_CONTEXT_ID: &str = "00000000-0000-4000-8000-000000000001";
 pub struct NoopMozAdsTelemetry;
 
 impl MozAdsTelemetry for NoopMozAdsTelemetry {
-    fn record_build_cache_error(&self, _label: String, _value: String) {}
     fn record_client_error(&self, _label: String, _value: String) {}
     fn record_client_operation_total(&self, _label: String) {}
-    fn record_deserialization_error(&self, _label: String, _value: String) {}
     fn record_http_cache_outcome(&self, _label: String, _value: String) {}
+    fn record_unexpected_error(&self, _kind: String, _message: String) {}
 }
 
 #[cfg(feature = "stateful")]
