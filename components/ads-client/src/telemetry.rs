@@ -28,6 +28,8 @@ use std::fmt::Display;
 use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
 mod backend;
+pub(crate) mod errors;
+pub(crate) mod sink;
 
 #[cfg(test)]
 pub(crate) use backend::test_lock;

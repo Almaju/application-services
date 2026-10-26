@@ -28,6 +28,15 @@ impl<A: AdResponseValue> AdResponse<A> {
                         Ok(ad) => ads.push(ad),
                         Err(e) => {
                             telemetry::record_invalid_ad_item(&e);
+                            // Only deserialized again, for the path, when it already failed.
+                            let path = serde_path_to_error::deserialize::<_, A>(item)
+                                .err()
+                                .map(|e| e.path().to_string())
+                                .unwrap_or_default();
+                            telemetry::sink::record_error(
+                                None,
+                                telemetry::errors::invalid_ad_item(path),
+                            );
                         }
                     }
                 }

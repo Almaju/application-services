@@ -125,3 +125,146 @@ ads_client:
       - llisi@mozilla.com
       - toast@mozilla.com
     expires: never
+
+  request_success_rate:
+    type: rate
+    description: >
+      Ad requests that returned ads, out of all ad requests.
+    data_sensitivity: [technical, interaction]
+    bugs: &bugs
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_reviews: &data_reviews
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    notification_emails: &emails
+      - ahanot@mozilla.com
+      - llisi@mozilla.com
+      - toast@mozilla.com
+    expires: never
+
+  impression_success_rate:
+    type: rate
+    description: >
+      Impression callbacks answered with a success, out of all `record_impression` calls.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  click_success_rate:
+    type: rate
+    description: >
+      Click callbacks answered with a success, out of all `record_click` calls.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  fill_rate:
+    type: rate
+    description: >
+      On successful ad requests, the ads returned out of the ads requested.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  cache_hit_rate:
+    type: rate
+    description: >
+      Cache-first ad requests answered from the HTTP cache, out of all cache-first ad requests.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  request_duration_direct:
+    type: timing_distribution
+    time_unit: millisecond
+    description: >
+      How long callers wait for ads requested without OHTTP, successful or not.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  request_duration_ohttp:
+    type: timing_distribution
+    time_unit: millisecond
+    description: >
+      How long callers wait for ads requested through OHTTP, successful or not.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  context_id_lifetime:
+    type: custom_distribution
+    range_min: 1
+    range_max: 129600
+    bucket_count: 60
+    histogram_type: exponential
+    unit: minutes
+    description: >
+      How long a context ID was used before a new one replaced it or its
+      client shut down. IDs that end because the process is killed are not
+      recorded.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  expected_error:
+    type: event
+    description: >
+      An error that a healthy device, network and server can still produce,
+      such as a timeout or a 5xx response. `kind` values are listed in
+      `docs/telemetry.md`.
+    extra_keys:
+      operation:
+        type: string
+        description: The public method that failed, if the error failed one.
+      kind:
+        type: string
+        description: What went wrong, such as `timeout`.
+      code:
+        type: string
+        description: The HTTP status, network error code or SQLite code, if any.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  unexpected_error:
+    type: event
+    description: >
+      An error that points to a bug or a broken contract, such as a response
+      that does not deserialize or an SQL error. `kind` values are listed in
+      `docs/telemetry.md`.
+    extra_keys:
+      operation:
+        type: string
+        description: The public method that failed, if the error failed one.
+      kind:
+        type: string
+        description: What went wrong, such as `invalid_response`.
+      code:
+        type: string
+        description: The HTTP status or SQLite code, if any.
+      detail:
+        type: string
+        description: >
+          More about the error, without values from the user or the server,
+          such as the path of the field that did not deserialize.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never

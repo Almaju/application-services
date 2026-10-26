@@ -3,11 +3,19 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
+// By design: this module defines and adapts the deprecated `MozAdsTelemetry`,
+// including the code UniFFI generates for it.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use crate::telemetry::{self, Telemetry};
 
-/// Receives the ads client's metrics, for the app to record in Glean.
+/// Receives the ads client's first metrics, for the app to record in Glean.
+///
+/// Deprecated: implement [`MozAdsTelemetrySink`] instead. Both receive their
+/// metrics until this one is removed.
+#[deprecated(note = "Implement MozAdsTelemetrySink and pass it to telemetry_sink() instead")]
 #[uniffi::export(callback_interface)]
 pub trait MozAdsTelemetry: Send + Sync {
     fn record_build_cache_error(&self, label: String, value: String);
@@ -46,4 +54,26 @@ impl Telemetry for MozAdsTelemetryWrapper {
     fn record_http_cache_outcome(&self, label: &str, value: String) {
         self.0.record_http_cache_outcome(label.to_string(), value);
     }
+}
+
+/// Receives the ads client's metrics, for the app to record in Glean: one
+/// method per metric in `metrics.yaml`, named after it.
+#[uniffi::export(callback_interface)]
+pub trait MozAdsTelemetrySink: Send + Sync {
+    fn record_request_success_rate(&self, numerator: i32, denominator: i32);
+    fn record_impression_success_rate(&self, numerator: i32, denominator: i32);
+    fn record_click_success_rate(&self, numerator: i32, denominator: i32);
+    fn record_fill_rate(&self, numerator: i32, denominator: i32);
+    fn record_cache_hit_rate(&self, numerator: i32, denominator: i32);
+    fn record_request_duration_direct(&self, millis: i64);
+    fn record_request_duration_ohttp(&self, millis: i64);
+    fn record_context_id_lifetime(&self, minutes: i64);
+    fn record_expected_error(&self, operation: Option<String>, kind: String, code: Option<String>);
+    fn record_unexpected_error(
+        &self,
+        operation: Option<String>,
+        kind: String,
+        code: Option<String>,
+        detail: Option<String>,
+    );
 }

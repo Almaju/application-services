@@ -8,6 +8,16 @@
 
 - **BREAKING**: `update_credit_card` keeps the stored CVV when `cc_cvv` is `None`; `Some("")` clears it. Scrubbing encrypted data now clears the CVV along with the number. ([bug 2085717](https://bugzilla.mozilla.org/show_bug.cgi?id=2085717))
 
+## ✨ What's New ✨
+
+### Ads-Client
+- New metrics (success rates, fill rate, cache hit rate, request duration, context ID lifetime, and `expected_error` / `unexpected_error` events), passed to the new `MozAdsTelemetrySink` set with `MozAdsClientBuilder::telemetry_sink()` (`AdsClientTelemetrySink` on Android). See `components/ads-client/docs/telemetry.md`.
+
+## ✨ What's Changed ✨
+
+### Ads-Client
+- `MozAdsTelemetry` and `MozAdsClientBuilder::telemetry()` are deprecated in favor of `MozAdsTelemetrySink` and `telemetry_sink()`. Both keep receiving their metrics until the old ones are removed.
+
 # v160.0 (_2026-10-22_)
 
 ## ⚠️ Breaking Changes ⚠️

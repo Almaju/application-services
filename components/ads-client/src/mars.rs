@@ -26,11 +26,9 @@ use self::{
 };
 #[cfg(feature = "stateful")]
 use crate::ads::{Ads, PlacementId};
-#[cfg(feature = "stateful")]
-use crate::telemetry;
 use crate::{
     http_cache::{HttpCache, RequestHash},
-    CachePolicy,
+    telemetry, CachePolicy,
 };
 #[cfg(feature = "stateful")]
 use std::collections::HashMap;
@@ -85,7 +83,10 @@ impl MARSClient {
                 .extend(Headers::try_from(self.fetch_preflight()?)?);
         }
 
-        let response = self.transport.send(ad_request, &cache_policy, ohttp)?;
+        let (response, from_cache) = self.transport.send(ad_request, &cache_policy, ohttp)?;
+        if let CachePolicy::CacheFirst { .. } = cache_policy {
+            telemetry::sink::record_cache_lookup(from_cache);
+        }
         let ads = AdResponse::<A>::parse(response.json()?)?;
         Ok((ads, request_hash))
     }
@@ -115,7 +116,7 @@ impl MARSClient {
                 .extend(Headers::try_from(self.fetch_preflight()?)?);
         }
 
-        let response =
+        let (response, _) =
             self.transport
                 .send(ad_request, &CachePolicy::NetworkFirst { ttl: None }, ohttp)?;
         let raw: HashMap<String, Vec<serde_json::Value>> = response.json()?;
@@ -214,7 +215,7 @@ impl MARSClient {
     }
 
     fn fetch_preflight(&self) -> Result<preflight::PreflightResponse, CallbackRequestError> {
-        let response = self.transport.send(
+        let (response, _) = self.transport.send(
             PreflightRequest(self.environment.clone().into_url("ads-preflight")),
             &CachePolicy::CacheFirst { ttl: None },
             false,

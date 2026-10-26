@@ -15,12 +15,14 @@ use crate::mars::{
     ad_request::{AdContentCategory, AdPlacementRequest, IABContentTaxonomy},
     ad_response::AdResponse,
 };
+#[allow(deprecated)]
 use crate::MozAdsTelemetry;
 
 pub const TEST_CONTEXT_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 pub struct NoopMozAdsTelemetry;
 
+#[allow(deprecated)]
 impl MozAdsTelemetry for NoopMozAdsTelemetry {
     fn record_build_cache_error(&self, _label: String, _value: String) {}
     fn record_client_error(&self, _label: String, _value: String) {}
