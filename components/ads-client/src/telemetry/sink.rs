@@ -138,9 +138,10 @@ mod tests {
 
     use crate::telemetry::test_lock;
     use crate::test_utils::get_example_happy_image_response;
-    #[allow(deprecated)]
-    use crate::MozAdsTelemetry;
-    use crate::{MozAdsClient, MozAdsClientBuilder, MozAdsEnvironment, MozAdsPlacementRequest};
+    use crate::{
+        MozAdsClient, MozAdsClientBuilder, MozAdsEnvironment, MozAdsPlacementRequest,
+        MozAdsTelemetry,
+    };
 
     use super::*;
 
@@ -170,7 +171,6 @@ mod tests {
         }
     }
 
-    #[allow(deprecated)]
     impl MozAdsTelemetry for Calls {
         fn record_build_cache_error(&self, _label: String, _value: String) {}
         fn record_client_error(&self, label: String, _value: String) {

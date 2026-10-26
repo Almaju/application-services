@@ -3,10 +3,6 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-// By design: this module defines and adapts the deprecated `MozAdsTelemetry`,
-// including the code UniFFI generates for it.
-#![allow(deprecated)]
-
 use std::sync::Arc;
 
 use crate::telemetry::{self, Telemetry};
@@ -15,7 +11,6 @@ use crate::telemetry::{self, Telemetry};
 ///
 /// Deprecated: implement [`MozAdsTelemetrySink`] instead. Both receive their
 /// metrics until this one is removed.
-#[deprecated(note = "Implement MozAdsTelemetrySink and pass it to telemetry_sink() instead")]
 #[uniffi::export(callback_interface)]
 pub trait MozAdsTelemetry: Send + Sync {
     fn record_build_cache_error(&self, label: String, value: String);

@@ -27,14 +27,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
-#[allow(deprecated)]
-pub use telemetry::MozAdsTelemetry;
-pub use telemetry::MozAdsTelemetrySink;
-
-// By design: lets the UniFFI-exported `telemetry()` take the deprecated
-// callback without a warning in the code UniFFI generates for it.
-#[allow(deprecated)]
-type DeprecatedTelemetry = dyn MozAdsTelemetry;
+pub use telemetry::{MozAdsTelemetry, MozAdsTelemetrySink};
 
 #[derive(Default, uniffi::Record)]
 pub struct MozAdsRequestOptions {
@@ -91,7 +84,6 @@ struct MozAdsClientBuilderInner {
     cache_config: Option<MozAdsCacheConfig>,
     environment: Option<MozAdsEnvironment>,
     store_config: Option<MozAdsStoreConfig>,
-    #[allow(deprecated)]
     telemetry: Option<Arc<dyn MozAdsTelemetry>>,
     telemetry_sink: Option<Arc<dyn MozAdsTelemetrySink>>,
 }
@@ -146,7 +138,7 @@ impl MozAdsClientBuilder {
 
     /// Deprecated: use `telemetry_sink`. Both receive their metrics until this
     /// one is removed.
-    pub fn telemetry(self: Arc<Self>, telemetry: Box<DeprecatedTelemetry>) -> Arc<Self> {
+    pub fn telemetry(self: Arc<Self>, telemetry: Box<dyn MozAdsTelemetry>) -> Arc<Self> {
         self.0.lock().telemetry = Some(Arc::from(telemetry));
         self
     }
@@ -161,7 +153,6 @@ impl MozAdsClientBuilder {
 
 impl MozAdsClientBuilder {
     #[cfg(test)]
-    #[allow(deprecated)]
     pub fn fetch_telemetry(&self) -> Option<Weak<dyn MozAdsTelemetry>> {
         self.0.lock().telemetry.as_ref().map(Arc::downgrade)
     }
