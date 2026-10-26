@@ -1,0 +1,55 @@
+{
+ "changelog-required": {
+  "relevant": 603,
+  "flagged": 381,
+  "examples": [
+   "#7676 feat: Ads-Client Provides fix for images_or_spocs ordering issue",
+   "#7674 Bug 2084260 - move to AuthIssues when there's no refresh/session token",
+   "#7673 Bug 2084274 - clear the logged_out_from_auth_issues state",
+   "#7670 Bug 2084252, revert 2060539 for iOS",
+   "#7659 Bug 2082570 - Add dumps for search config v3 and update other search r",
+   "#7658 Fix breadcrumbs field in error support",
+   "#7646 Bug 2050097 - Add AI engine classification to search-config-v3.",
+   "#7642 AC-208 Use LazyDB to encapsulate required locks in AdsClient"
+  ]
+ },
+ "uniffi-api-break-gate": {
+  "relevant": 156,
+  "flagged": 136,
+  "examples": [
+   "#7672 Bug 1941569 - Leverage server error responses content in client errors",
+   "#7656 Bug 2081305 - Add studies and rollouts opt out events",
+   "#7653 ads-client: make telemetry a singleton with the glean-sym API",
+   "#7652 Bug 2080807 - Move create_static_key_manager and create_managed_encdec",
+   "#7648 Bug 2074008 - Expose a bridged sync engine for credit cards",
+   "#7642 AC-208 Use LazyDB to encapsulate required locks in AdsClient",
+   "#7637 Replace sync_manager.udl with uniffi macros.",
+   "#7629 refactor(ads-client): unified ads type"
+  ]
+ },
+ "schema-change-needs-migration": {
+  "relevant": 31,
+  "flagged": 5,
+  "examples": [
+   "#7568 Bug 2066257 - clamp absurd logins timestamps",
+   "#7164 feat(ads-client): reset cache on init failure or context id rotation",
+   "#7088 feat(ads-client): invalidate cache after click or impression record",
+   "#7036 refactor(ads-client): updating ads client cache control",
+   "#6573 sql-support updates"
+  ]
+ },
+ "tests-with-behaviour": {
+  "relevant": 359,
+  "flagged": 95,
+  "examples": [
+   "#7637 Replace sync_manager.udl with uniffi macros.",
+   "#7636 Bug 2011695 - Wire up the Glean error ping on iOS [ci full]",
+   "#7615 Bug 2011695 - Use glean-sym for Glean error ping on iOS",
+   "#7608 Bug 2071060 - Upgrade hyper dependency for nimbus-cli",
+   "#7583 Bug 2064759 - Setup auto-vacuum for new installs",
+   "#7564 Bug 2060541 - Recheck auth status on startup, weekly",
+   "#7554 Bug 2062665 - Surface new suggestion_id field in suggest component",
+   "#7530 E type alias in state machine transition code"
+  ]
+ }
+}

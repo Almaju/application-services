@@ -1,0 +1,2223 @@
+{
+  "chunk": "chunk_3",
+  "period": "2023-05-19 to 2023-11-02",
+  "threads_read": 612,
+  "rules": [
+    {
+      "id": "sql-schema-version-bump",
+      "title": "Bump schema VERSION and upgrade_from range on every schema change",
+      "area": "sql",
+      "problem": "Reviewers repeatedly blocked Suggest PRs that changed CREATE TABLE statements (or the stored JSON shape) without bumping `pub const VERSION` in schema.rs and/or without moving the `upgrade_from` match range. Without the bump, existing on-device databases keep the old schema and queries fail or silently miss data.",
+      "rule": "If a PR changes any DDL (CREATE/ALTER/DROP TABLE|INDEX|TRIGGER, column list) in components/*/src/schema.rs or components/*/sql/*.sql, it must also change `VERSION` in the same crate, and `ConnectionInitializer::upgrade_from` must handle exactly versions < VERSION (for throw-away DBs like suggest: the last range end must be VERSION-1, never VERSION).",
+      "enforcement": "ci-script",
+      "detect": "git diff origin/main -- 'components/*/src/schema.rs' 'components/*/sql/*.sql': if hunk text matches /\\b(CREATE|ALTER|DROP)\\s+(TABLE|INDEX|TRIGGER|VIEW)\\b|^\\s*[+-]\\s*\\w+\\s+(INTEGER|TEXT|BLOB|REAL)\\b/i and the line `pub const VERSION: u32 = N` is not in the diff -> fail. Second check (regex over schema.rs): parse `VERSION = N` and every range arm `a..=b` / `a..b` / literal in `fn upgrade_from`; fail if max handled version >= N or if (for migrating DBs like places/logins) no arm handles N-1.",
+      "autofix": false,
+      "count": 6,
+      "severity": "high",
+      "false_positive_risk": "low — DDL changes inside comments or test-only schemas could trigger it; allow an explicit `// schema-version-unchanged: <reason>` marker.",
+      "evidence": [
+        {
+          "ref": "inline 1279994432 PR#5745",
+          "quote": "issue (blocking): Important—please bump the `VERSION` constant to `2`."
+        },
+        {
+          "ref": "inline 1334893795 PR#5832",
+          "quote": "important: Please remember to bump the `VERSION` in this file, too, and bump the range in `upgrade_from` to throw away version 4 databases."
+        },
+        {
+          "ref": "inline 1344857810 PR#5841",
+          "quote": "Remember to update `upgrade_from`, too, please"
+        },
+        {
+          "ref": "inline 1346114068 PR#5841",
+          "quote": "Let's make this one version lower than the current. `upgrade_from` shouldn't be called if the database version  is current, but we want that to fail nosily with an error if it does."
+        },
+        {
+          "ref": "inline 1362781502 PR#5876",
+          "quote": "Could you please bump the range in `upgrade_from`, too, so that we'll throw away version 6 databases?"
+        },
+        {
+          "ref": "review 1627688181 PR#5786",
+          "quote": "The second bumps the schema version, which will make our consumers throw away their databases, and re-download all records again."
+        }
+      ]
+    },
+    {
+      "id": "sql-columns-not-null-and-keys",
+      "title": "Declare NOT NULL / PRIMARY KEY on schema columns unless nullability is intended",
+      "area": "sql",
+      "problem": "New tables were written with nullable columns and a missing PRIMARY KEY on the 1:1 detail table; reviewers had to add NOT NULL/PRIMARY KEY column by column, and conversely asked to make provider-specific columns nullable instead of fake values.",
+      "rule": "Every column in a new/changed CREATE TABLE must either carry NOT NULL, be (part of) the PRIMARY KEY, or have a trailing `-- nullable: <why>` comment. A `<parent>_id` column in a 1:1 detail table must be the PRIMARY KEY.",
+      "enforcement": "ast-grep/regex",
+      "detect": "Extract SQL from schema.rs raw strings and sql/*.sql; split CREATE TABLE bodies on top-level commas; flag column defs not matching /NOT NULL|PRIMARY KEY/i and lacking a `-- nullable` comment; flag tables named *_details|*_custom_details whose `*_id` column is not PRIMARY KEY.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "medium — some columns are legitimately optional; the explicit `-- nullable:` escape hatch keeps noise down.",
+      "evidence": [
+        {
+          "ref": "inline 1279991788 PR#5745",
+          "quote": "suggestion_id INTEGER PRIMARY KEY,"
+        },
+        {
+          "ref": "inline 1279991937 PR#5745",
+          "quote": "block_id INTEGER NOT NULL,"
+        },
+        {
+          "ref": "inline 1279992369 PR#5745",
+          "quote": "impression_url TEXT NOT NULL,"
+        },
+        {
+          "ref": "inline 1279992439 PR#5745",
+          "quote": "click_url TEXT NOT NULL,"
+        },
+        {
+          "ref": "inline 1266107110 PR#5723",
+          "quote": "Likewise, `block_id` is essentially an ad identifier only relevant to \"adm\" suggestions, we can make it nullable in the new schema."
+        }
+      ]
+    },
+    {
+      "id": "sql-foreign-key-on-delete",
+      "title": "Foreign keys must declare ON DELETE behaviour",
+      "area": "sql",
+      "problem": "A detail table referenced suggestions(id) without ON DELETE CASCADE, so pruning suggestions would leave orphaned detail rows (unbounded growth / stale data). Later code in the chunk still adds REFERENCES without it.",
+      "rule": "Every `REFERENCES t(col)` clause in DDL must be followed by an explicit `ON DELETE CASCADE|SET NULL|RESTRICT`; and `PRAGMA foreign_keys = ON` must be set by the connection initializer of that DB.",
+      "enforcement": "ast-grep/regex",
+      "detect": "regex over SQL strings: /REFERENCES\\s+\\w+\\s*\\([^)]*\\)(?![^,)]*ON\\s+DELETE)/i -> error. Also grep the crate's ConnectionInitializer::prepare for `foreign_keys` when any REFERENCES exists.",
+      "autofix": true,
+      "count": 1,
+      "severity": "medium",
+      "false_positive_risk": "low — explicit ON DELETE NO ACTION is still allowed when intended.",
+      "evidence": [
+        {
+          "ref": "inline 1275428186 PR#5745",
+          "quote": "I can't remember how suggestions are pruned and I'm too lazy to look, but I wonder if an \"on cascade delete\" should happen?"
+        }
+      ]
+    },
+    {
+      "id": "sql-string-style",
+      "title": "Format and alias-qualify SQL embedded in Rust strings",
+      "area": "sql",
+      "problem": "Many review rounds in suggest/db.rs were spent on SQL indentation, unqualified column names when aliases are used, trailing whitespace, double spaces and closing-paren placement — none of which rustfmt touches because SQL lives in string literals.",
+      "rule": "SQL in `execute*`, `query_*`, `prepare(_cached)`, `try_query_one`, `named_params!` call sites and schema strings must: qualify every column with its table alias when more than one table/alias is in scope, use one space between tokens, have no trailing whitespace, align continuation lines, and put the closing `);` of CREATE TABLE on its own line.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: capture string-literal first args of methods named /^(execute|execute_batch|query_row.*|query_rows.*|try_query_.*|prepare(_cached)?)$/ plus `const .*SQL: &str`; dump to temp .sql files and run `sqlfluff lint --dialect sqlite --rules RF02,RF03,LT01,LT02,LT05` (references.qualification/consistent, spacing, indentation). Cheap regex fallback: /[ \\t]+$/ inside raw strings, /\\S  +\\S/ (double space), /,\\s*[A-Z ]+\\)\\s*;/ for CREATE TABLE closing paren on last-column line.",
+      "autofix": true,
+      "count": 7,
+      "severity": "low",
+      "false_positive_risk": "medium — sqlfluff's sqlite dialect and format!-built SQL (placeholders like {vars}) need templating stubs.",
+      "evidence": [
+        {
+          "ref": "inline 1279980130 PR#5745",
+          "quote": "nitpick: The column name isn't ambiguous here, but since we're qualifying the others with `adm`, let's do the same for `suggestion_id`."
+        },
+        {
+          "ref": "inline 1279986483 PR#5745",
+          "quote": "nitpick: Could you fix the indentation for this, please?"
+        },
+        {
+          "ref": "inline 1281256660 PR#5745",
+          "quote": "FROM amp_custom_details amp"
+        },
+        {
+          "ref": "inline 1344607699 PR#5841",
+          "quote": "\"SELECT k.keyword_suffix FROM pocket_keywords k"
+        },
+        {
+          "ref": "inline 1344449638 PR#5841",
+          "quote": "Style nit."
+        },
+        {
+          "ref": "inline 1344847441 PR#5841",
+          "quote": "JOIN pocket_keywords k ON k.suggestion_id = s.id"
+        }
+      ]
+    },
+    {
+      "id": "sql-sqlite-idioms",
+      "title": "Use precise SQLite idioms (INSERT OR REPLACE, UNION ALL, typed DEFAULTs, NULL not sentinels)",
+      "area": "sql",
+      "problem": "Reviewers corrected MySQL-ism `REPLACE INTO`, `UNION` where `UNION ALL` was intended (needless dedup sort), `INTEGER ... DEFAULT ''` and `-1` sentinel columns used where NULL is meant.",
+      "rule": "In SQL strings: no bare `REPLACE INTO` (use `INSERT OR REPLACE`); `UNION` without `ALL` requires a `-- dedupe intended` comment; a column DEFAULT literal must match the declared affinity (INTEGER -> numeric, TEXT -> quoted); placeholder columns in UNION arms use `NULL AS col`, not -1/''.",
+      "enforcement": "ast-grep/regex",
+      "detect": "regex on extracted SQL: /^\\s*REPLACE\\s+INTO/im; /\\bUNION\\b(?!\\s+ALL)/i; /\\b(INTEGER|INT|REAL)\\b[^,]*DEFAULT\\s+'/i; /SELECT[^;]*\\b-1\\s+AS\\s+\\w+/i.",
+      "autofix": true,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low — patterns are narrow; UNION dedupe can be whitelisted with a comment.",
+      "evidence": [
+        {
+          "ref": "inline 1283934081 PR#5767",
+          "quote": "Q: per SQLite's [doc](https://www.sqlite.org/lang_replace.html), `REPLACE` is a shorthand of `INSERT OR REPLACE` borrowed from MySQL, I'd recommend using the latter for clarity."
+        },
+        {
+          "ref": "inline 1338013790 PR#5841",
+          "quote": "Note: in SQL, `UNION` will remove duplicates among all the SELECT rows, whereas `UNION ALL` will not, so `UNION ALL` should run faster here as there shouldn't be any duplicates in this case."
+        },
+        {
+          "ref": "inline 1372369159 PR#5884",
+          "quote": "`''` is technically legal—SQLite's type system is [relaxed by default](https://www.sqlite.org/datatype3.html)—but let's use a number if the column is declared as a number."
+        },
+        {
+          "ref": "inline 1344602990 PR#5841",
+          "quote": "I'd recommend using `NULL` instead of `-1` for the missing field."
+        }
+      ]
+    },
+    {
+      "id": "sql-use-sql-support-helpers",
+      "title": "Use sql_support helpers and ToSql/FromSql instead of hand-rolled SQL plumbing",
+      "area": "sql",
+      "problem": "Contributors re-implemented placeholder repetition, single-row queries and integer<->enum column conversions by hand, although sql_support (repeat_sql_vars, query_one/try_query_one, ConnExt) and rusqlite FromSql/ToSql already cover them.",
+      "rule": "Do not build `IN (?, ?, ...)` lists manually (use `sql_support::repeat_sql_vars`/`each_chunk`); single-value queries use `try_query_one`/`query_one`; enum-valued columns are INTEGER with `impl ToSql/FromSql` for the Rust enum and are read via `row.get::<_, MyEnum>()` rather than `from_u8(row.get::<_, u8>())`.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep rules: (1) `format!($S, ...)` where $S contains `IN ({` and the arg is built with `\"?\"`/`repeat(`/`join(\",\")` -> suggest repeat_sql_vars; (2) `$DB.query_row_and_then($SQL, $P, |row| row.get(0))` -> try_query_one; (3) `$E::from_u8(row.get::<_, u8>($C)?)` or `match row.get::<_, String>(\"provider\")?.as_str()` -> implement FromSql; (4) TEXT columns named provider|type|kind|status in DDL -> suggest INTEGER enum.",
+      "autofix": true,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low — patterns are specific to rusqlite usage in this repo.",
+      "evidence": [
+        {
+          "ref": "inline 1355618569 PR#5853",
+          "quote": "Could we use `sql_support::repeat_sql_vars` here? I thought for sure we had a helper like `repeat_vars` already..."
+        },
+        {
+          "ref": "inline 1355625462 PR#5853",
+          "quote": "If the types work out, could we use our `db.query_one` extension from `sql_support` here?"
+        },
+        {
+          "ref": "inline 1279979672 PR#5745",
+          "quote": "let's change the `provider` column to be an `INTEGER` instead of `TEXT`, and represent it as a Rust enum."
+        },
+        {
+          "ref": "inline 1280817043 PR#5745",
+          "quote": "Instead of writing out the `ProviderType::from_u8` conversion yourself, you can write `row.get::<_, ProviderType>(\"provider\")`, which will call your new `FromSql::column_result` conversion!"
+        }
+      ]
+    },
+    {
+      "id": "use-parking-lot-mutex",
+      "title": "Use parking_lot::Mutex/RwLock, not std::sync::Mutex",
+      "area": "concurrency",
+      "problem": "New components (suggest, as-ohttp-client) reached for std::sync::Mutex; reviewers asked for parking_lot because std mutexes poison on panic (turning one panic into permanent errors across the FFI) and force `.lock().unwrap()` everywhere.",
+      "rule": "Component and support crates must not use `std::sync::Mutex`/`RwLock`; use `parking_lot::{Mutex, RwLock}` (no `.unwrap()` on lock).",
+      "enforcement": "existing-clippy",
+      "detect": "clippy.toml: `disallowed-types = [{ path = \"std::sync::Mutex\", reason = \"use parking_lot::Mutex (no poisoning)\" }, { path = \"std::sync::RwLock\", reason = \"use parking_lot::RwLock\" }]`; enable `[workspace.lints.clippy] disallowed_types = \"deny\"`. Companion ast-grep: `$X.lock().unwrap()` -> remove unwrap after switching.",
+      "autofix": true,
+      "count": 2,
+      "severity": "medium",
+      "false_positive_risk": "low — a few non-component tools/tests may legitimately use std; allow via crate-level `#![allow(clippy::disallowed_types)]` with reason.",
+      "evidence": [
+        {
+          "ref": "inline 1264410890 PR#5723",
+          "quote": "Consider using `ParkingLot` - we've moved to that mainly so we can recover from certain panics, and as a bonus you get to `unwrap()` less :)"
+        },
+        {
+          "ref": "inline 1277634869 PR#5749",
+          "quote": "nit: we can use `parking_lot::Mutex` like we do in some of our other components, it doesn't get poisoned if a panic occurs and removes the need to handle a `Result` when locking!"
+        }
+      ]
+    },
+    {
+      "id": "lock-guard-scope",
+      "title": "Keep MutexGuard lifetimes explicit; never lock inside an if-let/match scrutinee",
+      "area": "concurrency",
+      "problem": "A remote_settings change did `if let Some(x) = self.remote_state.lock().field.clone() {...}` and then locked again inside the body — the temporary guard lives for the whole if-let, causing a deadlock; other threads used `drop(guard)` mid-function or re-acquired the lock leading to first-writer-wins races.",
+      "rule": "A `.lock()`/`.read()`/`.write()` call must not appear in the scrutinee of `if let`/`match`/`while let`; bind the needed value in its own statement or a `{ }` block. Avoid explicit `drop(guard)` in favour of a scope block, and document assumptions when a lock is released and re-acquired.",
+      "enforcement": "existing-clippy",
+      "detect": "Enable nursery lints `clippy::significant_drop_in_scrutinee` (exactly this deadlock) and `clippy::significant_drop_tightening` at warn in `[workspace.lints.clippy]`; ast-grep backup: `if let $P = $E.lock()$$$ { $$$ }` and `match $E.lock()$$$ { $$$ }`.",
+      "autofix": true,
+      "count": 3,
+      "severity": "high",
+      "false_positive_risk": "medium — nursery lints have some FPs; scope to component crates.",
+      "evidence": [
+        {
+          "ref": "inline 1282040812 PR#5764",
+          "quote": "This confused me a little - is it possible to match on the value in the state, so we don't early return here but still fall through to the `make_request` at the bottom?"
+        },
+        {
+          "ref": "inline 1282046920 PR#5764",
+          "quote": "now it seems possible multiple threads will race to update the base URL and the first will win."
+        },
+        {
+          "ref": "inline 1228642758 PR#5664",
+          "quote": "nit: What do we think about introducing another scope (i.e a `{ ` block) that way we avoid the explicit drop and make easier for the reader that the lock only lives within that scope"
+        }
+      ]
+    },
+    {
+      "id": "no-lock-across-callback-or-io",
+      "title": "Do not hold component locks across foreign callbacks or network IO; design DB access for single transactions",
+      "area": "concurrency",
+      "problem": "Reviewers flagged holding the writer mutex during HTTP ingestion, releasing the FxA lock around a blocking OAuth callback (allowing a second flow to race), and per-method mutex acquisition that makes multi-statement transactions impossible.",
+      "rule": "While a MutexGuard over component state or a DB connection is live, do not call (a) methods on foreign callback-interface objects (`Box<dyn Trait>`/`Arc<dyn Trait>` implemented in Kotlin/Swift) or (b) viaduct/remote-settings network calls. DB helper structs should take `&Connection`/`&Transaction` rather than locking internally per method.",
+      "enforcement": "custom-lint",
+      "detect": "dylint/rust-analyzer-based lint: track locals of type `MutexGuard<_>`/`parking_lot::MutexGuard<_>`; within their live range, flag calls whose receiver type is a trait object of a trait declared as UniFFI callback interface (UDL `callback interface` or `#[uniffi::export(callback_interface|with_foreign)]`) or calls into `viaduct::Request::send`, `remote_settings::Client::*`. Also flag `impl X { fn f(&self) { let conn = self.conn.lock(); ... } }` patterns in db.rs when >2 such methods exist (suggest DAO taking &Connection).",
+      "autofix": false,
+      "count": 3,
+      "severity": "high",
+      "false_positive_risk": "high — needs type info and call-graph; start as warn-only.",
+      "evidence": [
+        {
+          "ref": "inline 1264463071 PR#5723",
+          "quote": "Also, you hold the writer mutex while doing http, which is probably OK from a correctness POV, but depending on the foreign bindings implementations, and given the lock might be held for many seconds"
+        },
+        {
+          "ref": "inline 1264462750 PR#5723",
+          "quote": "It's a bit of a shame each of these needs to acquire the mutex, because it makes transactions tricky - eg, the store's `ingest` method can't really use a single transaction."
+        },
+        {
+          "ref": "inline 1228651538 PR#5664",
+          "quote": "It would help us if we have some tests here as well, maybe simple unit tests here that mock the handler"
+        }
+      ]
+    },
+    {
+      "id": "callback-interface-contract-docs",
+      "title": "Document threading, blocking, ordering and lifetime for every callback interface",
+      "area": "uniffi",
+      "problem": "For FxA's OAuthHandler/StorageHandler/EventHandler, reviewers kept asking which thread calls into the app, whether Rust blocks until the callback returns, whether save_state calls may reorder, and how long the callback object is retained.",
+      "rule": "Every UniFFI callback interface (UDL `callback interface`, `#[uniffi::export(callback_interface)]`, `#[uniffi::export(with_foreign)]` trait) and each of its methods must carry a doc comment that states: calling thread / whether Rust blocks on it, ordering/concurrency guarantees, and error behaviour.",
+      "enforcement": "uniffi-checker",
+      "detect": "Parse UDL: for each `callback interface X {` require a preceding comment block; for each method require a comment block. For proc-macro traits require `///` docs. Require the trait-level doc to match /thread|block|main|async|concurren/i. Fail with list of undocumented items.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "medium — keyword check is heuristic; human still verifies content.",
+      "evidence": [
+        {
+          "ref": "inline 1207168774 PR#5609",
+          "quote": "We might want to put warnings here and carefully evaluate the threading model of this -"
+        },
+        {
+          "ref": "inline 1228677958 PR#5664",
+          "quote": "Do you think it's worth it for us to also comment on the limitation of callback interfaces when it comes to releasing memory?"
+        },
+        {
+          "ref": "inline 1268478533 PR#5717",
+          "quote": "What happens if there are multiple `save_state` operations triggered back to back? is the idea that the callback interface is blocking?"
+        },
+        {
+          "ref": "inline 1228655416 PR#5664",
+          "quote": "We're losing some context by deleting those comments, we should document at least the expectation that we are enforcing in our oauth handler."
+        }
+      ]
+    },
+    {
+      "id": "uniffi-unique-prefixed-type-names",
+      "title": "Exported UniFFI type names must be unique across the megazord and component-prefixed",
+      "area": "uniffi",
+      "problem": "Swift sees the whole iOS megazord as one module, so generic names (Record, Attachment, Logger, ProviderType) collide with other components or with firefox-ios itself; the library-mode switch broke firefox-ios on `Logger`, forcing a breaking rename.",
+      "rule": "Every Record/Enum/Object/Error/CallbackInterface/custom type exported via UDL or proc-macros must (a) be unique across all crates linked into megazords/ios-rust (and focus) and megazords/full, (b) not be in a denylist of generic/platform-colliding names, and (c) start with the component's configured prefix (e.g. RemoteSettings*, Suggest*, Fxa*, Nimbus*).",
+      "enforcement": "uniffi-checker",
+      "detect": "Build the megazord cdylib and run `uniffi-bindgen` library-mode metadata dump (or parse all *.udl + `#[derive(uniffi::Record|Enum|Object|Error)]`/`#[uniffi::export(callback_interface)]`); build map name->crates; fail on duplicates; fail on names in denylist {Logger, Level, Record, Attachment, Error, Config, Url, Data, Date, Result, Provider, ProviderType, Type, State, Event, Handler, Client}; warn when name lacks the per-crate prefix from a checker config (prefix list in tools/uniffi-names.toml).",
+      "autofix": false,
+      "count": 5,
+      "severity": "high",
+      "false_positive_risk": "low for duplicates/denylist; medium for prefix rule (existing names need a baseline).",
+      "evidence": [
+        {
+          "ref": "inline 1200749721 PR#5593",
+          "quote": "While you’re here, would it be worth renaming `Attachment` to `RemoteSettingsAttachment`, too?"
+        },
+        {
+          "ref": "inline 1280826805 PR#5745",
+          "quote": "we have a convention of prefixing UDL types, to avoid too-generic names conflicting with other components."
+        },
+        {
+          "ref": "inline 1283407784 PR#5592",
+          "quote": "rust_log_forwarder is creating a swift namespace conflict with Firefox iOS causing build breakage on my local firefox-ios, lets either rename the `Logger` type"
+        },
+        {
+          "ref": "review 1559741406 PR#5592",
+          "quote": "Looks like this ended up being a breaking change for firefox-ios because of a swift name conflict"
+        },
+        {
+          "ref": "inline 1284841046 PR#5769",
+          "quote": "Is this a breaking change for Firefox Android?"
+        }
+      ]
+    },
+    {
+      "id": "uniffi-exported-name-hygiene",
+      "title": "Keep implementation words (Rust, Host, Type, Impl) out of exported names",
+      "area": "naming",
+      "problem": "Exported types like FxaRustAuthState, HostMetricsHandler and ProviderType leaked implementation framing or redundant suffixes into Kotlin/Swift APIs, and reviewers asked for plain consumer-facing names.",
+      "rule": "Names of exported UniFFI items must not contain `Rust`, `Ffi`, `Uniffi`, `Host`, or end in `Type`/`Impl`/`Inner`, unless allowlisted.",
+      "enforcement": "uniffi-checker",
+      "detect": "Over the same exported-name inventory as uniffi-unique-prefixed-type-names: regex /(Rust|Ffi|Uniffi|Host)|(Type|Impl|Inner)$/ -> warn; allowlist file for existing names.",
+      "autofix": false,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "medium — some names (e.g. VisitType) are legitimate; needs allowlist.",
+      "evidence": [
+        {
+          "ref": "inline 1347543629 PR#5851",
+          "quote": "naming nit: What do you think about removing the `Rust` here?"
+        },
+        {
+          "ref": "inline 1376251481 PR#5887",
+          "quote": "Hmmm maybe `InternalAuthState` or something of the sort?"
+        },
+        {
+          "ref": "inline 1348696209 PR#5857",
+          "quote": "Nit: naming. Could this be just `MetricsHandler`?"
+        },
+        {
+          "ref": "inline 1280826805 PR#5745",
+          "quote": "\"Type\" is a little redundant"
+        }
+      ]
+    },
+    {
+      "id": "uniffi-typed-params-not-strings",
+      "title": "Use typed UniFFI params (records, maps, enums, custom types) instead of stringly-typed blobs",
+      "area": "uniffi",
+      "problem": "APIs glommed several values into one JSON string, took a sequence where a map keyed by id was natural, and passed URLs/scopes as raw strings — causing extra (de)serialization and unclear contracts in Kotlin/Swift.",
+      "rule": "Exported functions/fields must not accept or return `string` that encodes structured data (JSON, URL, scope lists, ids+values); use `record<string, T>`, dictionaries, enums or custom types (e.g. `Url`, `JsonObject`). Lists of keyed items should be `record<string, T>`.",
+      "enforcement": "uniffi-checker",
+      "detect": "For each exported param/field of type string|String: warn if name matches /(_json|json_|config|_url$|^url$|scope|payload|value)$/ or doc mentions JSON/URL; warn for `sequence<JsonObject>`/`Vec<serde_json::Value>` params named *configs/*values (suggest map). Kotlin side: detekt custom rule on public `fun x(...: String)` named *Url.",
+      "autofix": false,
+      "count": 6,
+      "severity": "medium",
+      "false_positive_risk": "high — name heuristics; output as review hints, not failures.",
+      "evidence": [
+        {
+          "ref": "inline 1200477854 PR#5557",
+          "quote": "Nit: the `Value` is fine as a string, but I'm not a fan of the `feature_id` and `value` glommed together into an arbitrary string."
+        },
+        {
+          "ref": "inline 1202504722 PR#5557",
+          "quote": "I'd really like this as a `Map<String, JsonObject>`"
+        },
+        {
+          "ref": "inline 1202102281 PR#5557",
+          "quote": "I think you'd avoid a lot of serialization/deserialization if you passed in a `HashMap<String, JsonObject>`."
+        },
+        {
+          "ref": "inline 1231361021 PR#5659",
+          "quote": "How do you feel about using `Url` here?"
+        },
+        {
+          "ref": "inline 1244316651 PR#5686",
+          "quote": "should we be using urls in the new api?"
+        },
+        {
+          "ref": "inline 1244319753 PR#5686",
+          "quote": "same question re this being in the UDL, and also why it's not used as the param to, say, `getAccessToken()`."
+        }
+      ]
+    },
+    {
+      "id": "uniffi-no-gratuitous-optionals",
+      "title": "Do not make exported fields/returns optional (or default required fields) without a reason",
+      "area": "uniffi",
+      "problem": "Reviewers removed `T?` on always-present values (provider, coenrolling id lists), asked for empty lists instead of nullable lists, questioned `String?` returns that should be errors, and removed `= \"\"` defaults that let callers build invalid queries.",
+      "rule": "In UDL/proc-macro exports and public Kotlin/Swift wrappers: no optional collections (`sequence<T>?`, `record<..>?`, `Option<Vec<_>>`, `List<T>?`, `[T]?`); optional scalars need a doc line saying when they are null; dictionary fields that are semantically required must not have a default value.",
+      "enforcement": "uniffi-checker",
+      "detect": "UDL regex: /(sequence|record)<[^>]+>\\?/; proc-macro AST: `Option<Vec<` / `Option<HashMap<` in `#[derive(uniffi::Record)]` fields and `#[uniffi::export]` signatures; Kotlin regex in components/*/android/src/main: /fun \\w+\\([^)]*\\)\\s*:\\s*List<[^>]+>\\?/ and `): List<.*>? = null`; UDL dictionary fields `string \\w+ = \"\";` -> warn; `T?` fields without a preceding comment -> warn.",
+      "autofix": true,
+      "count": 6,
+      "severity": "medium",
+      "false_positive_risk": "medium — some optional collections are meaningful (absent vs empty); allow with comment.",
+      "evidence": [
+        {
+          "ref": "inline 1244460914 PR#5688",
+          "quote": "I don't think this should be optional. You can always use `listOf()` if you want an empty list."
+        },
+        {
+          "ref": "inline 1244458396 PR#5688",
+          "quote": "The return type doesn't need to be optional."
+        },
+        {
+          "ref": "inline 1280828388 PR#5745",
+          "quote": "...And, if you do the `provider` trick I mentioned above, this can change to be non-optional!"
+        },
+        {
+          "ref": "inline 1281029084 PR#5745",
+          "quote": "it's not clear this needs to be an option - it looks like you panic when reading the database and find an unknown value."
+        },
+        {
+          "ref": "inline 1265491389 PR#5723",
+          "quote": "I'm wondering what we can do to limit the cases of someone un-intentionally constructing a SuggestionQuery without a keyword"
+        },
+        {
+          "ref": "inline 1244317848 PR#5686",
+          "quote": "when would this return null? If only when the account is in a bad state I wonder if an error return is more appropriate?"
+        }
+      ]
+    },
+    {
+      "id": "prefer-enums-over-bool-flags",
+      "title": "Replace boolean parameters/state flags with enums or separate functions",
+      "area": "api-design",
+      "problem": "FxA code accumulated `new(config, true)`, `get_access_token(scope, None, false)`, `disconnect(from_auth_issues: bool)`, `Disconnected(boolean from_auth_issues)` and state classes with two booleans; reviewers asked for enum variants or distinct constructors because call sites are unreadable and invalid combinations are representable.",
+      "rule": "Public/exported functions and constructors must not take bool parameters (except a single well-named builder setter); exported enum variants and state records must not carry bool flags that select behaviour — model them as variants. Call sites must not pass bare `true`/`false` literals to crate-internal fns with >1 parameter.",
+      "enforcement": "existing-clippy",
+      "detect": "clippy.toml: `max-fn-params-bools = 0` with `clippy::fn_params_excessive_bools` (pedantic) and `max-struct-bools = 1` with `clippy::struct_excessive_bools` enabled for component crates; uniffi-checker: flag `boolean` args in UDL interface methods/constructors and `boolean` fields inside `[Enum] interface` variants; ast-grep: `$F($$$, true|false, $$$)` where $F is a crate fn -> warn (suggest enum/const). Kotlin: detekt `BooleanPropertyNaming` + custom rule for >1 Boolean ctor params in sealed-class states.",
+      "autofix": false,
+      "count": 6,
+      "severity": "medium",
+      "false_positive_risk": "medium — some bools (e.g. ignore_cache) were debated; treat as warning.",
+      "evidence": [
+        {
+          "ref": "inline 1347535807 PR#5851",
+          "quote": "What do you think about turning the boolean here into another enum variant?"
+        },
+        {
+          "ref": "inline 1268525942 PR#5717",
+          "quote": "What do you think about making a new constructor for the `internal::FirefoxAccount` and the `StateManager` instead of passing booleans?"
+        },
+        {
+          "ref": "inline 1268532173 PR#5717",
+          "quote": "nit: the `from_auth_issues` is propagating all the way down, is there value from refactoring this a bit into a second \"handle_auth_issue\" or something of that form?"
+        },
+        {
+          "ref": "inline 1346313994 PR#5851",
+          "quote": "which would kill both booleans from here and make things a little clearer?"
+        },
+        {
+          "ref": "inline 1347554475 PR#5851",
+          "quote": "Should this be `true` because we always expect the key to exist for sync?"
+        },
+        {
+          "ref": "inline 1347554979 PR#5851",
+          "quote": "Here too on requiring the key for sync?"
+        }
+      ]
+    },
+    {
+      "id": "no-test-only-methods-over-ffi",
+      "title": "Do not expose test-only methods through UDL/callback interfaces",
+      "area": "uniffi",
+      "problem": "A metrics callback interface grew `get_enrollment_status_records()` and `clear()` only so Rust tests could inspect it, forcing every Kotlin/Swift/Python implementer to implement test hooks.",
+      "rule": "Methods on exported interfaces/callback interfaces that are only called from `#[cfg(test)]` code or tests/ must not be part of the FFI surface; use test-only setters, mocks, or `downcast` in Rust tests.",
+      "enforcement": "uniffi-checker",
+      "detect": "For each exported/UDL method name, grep Rust call sites: if all non-generated call sites are inside `#[cfg(test)]` modules, tests/ dirs or *_test.rs, and no Kotlin/Swift/Python non-test file calls it -> fail. Also regex warn on exported names /(^test_|_for_test(s|ing)?$|^clear$|^reset_for_test)/.",
+      "autofix": false,
+      "count": 2,
+      "severity": "medium",
+      "false_positive_risk": "medium — some test helpers are deliberately exported for app tests; allowlist.",
+      "evidence": [
+        {
+          "ref": "inline 1348699453 PR#5857",
+          "quote": "These are only used for testing; is there a better way of testing without exposing these methods?"
+        },
+        {
+          "ref": "inline 1348754843 PR#5857",
+          "quote": "This is the only place we use `get_enrollment_status_records`; if we move it to `MockHostMetrics` could `downcast_ref` be used to cast it?"
+        }
+      ]
+    },
+    {
+      "id": "uniffi-error-variants-actionable",
+      "title": "Exported error variants must be documented, actionable for consumers and actually raised by Rust",
+      "area": "errors",
+      "problem": "Reviewers questioned an `UnrecoverableServerError` used for client bugs, a `ScopedKeyMissing` consumers can't act on, a `Panic` variant documented as thrown only by Kotlin bindings, and abbreviated variant names.",
+      "rule": "Every variant of an error exposed over FFI (UDL `[Error]`, `#[derive(uniffi::Error)]`, the error type of `ApiResult`) must have a doc comment that tells the consumer what to do; names must be unabbreviated and describe the condition (not `Unrecoverable*`/`Other` without docs); every variant must be constructed somewhere in Rust (not only in wrapper code).",
+      "enforcement": "uniffi-checker",
+      "detect": "Parse UDL `[Error] enum|interface` and Rust enums with `#[derive(uniffi::Error)]` or used as `ApiResult<T, E>`: (1) missing `//`/`///` doc -> fail; (2) name regex /Unrecoverable|^Other$|Unknown|Panic/ -> warn; (3) abbreviation list {Prop, Cfg, Err, Msg, Fe, Th} in CamelCase segments -> warn; (4) `rg '<Enum>::<Variant>'` in components/<crate>/src excluding the enum definition -> if zero hits, fail (variant never produced in Rust).",
+      "autofix": false,
+      "count": 6,
+      "severity": "medium",
+      "false_positive_risk": "medium — (4) misses variants produced via From impls/macros; check `From` impls too.",
+      "evidence": [
+        {
+          "ref": "inline 1268182237 PR#5713",
+          "quote": "heh I know you didn't change this but this seems like an unrecoverable client error not a server one"
+        },
+        {
+          "ref": "inline 1347549604 PR#5851",
+          "quote": "How do we expect a consumer to recover from this? They'd probably need to re-auth, which we might be able to abstract away the error by re-using the `Authentication` variant.."
+        },
+        {
+          "ref": "inline 1374795871 PR#5887",
+          "quote": "naming nit: What do we think of naming this something more clear that the scoped key was missing in the server response as the comment suggests?"
+        },
+        {
+          "ref": "inline 1205818160 PR#5595",
+          "quote": "To follow up from Tarik's comment, something seems wrong if Kotlin/Swift are *throwing* these errors?"
+        },
+        {
+          "ref": "inline 1204672367 PR#5595",
+          "quote": "For a followup: I would be surprised if this is actually used correctly, worth investigating"
+        },
+        {
+          "ref": "inline 1218094080 PR#5620",
+          "quote": "Nit: `InvalidPropertyError`"
+        }
+      ]
+    },
+    {
+      "id": "persisted-state-serde-migration",
+      "title": "Changes to persisted serde state need a versioned migration and an upgrade test",
+      "area": "serde",
+      "problem": "Dropping `device_capabilities` from FxA's persisted StateV2 JSON (and adding new fields) was flagged as a potential data-loss/behaviour break for existing users unless migrated and tested across an upgrade.",
+      "rule": "For structs that are persisted to disk/app storage (e.g. fxa-client `StateV2`, nimbus/suggest meta JSON): removing or renaming a field requires a new version + migration path; added fields must be `#[serde(default)]`; the PR must add a test deserializing a fixture of the previous format.",
+      "enforcement": "ci-script",
+      "detect": "Maintain a list of persisted types (or mark them with `// PERSISTED-STATE` comment). On diff: if a field line is removed/renamed inside such a struct -> fail unless a new `StateVn`/migration fn and a test containing a JSON fixture of the old shape are added; ast-grep: new field in a persisted struct without `#[serde(default)]` or `Option<_>` -> fail.",
+      "autofix": false,
+      "count": 2,
+      "severity": "high",
+      "false_positive_risk": "low — scoped to explicitly marked types.",
+      "evidence": [
+        {
+          "ref": "inline 1347565106 PR#5851",
+          "quote": "**important**: Do we need migrate and delete those device capabilities if we remove them from the schema?"
+        },
+        {
+          "ref": "inline 1347568925 PR#5851",
+          "quote": "ditto the above, we should introduce some tests that make sure the device capabilities are migrated properly and receiving send tab works before and after an upgrade"
+        }
+      ]
+    },
+    {
+      "id": "breaking-change-declared",
+      "title": "Detect public binding changes and require a declared breaking change + consumer PRs",
+      "area": "uniffi",
+      "problem": "Renames, removed migrations, library-mode packaging and new constructor params broke firefox-android, firefox-ios or experimenter (cirrus) and were only caught by reviewers asking 'is this breaking?'.",
+      "rule": "If the generated Kotlin/Swift/Python public API changes incompatibly (removed/renamed type, member or method; changed signature; new required ctor arg), the PR must add an entry under `### ⚠️ Breaking Changes ⚠️` in CHANGELOG.md and tick the breaking-change checkbox / reference consumer branches (`[firefox-android: ...]`, `[firefox-ios: ...]`).",
+      "enforcement": "ci-script",
+      "detect": "In CI build the megazords for base and head, run `uniffi-bindgen generate --library` for kotlin/swift/python into two dirs, extract public declarations (ktlint/kotlinc -Xdump-declarations, swift-api-digester or regex over `public`), diff; any removal/signature change -> require CHANGELOG diff containing 'Breaking Changes' and PR body checkbox checked; otherwise fail. Cheaper fallback: diff *.udl and `#[uniffi::export]`/`#[derive(uniffi::*)]` items with ast-grep.",
+      "autofix": false,
+      "count": 8,
+      "severity": "high",
+      "false_positive_risk": "low — API diff is mechanical; additive changes pass.",
+      "evidence": [
+        {
+          "ref": "inline 1284841046 PR#5769",
+          "quote": "Is this a breaking change for Firefox Android?"
+        },
+        {
+          "ref": "review 1505403865 PR#5692",
+          "quote": "+1 to removing the migration - this is a breaking change for iOS though so we should make sure the iOS side of the story is cleaned up as well"
+        },
+        {
+          "ref": "review 1559741406 PR#5592",
+          "quote": "Looks like this ended up being a breaking change for firefox-ios because of a swift name conflict"
+        },
+        {
+          "ref": "inline 1379226876 PR#5891",
+          "quote": "Hmm. This is going to be a breaking change for cirrus over in mozilla/experimenter."
+        },
+        {
+          "ref": "review 1647169191 PR#5846",
+          "quote": "I'm not sure how open the android team is to these types of breaking changes"
+        },
+        {
+          "ref": "review 1475144544 PR#5659",
+          "quote": "+1 to making sure consumer PRs are up if needed"
+        }
+      ]
+    },
+    {
+      "id": "changelog-entry-required",
+      "title": "Require a CHANGELOG.md entry for consumer-visible changes",
+      "area": "docs-changelog",
+      "problem": "Reviewers repeatedly approved 'r+wc' contingent on adding a changelog entry, or asked to add a sentence and PR link to an existing one.",
+      "rule": "If a PR touches non-test code in components/**/src, *.udl, components/*/{android,ios}/** (non-test), megazords/**, tools/nimbus-gradle-plugin or install-nimbus-cli.sh, CHANGELOG.md must change in the same PR (unless the PR title/label contains `[no changelog]`), and the new bullet must contain a link `([#N](https://github.com/mozilla/application-services/pull/N))`.",
+      "enforcement": "ci-script",
+      "detect": "git diff --name-only origin/main...HEAD | grep -E '^(components/.*/src/|components/.*\\.udl$|components/.*/(android|ios)/|megazords/|tools/nimbus-gradle-plugin/|install-nimbus-cli\\.sh)' | grep -vE '/(tests?|test)/|_test\\.rs$|Test(s)?\\.(kt|swift)$' -> if non-empty and CHANGELOG.md not in list and no skip marker -> fail. Then check added CHANGELOG lines starting with '- ' match /\\(\\[#\\d+\\]\\(https:\\/\\/github\\.com\\/mozilla\\/application-services\\/pull\\/\\d+\\)\\)/.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "medium — internal refactors don't need entries; skip marker handles it.",
+      "evidence": [
+        {
+          "ref": "inline 1210471571 PR#5613",
+          "quote": "If you could add a changelog before merging please that'd be great!"
+        },
+        {
+          "ref": "review 1477476600 PR#5662",
+          "quote": "Also if you could add a changelog entry that'd be great!"
+        },
+        {
+          "ref": "review 1525133376 PR#5721",
+          "quote": "can you add a changelog entry before merging please?"
+        },
+        {
+          "ref": "review 1555322747 PR#5749",
+          "quote": "Do you mind adding a short entry to the changelog in https://github.com/mozilla/application-services/blob/main/CHANGELOG.md under the current (118) release?"
+        },
+        {
+          "ref": "inline 1261014343 PR#5716",
+          "quote": "Could you add a sentence and PR link to"
+        }
+      ]
+    },
+    {
+      "id": "changelog-entry-quality",
+      "title": "Spell-check CHANGELOG entries and verify the identifiers they mention",
+      "area": "docs-changelog",
+      "problem": "CHANGELOG bullets shipped typos (`recordExperimentExposre`, `borken`), named the wrong field (`app_id` vs `app_name`), used vague/incorrect terms ('Nimbus only', 'interface'), and a release cut left `[Full Changelog](In progress)`.",
+      "rule": "New CHANGELOG lines must pass a spellchecker; every backticked identifier in a new bullet must exist in the diff or the tree; release headings `# vN (_date_)` must have a real compare link instead of 'In progress'.",
+      "enforcement": "ci-script",
+      "detect": "Run `typos --diff` / codespell on added CHANGELOG lines; for each `` `ident` `` in added lines, `git grep -q -w ident` (case-sensitive, also try snake_case<->camelCase) else warn; regex: if heading /^# v\\d+\\.\\d+ \\(_\\d{4}-\\d{2}-\\d{2}_\\)/ is added and the next 'Full Changelog' line contains 'In progress' -> fail.",
+      "autofix": true,
+      "count": 7,
+      "severity": "low",
+      "false_positive_risk": "medium — prose identifiers like Kotlin names generated from Rust need camelCase normalization.",
+      "evidence": [
+        {
+          "ref": "inline 1242984093 PR#5685",
+          "quote": "The `Nimbus only` is a little esoteric; perhaps you can refer to the stateful Nimbus SDK or the Nimbus SDK for mobile?"
+        },
+        {
+          "ref": "inline 1254824489 PR#5715",
+          "quote": "Add `recordExperimentExposure` to `FeatureHolder`, and substitute `{experiment}` for experiment slugs at enrollment in the feature configuration"
+        },
+        {
+          "ref": "inline 1269500805 PR#5736",
+          "quote": "nit - typo - `borken`"
+        },
+        {
+          "ref": "inline 1281961703 PR#5764",
+          "quote": "\"interface\" doesn't quite seem the correct word here."
+        },
+        {
+          "ref": "inline 1324321727 PR#5813",
+          "quote": "match the configured `app_name` and `channel`"
+        },
+        {
+          "ref": "inline 1335853133 PR#5837",
+          "quote": "This needs updating also."
+        }
+      ]
+    },
+    {
+      "id": "spellcheck-code-and-docs",
+      "title": "Run a spellchecker over changed comments, docstrings, identifiers and help text",
+      "area": "docs-changelog",
+      "problem": "A long tail of typo nits (throwns, birnary, unparasble, Enusre, keep/keeps, a/an, sentence fragments) consumed reviewer attention across Rust, Kotlin, UDL and shell.",
+      "rule": "Changed lines in *.rs, *.udl, *.kt, *.swift, *.sh, *.py, *.md, *.yaml must pass `typos` (identifiers + comments) with a repo `_typos.toml` allowlist.",
+      "enforcement": "ci-script",
+      "detect": "`typos --format brief $(git diff --name-only origin/main...HEAD)` limited to added lines (or `typos --diff`); fail on findings; `typos -w` as autofix. Add a grammar-lite regex for doc comments: /\\ban [bcdfgjklmnpqrstvwxz]\\w+/i on `///`/`//` lines (a/an misuse).",
+      "autofix": true,
+      "count": 7,
+      "severity": "low",
+      "false_positive_risk": "low — typos has low FP; domain words go in _typos.toml.",
+      "evidence": [
+        {
+          "ref": "inline 1244254625 PR#5686",
+          "quote": "nit: `throwns` appears in most docstrings"
+        },
+        {
+          "ref": "inline 1304942607 PR#5787",
+          "quote": "Nit: s/birnary/binary/."
+        },
+        {
+          "ref": "inline 1312225687 PR#5786",
+          "quote": "for (record_id, unparsable_record) in unknown_records.0 {"
+        },
+        {
+          "ref": "inline 1346306080 PR#5851",
+          "quote": "nit: typo in comment."
+        },
+        {
+          "ref": "inline 1220294240 PR#5609",
+          "quote": "I think the change of `a` to `an` here is incorrect."
+        },
+        {
+          "ref": "inline 1277656594 PR#5749",
+          "quote": "nit: sentence fragment"
+        }
+      ]
+    },
+    {
+      "id": "doc-links-and-identifiers-resolve",
+      "title": "Doc comments must reference existing items (deny broken intra-doc links, check backticked names)",
+      "area": "docs-changelog",
+      "problem": "Many comments were stale after refactors: wrong state names in docs, comments describing removed behaviour, copy-pasted comments naming the wrong suggestion type, docs referring to callbacks that no longer exist.",
+      "rule": "`cargo doc` must run with `-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links`; doc/comments that mention a backticked Rust/Kotlin identifier (`Foo::bar`, `FxaState::X`) must refer to an item that exists; KDoc `[Symbol]` links must resolve (dokka `failOnWarning`).",
+      "enforcement": "custom-lint",
+      "detect": "CI: `RUSTDOCFLAGS='-D rustdoc::broken_intra_doc_links' cargo doc --no-deps --workspace --document-private-items`. Custom script: for added/modified comment lines, extract `` `Path::Ident` `` / `` `ident()` `` tokens and check via `git grep -w` within the crate; warn if missing. Kotlin: dokka with `failOnWarning = true` for components/*/android.",
+      "autofix": false,
+      "count": 12,
+      "severity": "medium",
+      "false_positive_risk": "medium — prose mentions of external APIs need allowlisting; intra-doc check itself is precise.",
+      "evidence": [
+        {
+          "ref": "inline 1220313059 PR#5609",
+          "quote": "I think this should be `Authenticating`?"
+        },
+        {
+          "ref": "inline 1232769669 PR#5659",
+          "quote": "I think we fixed that so it's no longer true."
+        },
+        {
+          "ref": "inline 1334893966 PR#5832",
+          "quote": "nitpick: Did you forget to revert this?"
+        },
+        {
+          "ref": "inline 1344449053 PR#5841",
+          "quote": "Nit: This isn't specific to AMP-Wikipedia anymore!"
+        },
+        {
+          "ref": "inline 1361425047 PR#5851",
+          "quote": "looks like the description doesn't match the `FxaEventHandler` implementation any more"
+        },
+        {
+          "ref": "inline 1321771035 PR#5804",
+          "quote": "Just confirming that this comment is accurate?"
+        }
+      ]
+    },
+    {
+      "id": "no-commented-out-code-or-untracked-todo",
+      "title": "No commented-out code; TODO/FIXME/XXX must link an issue",
+      "area": "dead-code",
+      "problem": "Reviewers kept asking to delete commented-out code (Rust, YAML, Python taskgraph), leftover TODOs in build.rs and stale TODO/XXX notes.",
+      "rule": "Added lines must not contain commented-out code; added TODO/FIXME/XXX comments must reference a tracker (`#1234`, `bugzilla`, `EXP-123`, `DISCO-123`, or a URL).",
+      "enforcement": "ast-grep/regex",
+      "detect": "On added lines only: Rust/Kotlin/Swift /^\\s*\\/\\/\\s*(let |fn |use |pub |if |match |for |return |self\\.|[\\w:]+\\([^)]*\\);|\\w+\\.\\w+\\()/; Python/YAML /^\\s*#\\s*(-\\s+\\w+:|\\w+\\s*=|'[\\w-]+':|def |import )/ and inline `# if ...` after code; TODO check: /(TODO|FIXME|XXX)(?![^\\n]*(#\\d+|bug|issue|https?:\\/\\/|[A-Z]{2,}-\\d+))/.",
+      "autofix": true,
+      "count": 10,
+      "severity": "low",
+      "false_positive_risk": "medium — prose comments that look like code (e.g. formulas) and doc examples; skip `///` doc-test blocks.",
+      "evidence": [
+        {
+          "ref": "inline 1230017375 PR#5668",
+          "quote": "nit: comment"
+        },
+        {
+          "ref": "inline 1239018564 PR#5676",
+          "quote": "Nit: Does this comment need to be here too?"
+        },
+        {
+          "ref": "inline 1281164869 PR#5761",
+          "quote": "all of this can die to I think."
+        },
+        {
+          "ref": "inline 1321930304 PR#5804",
+          "quote": "nit: forget to remove this commented out code?"
+        },
+        {
+          "ref": "inline 1344446569 PR#5841",
+          "quote": "Nit: Let's remove this commented-out code."
+        },
+        {
+          "ref": "inline 1209056798 PR#5614",
+          "quote": "Maybe remove or update this TODO?"
+        }
+      ]
+    },
+    {
+      "id": "no-blanket-allow-attributes",
+      "title": "Replace #[allow(unused|dead_code|deprecated)] with cfg or #[expect(..., reason)]",
+      "area": "dead-code",
+      "problem": "Nimbus FML sprinkled `#[allow(unused)]`, `#[allow(deprecated)]` and fxa-client `#[allow(dead_code)]`; reviewers asked why, requested precise `cfg` gating, and found allows that outlived the code they silenced.",
+      "rule": "Component crates must not add `#[allow(unused*)]`, `#[allow(dead_code)]` or `#[allow(deprecated)]`; use `#[cfg(feature = ...)]`/`#[cfg_attr(not(feature = ...), expect(unused))]`, or `#[expect(lint, reason = \"...\")]` so the compiler reports when the suppression becomes unnecessary.",
+      "enforcement": "existing-clippy",
+      "detect": "`[workspace.lints.clippy] allow_attributes = \"warn\"` and `allow_attributes_without_reason = \"warn\"` (forces `#[expect]` + reason; `unfulfilled_lint_expectations` then flags stale ones); plus ast-grep deny on added `#[allow(dead_code)]`/`#[allow(unused)]`/`#[allow(deprecated)]` in components/**/src.",
+      "autofix": true,
+      "count": 6,
+      "severity": "medium",
+      "false_positive_risk": "low — `expect` with reason is an easy, explicit escape hatch.",
+      "evidence": [
+        {
+          "ref": "inline 1200685398 PR#5557",
+          "quote": "?"
+        },
+        {
+          "ref": "inline 1200701701 PR#5557",
+          "quote": "Hmm. Why is this _necessary_?"
+        },
+        {
+          "ref": "inline 1200702826 PR#5557",
+          "quote": "Clearly this _is_ used by some configuration. Could you be more specific with a `cfg` annotation, rather than `allow(unused)`?"
+        },
+        {
+          "ref": "inline 1202108113 PR#5557",
+          "quote": "Now `defaults` is gone, is this still needed?"
+        },
+        {
+          "ref": "inline 1269918319 PR#5713",
+          "quote": "followed by a `dead_code` annotation which implies it's not used anyway makes me wonder if we shouldn't just kill these functions?"
+        }
+      ]
+    },
+    {
+      "id": "delete-dead-and-deprecated-internal-code",
+      "title": "Delete unused/deprecated internal code, columns and build glue instead of keeping it",
+      "area": "dead-code",
+      "problem": "Reviewers preferred deleting deprecated internal properties, old migrators, unused schema columns and obsolete NSS/SQLCipher build glue over deprecating or commenting them.",
+      "rule": "`#[deprecated]` is only allowed on items reachable from the public/FFI API; crate-private dead items, unused DB columns (never read in queries) and unused build.rs/link directives must be removed.",
+      "enforcement": "ci-script",
+      "detect": "ast-grep: `#[deprecated] $VIS fn|struct|field` where $VIS is not `pub` or the item is not re-exported from lib.rs/UDL -> fail. Run `cargo +nightly udeps`/`cargo machete` for unused deps. SQL: for each column in new DDL, `git grep -w <column>` in the crate's src excluding schema.rs; zero hits -> warn.",
+      "autofix": false,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "medium — columns may be written-only for future use; warn only.",
+      "evidence": [
+        {
+          "ref": "inline 1200699736 PR#5557",
+          "quote": "I think I'd go straight to deleting this."
+        },
+        {
+          "ref": "inline 1200704814 PR#5557",
+          "quote": "I think just go ahead and remove this deprecated code and property. We can always add it back in later."
+        },
+        {
+          "ref": "inline 1205821437 PR#5595",
+          "quote": "I'd be surprised if we can't kill this now?"
+        },
+        {
+          "ref": "inline 1337674375 PR#5841",
+          "quote": "Shall we exclude it from the schema here as well? We can always add it back later if needed."
+        },
+        {
+          "ref": "inline 1281162859 PR#5761",
+          "quote": "I'm fairly sure everything nss related here can die."
+        }
+      ]
+    },
+    {
+      "id": "no-unwrap-in-non-test-code",
+      "title": "No unwrap()/expect() in non-test Rust where an error channel exists",
+      "area": "errors",
+      "problem": "`serde_json::from_str(...).unwrap()` inside `FromSql`/`ToSql` impls would panic (crashing the app through the FFI) on bad data although rusqlite offers FromSqlError/ToSqlConversionFailure; reviewers also accepted unwrap in test helpers.",
+      "rule": "In components/**/src (excluding `#[cfg(test)]`, tests/, examples/, benches/): no `.unwrap()`/`.expect()` inside functions returning Result/FromSqlResult/rusqlite::Result or inside `impl FromSql|ToSql|Deserialize|TryFrom`; map the error instead.",
+      "enforcement": "existing-clippy",
+      "detect": "`[workspace.lints.clippy] unwrap_used = \"warn\"` (and `expect_used` optionally) with clippy.toml `allow-unwrap-in-tests = true`, `allow-expect-in-tests = true`; ast-grep strict rule: inside `impl FromSql for $T { $$$ }` / `impl ToSql for $T { $$$ }` any `$X.unwrap()` -> error with fix `map_err(|e| FromSqlError::Other(Box::new(e)))`.",
+      "autofix": true,
+      "count": 4,
+      "severity": "high",
+      "false_positive_risk": "medium — some unwraps are provably safe (e.g. after is_some) or deliberately loud (reviewers also asked for `unreachable!` on impossible DB values); require `// SAFETY:`-style justification via #[expect].",
+      "evidence": [
+        {
+          "ref": "inline 1297927631 PR#5786",
+          "quote": "It will panic if `serde_json::from_str()` fails, maybe you can return a `FromSqlError` instead"
+        },
+        {
+          "ref": "inline 1297930290 PR#5786",
+          "quote": "Likewise,"
+        },
+        {
+          "ref": "inline 1298022555 PR#5786",
+          "quote": "...But yes, it's a great suggestion to avoid `unwrap` here!"
+        },
+        {
+          "ref": "inline 1378281762 PR#5891",
+          "quote": "So I see the rest of these methods are using unwrap() here, but do we have some sort of runtime guarantee that `self.user_id` is not None?"
+        }
+      ]
+    },
+    {
+      "id": "swift-no-force-unwrap-or-cast",
+      "title": "No force unwraps/casts in shipped Swift wrappers",
+      "area": "swift",
+      "problem": "New iOS code (OHTTP manager, NimbusBuilder) used `as! HTTPURLResponse`, `URL(string:)!` and `x != nil ? x! : []`, which crash the host app on unexpected input.",
+      "rule": "In components/*/ios/** (non-test): no `!` force unwrap, `as!` or `try!`; use optional binding, `??`, `guard let`, or typed params (pass `URL` instead of String).",
+      "enforcement": "formatter-config",
+      "detect": ".swiftlint.yml: enable opt-in `force_unwrapping`, keep `force_cast` and `force_try` as error, `included: components/*/ios`, `excluded: **/Tests`; custom regex rule `ternary_nil_unwrap`: /(\\w+) != nil \\? \\1!/ -> suggest `?.`/`??`.",
+      "autofix": true,
+      "count": 3,
+      "severity": "high",
+      "false_positive_risk": "low — swiftlint rules are precise; tests excluded.",
+      "evidence": [
+        {
+          "ref": "inline 1277648510 PR#5749",
+          "quote": "Should we handle the case where the response somehow isn't a `HTTPURLResponse` or is a fatal crash OK?"
+        },
+        {
+          "ref": "inline 1277650743 PR#5749",
+          "quote": "Ditto on handling the Swift unwrap if `configUrl` isn't a valid URL"
+        },
+        {
+          "ref": "inline 1258491986 PR#5718",
+          "quote": "Nit: `??` is the same as the elvis operator."
+        }
+      ]
+    },
+    {
+      "id": "swift-public-access-control",
+      "title": "Swift types/functions intended for consumers must be explicitly public",
+      "area": "swift",
+      "problem": "A new iOS-only component shipped its manager class, init and main method as internal, so firefox-ios could not use it; reviewers found this only by building firefox-ios locally.",
+      "rule": "Top-level declarations in components/*/ios/**/*.swift must have an explicit access level; types/initializers/methods referenced from docs or tests as consumer API must be `public` (protocol members inherit).",
+      "enforcement": "formatter-config",
+      "detect": ".swiftlint.yml opt-in rules `explicit_top_level_acl` and `explicit_acl` for components/*/ios; plus CI smoke test: compile MozillaTestServices tests that `import` the module without `@testable` so internal-only API fails to build.",
+      "autofix": true,
+      "count": 4,
+      "severity": "medium",
+      "false_positive_risk": "low — explicit ACL rules are mechanical; protocol members are exempt by the language.",
+      "evidence": [
+        {
+          "ref": "inline 1279429659 PR#5749",
+          "quote": "This should be `public` right?"
+        },
+        {
+          "ref": "inline 1279434499 PR#5749",
+          "quote": "this should probably be `public` to be used by iOS"
+        },
+        {
+          "ref": "inline 1279440973 PR#5749",
+          "quote": "ditto on this needing to be public as well"
+        },
+        {
+          "ref": "inline 1357078212 PR#5862",
+          "quote": "Does this need the public modifier?"
+        }
+      ]
+    },
+    {
+      "id": "swift-respect-ios-deployment-target",
+      "title": "Compile Swift wrappers against the consumers' minimum iOS version",
+      "area": "swift",
+      "problem": "`Date.now` (iOS 15+) slipped into a component while firefox-ios supported iOS 14; it would have broken the consumer build.",
+      "rule": "Swift sources under components/*/ios must compile with the deployment target used by firefox-ios/focus-ios (e.g. iOS 14/15); API availability errors must fail CI.",
+      "enforcement": "ci-script",
+      "detect": "In build-and-test-swift / xcframework build, pass `IPHONEOS_DEPLOYMENT_TARGET=<min>` (or `-target arm64-apple-ios<min>`) and treat availability warnings as errors; quick regex denylist for known iOS15+ APIs (`Date.now`, `.formatted(`, `URL(filePath:`, `AttributedString`) as early warning.",
+      "autofix": false,
+      "count": 1,
+      "severity": "high",
+      "false_positive_risk": "low — compiler availability checks are exact.",
+      "evidence": [
+        {
+          "ref": "inline 1279425949 PR#5749",
+          "quote": "Looks like `Date.now` is only supported for iOS 15+ (ref: https://developer.apple.com/documentation/foundation/date/3766590-now) and Firefox iOS supports iOS 14"
+        }
+      ]
+    },
+    {
+      "id": "kotlin-swift-wrappers-dont-redefine-udl-types",
+      "title": "Define shared enums/data types in UDL, not by hand in Kotlin/Swift wrappers",
+      "area": "kotlin",
+      "problem": "The proposed Kotlin FxA API hand-wrote data classes and enums (DeviceConfig, Scope, AccountEvent) mirroring Rust concepts; reviewers asked why they weren't in UDL, since duplicated types drift between platforms.",
+      "rule": "Kotlin (components/*/android/src/main) and Swift (components/*/ios) wrappers must not declare enum/data/sealed classes whose names or members mirror a UniFFI-generated type or that are only converted to/from Rust; such types belong in UDL/proc-macros.",
+      "enforcement": "custom-lint",
+      "detect": "Generate bindings, collect generated type names; regex/ktlint custom rule over wrapper sources for `enum class|data class|sealed class|struct|enum` declarations whose name (minus prefixes like Fxa/Nimbus) equals or normalizes to a generated name, or which define `fromRust`/`toRust`/`intoRust` helpers -> warn.",
+      "autofix": false,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "high — wrappers legitimately add platform types; warning only.",
+      "evidence": [
+        {
+          "ref": "inline 1244301256 PR#5686",
+          "quote": "why isn't this an enum in udl?"
+        },
+        {
+          "ref": "inline 1244302913 PR#5686",
+          "quote": "Specifically, I'm wondering why this `data class`, and the `enum` below, wouldn't be in UDL?"
+        },
+        {
+          "ref": "inline 1244319753 PR#5686",
+          "quote": "same question re this being in the UDL"
+        }
+      ]
+    },
+    {
+      "id": "kotlin-style-ktlint-detekt",
+      "title": "Enforce Kotlin naming and member ordering via ktlint/detekt",
+      "area": "kotlin",
+      "problem": "A sealed-class member named `devicesChanged` (lower-case class) and properties declared below methods were flagged manually.",
+      "rule": "Kotlin classes are UpperCamelCase and class properties precede functions/companion objects.",
+      "enforcement": "formatter-config",
+      "detect": "ktlint standard `class-naming` (already available since 0.48) and detekt `ClassOrdering` + `ClassNaming` enabled (remove from detekt-baseline.xml for new files).",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low — standard rules.",
+      "evidence": [
+        {
+          "ref": "inline 1244301256 PR#5686",
+          "quote": "Probably want upper-case `D` at the start of this one?"
+        },
+        {
+          "ref": "inline 1361428698 PR#5851",
+          "quote": "Why wouldn't we put class variables into the top of the file?"
+        }
+      ]
+    },
+    {
+      "id": "no-magic-numbers",
+      "title": "Name magic numbers (chunk sizes, channel bounds, retry intervals) as documented constants",
+      "area": "naming",
+      "problem": "Literal 150 (ids per request), Channel(100) and 30.seconds retry windows were flagged as unexplained magic numbers.",
+      "rule": "Numeric literals other than 0/1/-1/2 used as sizes, limits, timeouts or capacities in non-test code must be named `const` with a doc comment.",
+      "enforcement": "custom-lint",
+      "detect": "Kotlin: detekt `MagicNumber` (ignore tests, ignoreHashCode, ignorePropertyDeclaration=false). Rust: ast-grep for integer literals >2 as args to `.chunks(`, `.take(`, `Duration::from_*(`, `with_capacity(`, `Channel(` or in comparisons with `elapsed`, outside `const`/`static` and `#[cfg(test)]`.",
+      "autofix": false,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "medium — literal-heavy code (e.g. bit flags, protocol constants) needs ignore lists.",
+      "evidence": [
+        {
+          "ref": "inline 1323545296 PR#5786",
+          "quote": "suggestion: Let's put this `150` into a constant, please (and give it a docstring), so that our future selves aren't left wondering what it means."
+        },
+        {
+          "ref": "inline 1347582490 PR#5851",
+          "quote": "What do you think about defining 100 as a constant?"
+        },
+        {
+          "ref": "inline 1347604492 PR#5851",
+          "quote": "nit: magic number here could be configured and set a default to a constant? thoughts?"
+        }
+      ]
+    },
+    {
+      "id": "rustdoc-on-public-items",
+      "title": "Every new pub fn/type and exported item has a complete-sentence doc comment",
+      "area": "docs-changelog",
+      "problem": "Reviewers asked for missing `///` docs on new DAO methods, complete sentences per rustdoc conventions, expanded explanations (IAB, confidence levels) and notes on public-but-internal FML APIs; UniFFI proc-macro docstrings propagate to Kotlin/Swift, so gaps reach consumers.",
+      "rule": "In component crates, `pub`/`pub(crate)` fns, types and every UDL/`#[uniffi::export]` item need a doc comment whose first line is a complete sentence (capitalized, ends with '.'); acronyms in docs are expanded on first use.",
+      "enforcement": "existing-clippy",
+      "detect": "`[workspace.lints.rust] missing_docs = \"warn\"` for component crates (lib) and clippy `missing_docs_in_private_items` limited to `pub(crate)` via custom script; regex on added `///` first lines: must match /^\\s*\\/\\/\\/ [A-Z`].*[.:!?`)]$/; uniffi-checker: UDL items without preceding comment -> fail.",
+      "autofix": false,
+      "count": 9,
+      "severity": "medium",
+      "false_positive_risk": "medium — missing_docs on existing crates needs a baseline or per-crate opt-in.",
+      "evidence": [
+        {
+          "ref": "inline 1312203479 PR#5786",
+          "quote": "Would you mind adding a `///` doc comment for these new methods, please?"
+        },
+        {
+          "ref": "inline 1323534321 PR#5786",
+          "quote": "for docstrings, and make this a complete sentence."
+        },
+        {
+          "ref": "inline 1323537559 PR#5786",
+          "quote": "nitpick: Docstring for this function, too, please."
+        },
+        {
+          "ref": "inline 1344425970 PR#5841",
+          "quote": "Let's expand this docstring a bit to explain the difference between a high-confidence and low-confidence keyword"
+        },
+        {
+          "ref": "inline 1264468273 PR#5723",
+          "quote": "I wonder if `IAB` is worth expanding, and/or adding a link to something which might explain this sorcery?"
+        },
+        {
+          "ref": "inline 1251878403 PR#5688",
+          "quote": "Nit: Since this is public API, I think a note saying that this isn't useful for app developers for day-to-day usage of Nimbus."
+        }
+      ]
+    },
+    {
+      "id": "rustdoc-examples-fenced",
+      "title": "Doc examples go under `# Examples` in fenced (doctest) blocks",
+      "area": "docs-changelog",
+      "problem": "An example was written as bare `/// assert_eq!` lines, then fences were removed to dodge doctest failures; reviewers pointed out rendering and the `# Examples` convention.",
+      "rule": "In `///` blocks, code-like lines (assert!, let, use) must be inside ``` fences; the heading is exactly `# Examples` (no colon); doctests must compile (use `# use crate::...` hidden lines).",
+      "enforcement": "ast-grep/regex",
+      "detect": "Scan contiguous `///` blocks: track fence state; lines matching /^\\s*\\/\\/\\/\\s*(assert(_eq|_ne)?!|let |use )/ outside fences -> error; `/// # Examples:` -> autofix to `/// # Examples`; run `cargo test --doc` in CI for crates with doc examples.",
+      "autofix": true,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "low.",
+      "evidence": [
+        {
+          "ref": "inline 1345046971 PR#5841",
+          "quote": "With some docstring and examples, we can further simplify the function."
+        },
+        {
+          "ref": "inline 1345840503 PR#5841",
+          "quote": "Oh, those backticks are needed for `cargo doc` to render inline snippets properly."
+        },
+        {
+          "ref": "inline 1346347669 PR#5841",
+          "quote": "The `Examples` heading is [rustdoc's convention]"
+        }
+      ]
+    },
+    {
+      "id": "mpl-license-header",
+      "title": "Every source file starts with the MPL-2.0 header (don't churn existing headers)",
+      "area": "other",
+      "problem": "New files lacked the header, a header was placed after `#![cfg(...)]`, and a refactor rewrote headers changing https->http.",
+      "rule": "Added source files (*.rs, *.kt, *.swift, *.py, *.sh, *.udl, *.sql, *.gradle, *.groovy) must begin (after an optional shebang) with one of the accepted MPL 2.0 header forms (license.template or the `//`/`#` equivalents) before any `#![...]`, package or import line; modified files must not change an existing header's text.",
+      "enforcement": "ci-script",
+      "detect": "For added files: check first 6 lines contain 'Mozilla Public' and 'MPL/2.0' and no `#![`/`use `/`package `/`import ` line precedes it; for modified files: `git diff` hunk touching lines containing 'mozilla.org/MPL/2.0' -> fail unless file is new. Autofix: prepend license.template with language-appropriate comment syntax.",
+      "autofix": true,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "low — generated files/fixtures can be excluded by path.",
+      "evidence": [
+        {
+          "ref": "inline 1317800492 PR#5808",
+          "quote": "I think this should stay as `https`?"
+        },
+        {
+          "ref": "inline 1317803779 PR#5808",
+          "quote": "same nit here :D"
+        },
+        {
+          "ref": "inline 1317804522 PR#5808",
+          "quote": "and same here"
+        },
+        {
+          "ref": "inline 1344413951 PR#5841",
+          "quote": "Minor: Could you add a license header to this file, please?"
+        },
+        {
+          "ref": "inline 1348628938 PR#5857",
+          "quote": "Nit: please make sure the copyright notice is the first thing in the file."
+        }
+      ]
+    },
+    {
+      "id": "rustfmt-blind-spots",
+      "title": "Catch formatting rustfmt silently skips (macros, long SQL-string expressions, let-else)",
+      "area": "other",
+      "problem": "Spacing nits like `if x{`, `else{`, `|row |`, unindented `let ... else` and badly indented `json!`/`named_params!` bodies passed CI because rustfmt gives up on expressions containing over-long string literals and does not format macro bodies.",
+      "rule": "CI must detect code rustfmt left unformatted; added Rust lines must not contain `){`, `\\w{` before a block, `else{`, `}else`, `|x |` closure-arg spacing, and macro bodies must be indented consistently.",
+      "enforcement": "formatter-config",
+      "detect": "Add a nightly CI step `cargo +nightly fmt --check -- --config error_on_line_overflow=true,error_on_unformatted=true,format_macro_matchers=true,group_imports=StdExternalCrate` (also enforces the std/external/crate import grouping reviewers asked for) to surface skipped spans; plus regex on added *.rs lines: /[\\w)\\]]\\{\\s*$/ (missing space before `{`), /\\belse\\{/, /\\}else\\b/, /\\|\\w+ \\|/.",
+      "autofix": true,
+      "count": 6,
+      "severity": "low",
+      "false_positive_risk": "low — regexes target clear style violations; nightly-only options need a pinned nightly.",
+      "evidence": [
+        {
+          "ref": "inline 1312208692 PR#5786",
+          "quote": "nitpick: Please run `cargo fmt` on this crate before pushing—it should take care of indentation and other style nits!"
+        },
+        {
+          "ref": "inline 1344853925 PR#5841",
+          "quote": "I know it doesn't do well with macros, so maybe the `named_params!` are tripping it up in the rest of the file?"
+        },
+        {
+          "ref": "inline 1334898306 PR#5832",
+          "quote": "nitpick: `cargo fmt` doesn't (can't?) do a great job with macros, unfortunately—but could you please reformat this to fix the indentation in the `json!(...)`"
+        },
+        {
+          "ref": "inline 1344561684 PR#5841",
+          "quote": "if suffixes_match {"
+        },
+        {
+          "ref": "inline 1344660117 PR#5841",
+          "quote": "|row| -> Result<Option<Suggestion>> {"
+        },
+        {
+          "ref": "inline 1372367582 PR#5884",
+          "quote": "if full_suffix.contains(keyword_suffix) {"
+        }
+      ]
+    },
+    {
+      "id": "no-stray-blank-lines",
+      "title": "No stray blank lines inside macro bodies, struct literals or before closing delimiters",
+      "area": "other",
+      "problem": "Reviewers repeatedly removed blank lines left inside `named_params!{}` maps, struct fields and match arms — places rustfmt does not normalize.",
+      "rule": "Added Rust lines must not introduce an empty line directly before a line that starts with `}`, `)`, `]` or `},`, nor two consecutive blank lines; `impl` methods are separated by exactly one blank line.",
+      "enforcement": "ast-grep/regex",
+      "detect": "Diff-aware regex over added hunks: /\\n[ \\t]*\\n[ \\t]*[}\\])]/ and /\\n\\s*\\n\\s*\\n/; for `impl` blocks: a line starting with `pub fn|fn` immediately preceded by `}` (no blank) -> warn.",
+      "autofix": true,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "low.",
+      "evidence": [
+        {
+          "ref": "inline 1334892433 PR#5832",
+          "quote": "nitpick: Please watch out for stray blank lines sneaking in"
+        },
+        {
+          "ref": "inline 1344851260 PR#5841",
+          "quote": "Style nit: stray blank line."
+        },
+        {
+          "ref": "inline 1344854278 PR#5841",
+          "quote": "Stray blank line."
+        },
+        {
+          "ref": "inline 1316303589 PR#5802",
+          "quote": "Nit: I think this is an extra line"
+        },
+        {
+          "ref": "inline 1312203479 PR#5786",
+          "quote": "Blank line before the method declaration, please"
+        }
+      ]
+    },
+    {
+      "id": "clippy-avoid-needless-clones-and-owned-compares",
+      "title": "Avoid needless clones/to_string and owned comparisons",
+      "area": "perf",
+      "problem": "Reviewers trimmed `.to_string()` in equality asserts, `clone().unwrap_or_default()` comparisons, manual split+to_string copies and `&String` returns.",
+      "rule": "Do not allocate to compare (`x == y.to_string()`, `assert_eq!(s, \"lit\".to_string())`, `Some(x.clone()) == opt`); return `&str` not `&String`; use `split_once`/`as_deref()` instead of manual slicing + clones.",
+      "enforcement": "existing-clippy",
+      "detect": "Enable `clippy::cmp_owned` (default), `clippy::redundant_clone` (nursery, enable explicitly), `clippy::manual_split_once`, `clippy::ptr_arg`, `clippy::needless_pass_by_ref_mut`; ast-grep: `assert_eq!($A, $B.to_string())`, `assert_eq!($A, $B.to_owned())`, `fn $F($$$) -> &String`, `$O == Some($X.clone())` -> suggest `$O.as_deref() == Some(&$X)`, `$S.split_at($I)` followed by `[1..]`.",
+      "autofix": true,
+      "count": 6,
+      "severity": "low",
+      "false_positive_risk": "low — patterns are idiomatic-only changes.",
+      "evidence": [
+        {
+          "ref": "inline 1206035698 PR#5607",
+          "quote": "You don't need to do `.to_string()` here. You can compare a `String` and a `&str` for equality."
+        },
+        {
+          "ref": "inline 1206035751 PR#5607",
+          "quote": "Here too."
+        },
+        {
+          "ref": "inline 1324320612 PR#5813",
+          "quote": "Nit: can we further reduce the number of clones?"
+        },
+        {
+          "ref": "inline 1321663678 PR#5813",
+          "quote": "is likely better than the `clone().unwrap_or_default()` construction you have here."
+        },
+        {
+          "ref": "inline 1344455592 PR#5841",
+          "quote": "`split_once` will do the checking and slicing for you, and returns references, so we can also avoid the extra copies with `to_string()` and `clone()`."
+        },
+        {
+          "ref": "inline 1356683151 PR#5857",
+          "quote": "Nit: replace `&String` with `&str`:"
+        }
+      ]
+    },
+    {
+      "id": "clippy-option-bool-match-idioms",
+      "title": "Use Option/bool combinators and matches! instead of verbose if-let/match",
+      "area": "other",
+      "problem": "Many nits converted `if let Some(l) = x { l } else { -1 }`, `match b { true => .., false => .. }`, repeated `contains(..) || contains(..)`, re-matching an already-matched value and unused `let Some(_x) = .. else` bindings into idiomatic forms — several of which default clippy lints should flag.",
+      "rule": "Code must pass clippy with these enabled: manual_unwrap_or, match_like_matches_macro, match_bool, redundant_pattern_matching, if_then_some_else_none (or bool::then_some), map_entry; nested match on the same scrutinee is merged.",
+      "enforcement": "existing-clippy",
+      "detect": "Run `cargo clippy --all-targets --all-features -- -D warnings` for every crate incl. examples/ and testing/ (automation/tests.py runs default/all/no features already — ensure -D warnings); add `[workspace.lints.clippy] match_bool = \"warn\"`, `option_if_let_else = \"warn\"`, `if_then_some_else_none = \"warn\"`, `map_entry = \"warn\"`, `manual_let_else = \"warn\"`.",
+      "autofix": true,
+      "count": 8,
+      "severity": "low",
+      "false_positive_risk": "medium — pedantic/nursery lints occasionally hurt readability (reviewers debated then_some readability).",
+      "evidence": [
+        {
+          "ref": "inline 1361221779 PR#5870",
+          "quote": "for unwrapping values; we can use one of those here!"
+        },
+        {
+          "ref": "inline 1344566289 PR#5841",
+          "quote": "is_top_pick: matches!("
+        },
+        {
+          "ref": "inline 1242985791 PR#5685",
+          "quote": "I'm surprised clippy didn't want you to use a match here. You probably should put an `else` in at least."
+        },
+        {
+          "ref": "inline 1370251265 PR#5884",
+          "quote": "Nit: you can also do this with the benifit that it will scan the provider array once."
+        },
+        {
+          "ref": "inline 1261036869 PR#5716",
+          "quote": "This is confusing; you're matching on `self.status` and you've already matched on `self.status` (to get into this arm of the match)."
+        },
+        {
+          "ref": "inline 1312209441 PR#5786",
+          "quote": "nitpick: Just a little shorter, and avoids the unused binding."
+        }
+      ]
+    },
+    {
+      "id": "borrow-params-not-owned",
+      "title": "Take slices/borrows (or generic Serialize) instead of owned Vec params when not consuming",
+      "area": "perf",
+      "problem": "Functions took `Vec<RemoteSettingsRecord>` / `Vec<serde_json::Value>` they only iterated, forcing callers to allocate or clone.",
+      "rule": "Non-exported functions that only read a collection take `&[T]` (or `impl IntoIterator`, or `&[S] where S: Serialize`).",
+      "enforcement": "existing-clippy",
+      "detect": "Enable `clippy::needless_pass_by_value` (pedantic) for component crates (skip `#[uniffi::export]` fns, which must take owned values); `clippy::ptr_arg` already catches `&Vec<T>`.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "medium — exported UniFFI functions legitimately take owned Vec; exclude them.",
+      "evidence": [
+        {
+          "ref": "inline 1323566161 PR#5786",
+          "quote": "I think we can take a `&[RemoteSettingsRecord]` instead of a `Vec<RemoteSettingsRecord>`."
+        },
+        {
+          "ref": "inline 1260961309 PR#5716",
+          "quote": "This could be made simpler, more generic:"
+        }
+      ]
+    },
+    {
+      "id": "unit-struct-without-braces",
+      "title": "Declare and construct empty structs as unit structs",
+      "area": "other",
+      "problem": "`pub struct NoopHostMetrics {}` and `Box::new(NoopHostMetrics {})` were corrected three times in one PR.",
+      "rule": "Field-less structs are declared `struct X;` and constructed `X`.",
+      "enforcement": "existing-clippy",
+      "detect": "`[workspace.lints.clippy] empty_structs_with_brackets = \"warn\"` (restriction, machine-applicable); ast-grep for construction `$T {}` where $T is a unit struct.",
+      "autofix": true,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "low.",
+      "evidence": [
+        {
+          "ref": "inline 1348633172 PR#5857",
+          "quote": "pub struct NoopHostMetrics;"
+        },
+        {
+          "ref": "inline 1348633429 PR#5857",
+          "quote": "Box::new(NoopHostMetrics),"
+        },
+        {
+          "ref": "inline 1355336030 PR#5857",
+          "quote": "Box::new(NoopHostMetrics),"
+        }
+      ]
+    },
+    {
+      "id": "naming-verb-conventions",
+      "title": "Follow the repo's verb conventions: get_/find_/iter_/put_/try_/refresh_",
+      "area": "naming",
+      "problem": "Reviewers renamed functions to match a naming scheme (get_ = direct lookup, find_ = search, iter_all_ = iterator, put_ = insert-or-replace, try_ = may fail) and objected to `refresh_*` returning data and `try*` that never throws.",
+      "rule": "fn names starting with `try_` (Kotlin `try*`) must return Result/Option (or be able to throw); `iter_*` must return an iterator; `find_*` must return Option/iterator; DAO methods doing INSERT OR REPLACE are named `put_*`; `refresh_*`/`clear_*`/`set_*` return () or Result<()>.",
+      "enforcement": "custom-lint",
+      "detect": "dylint (or ast-grep with type-ish regex on signatures): `fn try_\\w+\\([^)]*\\)\\s*(->\\s*(?!.*(Result|Option)).*)?\\{` -> warn; `fn iter_\\w+` whose return type lacks `Iterator|Iter<` -> warn; `fn find_\\w+` without Option/Iterator -> warn; fn whose body executes `INSERT OR REPLACE` but name lacks `put_` -> warn; `fn refresh_\\w+(...) -> (?!Result<\\(\\)>|\\(\\))` -> warn. Kotlin: detekt custom rule for `fun try\\w+` with non-nullable return and no throws doc. Complements clippy `wrong_self_convention`.",
+      "autofix": false,
+      "count": 6,
+      "severity": "low",
+      "false_positive_risk": "high — naming is contextual; warnings only.",
+      "evidence": [
+        {
+          "ref": "inline 1202120579 PR#5557",
+          "quote": "I think this in our new naming scheme, this should be `get_feature`, and `find_feature_deep` should be `find_feature`."
+        },
+        {
+          "ref": "inline 1200688258 PR#5557",
+          "quote": "Nit: I think `find_all_object_defs` is a better name for this:"
+        },
+        {
+          "ref": "inline 1323536080 PR#5786",
+          "quote": "suggestion: For naming, let's use \"put\" to match the semantics of our other \"insert or replace\"-style methods, and let's add the `if_newer` suffix"
+        },
+        {
+          "ref": "inline 1346266581 PR#5851",
+          "quote": "from the implementation the intent is that it never throws an exception, which is the opposite of what I'd expect of a function name starting with `try`."
+        },
+        {
+          "ref": "inline 1268510936 PR#5717",
+          "quote": "when I read `refresh` I assume some internal work will happen but I don't expect it return anything"
+        },
+        {
+          "ref": "inline 1200633019 PR#5557",
+          "quote": "Nit: I think tightening up these names would be useful here:"
+        }
+      ]
+    },
+    {
+      "id": "naming-no-abbreviations-or-placeholders",
+      "title": "No abbreviated or placeholder identifiers (fe, map1/map2, Prop, base, block)",
+      "area": "naming",
+      "problem": "Reviewers asked to expand `fe`, `InvalidPropError`, rename `map1`/`map2`, `base` and a closure param `block` (which clashes with DB terminology), and to drop module-name repetition.",
+      "rule": "Identifiers must not be 1-2 letter abbreviations (outside closures/loops), numbered placeholders (map1, map2), or generic words from a denylist; type names should not repeat their module name.",
+      "enforcement": "existing-clippy",
+      "detect": "clippy.toml `disallowed-names = [\"map1\",\"map2\",\"fe\",\"th\",\"base\",\"block\",\"tmp\",\"foo\",\"bar\"]` with `clippy::disallowed_names`; enable `clippy::min_ident_chars` (threshold 3, allowlist i,j,k,n,e,f,s,v,k) and `clippy::module_name_repetitions` (pedantic) for component crates; uniffi-checker abbreviation list for exported names.",
+      "autofix": false,
+      "count": 6,
+      "severity": "low",
+      "false_positive_risk": "high — short names are fine in small scopes; keep as warnings.",
+      "evidence": [
+        {
+          "ref": "inline 1206032956 PR#5607",
+          "quote": "fe?"
+        },
+        {
+          "ref": "inline 1244388515 PR#5684",
+          "quote": "Nit: can we find better names than map1 and map2? why do we need two of them?"
+        },
+        {
+          "ref": "inline 1344626860 PR#5841",
+          "quote": "Nit: let's call it `ingestion_handler` or the like as `block` has special meanings in the context of database ops."
+        },
+        {
+          "ref": "inline 1218094080 PR#5620",
+          "quote": "Nit: `InvalidPropertyError`"
+        },
+        {
+          "ref": "inline 1344614045 PR#5841",
+          "quote": "Suggestion: the module already has Pocket and Confidence, we can simply call it `KeywordConfidence` or `Confidence`."
+        },
+        {
+          "ref": "inline 1279989060 PR#5745",
+          "quote": "thought: I'm wondering if a name like `DownloadedSuggestionDetails` or `DownloadedSuggestionCommonDetails` (vs. \"custom details\") might be a better name than \"base\"."
+        }
+      ]
+    },
+    {
+      "id": "naming-consistent-across-platforms",
+      "title": "Use the same term for the same concept across Rust, Kotlin, Swift, tests and docs",
+      "area": "naming",
+      "problem": "The same concept had different names across Kotlin/Swift (isForUs/meantForUs), within a feature (coenrolling/coenrolled, unknown/unparsable), and tests/changelog kept the old field name after a rename (app_id vs app_name); a callback field had the wrong name (onApplyCallback).",
+      "rule": "Wrapper APIs for one component expose identical names on Android and iOS; a PR that renames a concept updates all occurrences (tests, docs, CHANGELOG).",
+      "enforcement": "custom-lint",
+      "detect": "Script per component: extract public function/property names from components/X/android/**/*.kt and components/X/ios/**/*.swift, normalize case, report names present on one platform with a near-match (edit distance <=3 or synonym table: for/meant, enrolled/enrolling, unknown/unparsable) on the other; on rename diffs (`-old_ident` / `+new_ident`), `git grep -w old_ident` must be empty.",
+      "autofix": false,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "high — platform APIs legitimately differ; report-only.",
+      "evidence": [
+        {
+          "ref": "inline 1264168743 PR#5727",
+          "quote": "Nit: This is `isForUs` here and `meantForUs` in the Swift code, I think it would be ideal to have them use the same name across both"
+        },
+        {
+          "ref": "inline 1244458396 PR#5688",
+          "quote": "I'd prefer to standardize on one of `conenrolling` or `coenrolled`"
+        },
+        {
+          "ref": "review 1627688181 PR#5786",
+          "quote": "We were using a mix of \"unknown\" and \"unparsable\" before, and I think \"unparsable\" is much more descriptive"
+        },
+        {
+          "ref": "inline 1324321261 PR#5813",
+          "quote": "fn test_only_writes_experiments_matching_configured_app_name_and_channel() -> Result<()> {"
+        },
+        {
+          "ref": "inline 1253201443 PR#5697",
+          "quote": "I think this should be `onFetchCallback`"
+        }
+      ]
+    },
+    {
+      "id": "url-valued-fields-suffix-url",
+      "title": "Fields/columns holding URLs are named *_url (never *_id)",
+      "area": "naming",
+      "problem": "An AMO icon URL was stored as `icon_id` (column, Rust field and UDL field), implying a foreign key into the icons table; reviewers renamed all three to `icon_url`.",
+      "rule": "Struct fields, UDL fields and SQL columns whose values are URLs end in `_url` (or are `url`); `*_id` names must not be bound to URL data (e.g. via `#[serde(rename = \"icon\")]` when RS sends a URL).",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: struct field `$F: String` with `#[serde(rename = $K)]` where $F ends with `_id` and $K does not contain 'id' -> warn; test fixtures: JSON keys mapped to `*_id` fields whose fixture values match /^https?:\\/\\// -> warn; UDL/DDL columns named `icon|image|link` of type TEXT -> suggest `_url`.",
+      "autofix": true,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "medium — heuristic on fixtures.",
+      "evidence": [
+        {
+          "ref": "inline 1334892814 PR#5832",
+          "quote": "suggestion: Let's name this column `icon_url`, since it is a URL string here, and not a \"foreign key\"-ish into the `icons` table."
+        },
+        {
+          "ref": "inline 1334893031 PR#5832",
+          "quote": "suggestion: Ditto for referring to it in code—let's rename it to be more clear about what it is."
+        },
+        {
+          "ref": "inline 1334898889 PR#5832",
+          "quote": "suggestion: Ditto about `icon_url` here, to match our other `_url`-suffixed names for URLs."
+        }
+      ]
+    },
+    {
+      "id": "minimal-visibility",
+      "title": "Keep fields and items at minimal visibility (pub(crate)/private + accessors)",
+      "area": "api-design",
+      "problem": "Reviewers repeatedly pushed back on `pub` fields (state manager, event listener, manifest channels), an internal `pub type Result`, and crate-internal types not marked `pub(crate)`, to keep state mutations behind functions.",
+      "rule": "In component crates, items not re-exported from lib.rs/UDL must be `pub(crate)` or private; struct fields of non-FFI types are private with accessor methods (UniFFI Records/dictionaries excepted).",
+      "enforcement": "existing-clippy",
+      "detect": "`[workspace.lints.rust] unreachable_pub = \"warn\"` (machine-applicable to pub(crate)); custom ast-grep: `pub $FIELD: $T` inside structs that are not `#[derive(uniffi::Record)]`, not in a UDL dictionary, and not `pub(crate) struct` -> warn.",
+      "autofix": true,
+      "count": 8,
+      "severity": "medium",
+      "false_positive_risk": "medium — some internal pub fields are intentional (bendk argued for pub StateManager); warn only.",
+      "evidence": [
+        {
+          "ref": "inline 1207043838 PR#5607",
+          "quote": "In general, I think we should move away from using the bare properties, and favour adding functions."
+        },
+        {
+          "ref": "inline 1268497307 PR#5717",
+          "quote": "what do you think about keeping this private and exposing an API to do whatever the consumer needs to do with the state manager?"
+        },
+        {
+          "ref": "inline 1268550529 PR#5717",
+          "quote": "nit: can we make this not `pub` and expose an API to any consumers of it?"
+        },
+        {
+          "ref": "inline 1238733691 PR#5677",
+          "quote": "Does the internal error need to be `pub`? Looks like all calls use the public API right?"
+        },
+        {
+          "ref": "inline 1312224936 PR#5786",
+          "quote": "nitpick: I like to mark crate-internal types as `pub(crate)`, so that it's a bit easier to tell what's exposed to consumers, and what's part of the crate's implementation."
+        },
+        {
+          "ref": "inline 1348758427 PR#5857",
+          "quote": "Also, does this have to be `pub(crate)`?"
+        }
+      ]
+    },
+    {
+      "id": "error-context-on-user-input-parsing",
+      "title": "Add context to errors from parsing user-supplied files in CLIs (nimbus-cli / nimbus-fml)",
+      "area": "errors",
+      "problem": "A malformed patch file produced only 'ident error line 1 column 2', and FML validation errors didn't say which file failed.",
+      "rule": "In components/support/nimbus-cli and nimbus-fml, `?` on serde_json/serde_yaml parsing or fs reads of user-provided paths must attach the path (`.with_context(|| format!(\"... {path}\"))` or map into an FMLError carrying the file).",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep in those crates: `serde_json::from_str($X)?`, `serde_yaml::from_str($X)?`, `std::fs::read_to_string($P)?` not followed by `.context(`/`.with_context(`/`.map_err(` -> warn.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "medium — inner helpers may add context at the caller.",
+      "evidence": [
+        {
+          "ref": "inline 1260279530 PR#5721",
+          "quote": "It'd be nice if we could add a map_err here and say that there's an error with the patch file so the user knows where the problem lies."
+        },
+        {
+          "ref": "inline 1223395072 PR#5607",
+          "quote": "It would be nice if we can get this to fail with some indication of which file is being processed."
+        }
+      ]
+    },
+    {
+      "id": "remote-data-tolerant-ingestion",
+      "title": "Parsing/ingesting server and Remote Settings data must tolerate unknown and duplicate entries",
+      "area": "api-design",
+      "problem": "Unknown device commands errored instead of being ignored (forward-compat), real Remote Settings data contained the same keyword twice and violated a composite PRIMARY KEY so ingestion failed, and alien record types appear in production collections.",
+      "rule": "Enums/TryFrom for server- or RS-provided strings must have an Unknown/Other path (`#[serde(other)]`, `Unknown(String)`) and callers log-and-skip; INSERTs of RS-derived rows into tables with PRIMARY KEY/UNIQUE constraints use `INSERT OR IGNORE|REPLACE` or dedupe first; ingestion tests include an unknown record type and duplicate keys.",
+      "enforcement": "custom-lint",
+      "detect": "ast-grep in components/{suggest,remote_settings,fxa-client,nimbus}/src: `impl TryFrom<String> for $E` / `FromStr` whose `_ =>` arm returns `Err(` -> warn; `#[derive(Deserialize)] enum` without `#[serde(other)]` variant and used for RS records -> warn; SQL `INSERT INTO <table>` (no OR IGNORE/REPLACE) where <table> has composite PRIMARY KEY in schema.rs -> warn.",
+      "autofix": false,
+      "count": 3,
+      "severity": "high",
+      "false_positive_risk": "medium — some strict parsing is intended; require explicit allow comment.",
+      "evidence": [
+        {
+          "ref": "inline 1347561209 PR#5851",
+          "quote": "What do you think about not making this error for future backward compatibility if possible (if we support more device commands so they don't error and are ignored)"
+        },
+        {
+          "ref": "inline 1346376882 PR#5841",
+          "quote": "I tested with our live Remote Settings dataset, and it failed to ingest a suggestion that had the same keyword"
+        },
+        {
+          "ref": "inline 1283900734 PR#5765",
+          "quote": "Here is a real-world alien record :)"
+        }
+      ]
+    },
+    {
+      "id": "no-per-item-roundtrips-in-loops",
+      "title": "Batch DB meta reads/writes and FFI callbacks instead of doing them per item in a loop",
+      "area": "perf",
+      "problem": "Ingestion loaded and rewrote the unparsable-records meta JSON for every record, and enrollment telemetry crossed the FFI once per enrollment; reviewers asked to load once / pass the list.",
+      "rule": "Inside `for`/`.for_each` loops, do not call `get_meta`/`put_meta` (or equivalent read-modify-write of one row) nor methods on foreign callback interfaces; accumulate and write/call once (unless the per-item write is a documented interruption-safety choice).",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: `for $X in $Y { $$$ $D.get_meta($$$) $$$ $D.put_meta($$$) $$$ }` -> warn; `for $X in $Y { $$$ self.$H.$M($$$) $$$ }` where field $H has type `Box<dyn $T>`/`Arc<Box<dyn $T>>` and $T is a UniFFI callback interface -> warn.",
+      "autofix": false,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "medium — reviewers accepted per-record writes for interruption safety; allow with comment.",
+      "evidence": [
+        {
+          "ref": "inline 1297937879 PR#5786",
+          "quote": "Potential concern: this would load/store `UnparsableRecords` from the meta table for every single unknown record observed."
+        },
+        {
+          "ref": "inline 1297938645 PR#5786",
+          "quote": "Likewise, the removal can be stashed and persisted once at the end."
+        },
+        {
+          "ref": "inline 1298614716 PR#5786",
+          "quote": "Optionally, I think we can only load `UNKNOWN_RECORDS_META_KEY` once outside of the loop and mutate it as we go."
+        },
+        {
+          "ref": "inline 1348891753 PR#5857",
+          "quote": "can we avoid going over the FFI more than once by passing the list of enrollments rather than passing them one by one."
+        }
+      ]
+    },
+    {
+      "id": "new-dependency-registration",
+      "title": "New third-party crates must be registered in DEPENDENCIES.md / license summaries",
+      "area": "deps-build",
+      "problem": "New crates (update-informer, copypasta) were added without updating DEPENDENCIES.md, and the dependency check script choked on a syn bump.",
+      "rule": "Any Cargo.toml/Cargo.lock change that adds a crate must regenerate DEPENDENCIES.md and megazord dependency-license files in the same PR.",
+      "enforcement": "ci-script",
+      "detect": "If Cargo.lock changed: run `tools/regenerate_dependency_summaries.sh` (or `python3 tools/dependency_summary.py --check` for each megazord) and fail on diff; surface the exact missing crate names in the failure message.",
+      "autofix": true,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "low — deterministic regeneration.",
+      "evidence": [
+        {
+          "ref": "inline 1210469933 PR#5613",
+          "quote": "This appears to be a new package to app-services — I think we need to add its repo to the root `Dependencies.md` file"
+        },
+        {
+          "ref": "inline 1263826119 PR#5727",
+          "quote": "Can you add copypasta to the `Dependencies.md`? percent-encoding is already there"
+        },
+        {
+          "ref": "review 1457475487 PR#5626",
+          "quote": "Looks like the dependency check script is confused and want us to duplicate the license for `syn`."
+        }
+      ]
+    },
+    {
+      "id": "cargo-feature-gated-deps",
+      "title": "Gate optional dependency features behind the crate feature that needs them; build each feature set",
+      "area": "deps-build",
+      "problem": "`rusqlite/column_decltype` was enabled unconditionally though only `debug-tools` needed it, and code used under one feature produced unused warnings under another.",
+      "rule": "Dependency features needed only by an optional crate feature must be listed in that feature (`debug-tools = [\"dep:x\", \"rusqlite/column_decltype\"]`); every crate must compile warning-free under each of its features.",
+      "enforcement": "ci-script",
+      "detect": "`cargo hack check --each-feature --no-dev-deps -p <crate>` with `RUSTFLAGS=-Dwarnings` for changed crates; script: for each `[dependencies.X] features = [...]` entry added in a diff, if the crate has optional features and the new feature is only referenced in `#[cfg(feature = ...)]` code paths -> warn.",
+      "autofix": false,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "medium — second heuristic is approximate; cargo-hack part is exact.",
+      "evidence": [
+        {
+          "ref": "inline 1222021699 PR#5632",
+          "quote": "would we need `column_decltype` if the `debug-tools` feature is disabled?"
+        },
+        {
+          "ref": "inline 1200702826 PR#5557",
+          "quote": "Clearly this _is_ used by some configuration. Could you be more specific with a `cfg` annotation, rather than `allow(unused)`?"
+        }
+      ]
+    },
+    {
+      "id": "submodule-pointer-unchanged",
+      "title": "Fail when a PR accidentally moves a git submodule (e.g. components/external/glean)",
+      "area": "deps-build",
+      "problem": "A stale glean submodule pointer 'slid in' to an unrelated PR, which would roll back Glean after an upgrade landed on main.",
+      "rule": "Changes to submodule pointers are only allowed in PRs whose title mentions the submodule (e.g. 'Update Glean'); a pointer must never move to an ancestor of main's pointer (rollback).",
+      "enforcement": "ci-script",
+      "detect": "`git diff --submodule=short origin/main...HEAD -- components/external` non-empty and PR title lacks /glean|submodule|external/i -> fail; `git -C components/external/glean merge-base --is-ancestor NEW OLD` true -> fail (rollback).",
+      "autofix": false,
+      "count": 1,
+      "severity": "medium",
+      "false_positive_risk": "low.",
+      "evidence": [
+        {
+          "ref": "inline 1229990500 PR#5668",
+          "quote": "oops looks like this slid in, might need to re-sync the glean versions since an upgraded landed in main"
+        }
+      ]
+    },
+    {
+      "id": "new-component-wired-into-builds",
+      "title": "New UniFFI components must be wired into all megazords, Swift build scripts and installers",
+      "area": "deps-build",
+      "problem": "A new iOS component wasn't listed in build-and-test-swift.py (so it wouldn't ship), the Focus megazord was forgotten, uniffi.toml kept stale cdylib_name/external_packages after library mode, and a new platform build wasn't added to install-nimbus-cli.sh.",
+      "rule": "Every crate under components/ that depends on uniffi and has an ios/ or android/ dir must be a dependency of the corresponding megazord(s) (megazords/full, megazords/ios-rust and, if listed in a focus allowlist, megazords/ios-rust/focus), appear in taskcluster/scripts/build-and-test-swift.py where applicable, and its uniffi.toml must not set `cdylib_name` in library mode.",
+      "enforcement": "ci-script",
+      "detect": "Python script: `cargo metadata` -> crates with `uniffi` dep under components/; for each, check presence in megazords/*/Cargo.toml deps and megazords/*/src/lib.rs `pub use`; if components/<c>/ios exists, require it in build-and-test-swift.py module list; grep uniffi.toml for `cdylib_name` -> fail; new target triples in taskcluster kinds must appear in install-nimbus-cli.sh/NimbusGradlePlugin.",
+      "autofix": false,
+      "count": 4,
+      "severity": "high",
+      "false_positive_risk": "low — explicit allowlist for crates intentionally not shipped on a platform.",
+      "evidence": [
+        {
+          "ref": "review 1552264145 PR#5749",
+          "quote": "Only requesting changes because we'll need to add this component to https://github.com/mozilla/application-services/blob/main/taskcluster/scripts/build-and-test-swift.py"
+        },
+        {
+          "ref": "inline 1283412326 PR#5592",
+          "quote": "There is a second megazord! it's under `megzords/ios-rust/focus`!"
+        },
+        {
+          "ref": "inline 1275364012 PR#5592",
+          "quote": "Does its `uniffi.toml` need to change, too, to remove `cdylib_name` (and the `external_packages`, it looks like?"
+        },
+        {
+          "ref": "review 1637617869 PR#5831",
+          "quote": "You should also add a line to [the `nimbus-cli` installer][0]."
+        }
+      ]
+    },
+    {
+      "id": "pin-ci-tool-versions",
+      "title": "Pin versions/hashes of tools fetched in CI images and scripts",
+      "area": "ci-scripts",
+      "problem": "CI pulled tooltool from a `master` branch URL, `pip3 install pytest` unpinned, and NSS artifacts from a level-1 (short-lived) index, risking breakage 'outside of a commit'.",
+      "rule": "In taskcluster/**, Dockerfiles, libs/*.sh and automation/**: `pip install` args must be pinned (`==`/`~=` or `-r requirements.txt` with hashes); curl/wget URLs must reference an immutable revision (commit SHA/tag) or be followed by a sha256 check; taskcluster index paths in build scripts use level-3 routes.",
+      "enforcement": "ast-grep/regex",
+      "detect": "regex: /pip3? install (?!-r)(?![^\\n]*(==|~=))/; /(curl|wget)[^\\n]*\\/(master|main|latest)\\// without a following `sha256sum -c|shasum -a 256 -c` within 3 lines; /level-1\\./ in libs/*.sh and taskcluster/scripts/*.",
+      "autofix": true,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "low — explicit exceptions documented inline.",
+      "evidence": [
+        {
+          "ref": "inline 1224468313 PR#5651",
+          "quote": "I imagine the `master` branch is stable enough for us not to fix a tag/revision?"
+        },
+        {
+          "ref": "inline 1321905767 PR#5804",
+          "quote": "It's probably worth pinning this, otherwise pytest is going to make some backwards incompatible change at some point that breaks CI outside of a commit."
+        },
+        {
+          "ref": "inline 1223072198 PR#5648",
+          "quote": "Maybe the only issue here is that the URL should end with `/artifacts/public/dist.tar.bz2`?"
+        }
+      ]
+    },
+    {
+      "id": "shell-strict-mode-and-quoting",
+      "title": "Shell scripts use `set -euo pipefail`, quote expansions, and parse args robustly",
+      "area": "ci-scripts",
+      "problem": "New build/installer scripts lacked strict mode, quoted variables inconsistently and used ad-hoc argument loops.",
+      "rule": "Every *.sh in the repo starts (after shebang/license) with `set -euo pipefail` (or documents why not), passes shellcheck incl. optional quoting checks, and parses options with `getopts`/a documented loop.",
+      "enforcement": "ci-script",
+      "detect": "Extend automation/lint_bash_scripts.sh: `shellcheck --external-sources --enable=quote-safe-variables,require-variable-braces,check-unassigned-uppercase`; plus check `head -n 20 $f | grep -Eq '^set -[a-z]*e[a-z]*u[a-z]*o pipefail|^set -euo pipefail'` else fail (allow `# strict-mode: off <reason>`).",
+      "autofix": true,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "low — explicit opt-out comment.",
+      "evidence": [
+        {
+          "ref": "inline 1327691834 PR#5825",
+          "quote": "Should this script crash in the event of an error? i.e. should we `set -euo pipefail` ?"
+        },
+        {
+          "ref": "inline 1365966221 PR#5877",
+          "quote": "`set -uo pipefail` ?"
+        },
+        {
+          "ref": "inline 1366082135 PR#5877",
+          "quote": "I would suggest set -euo pipefail here too"
+        },
+        {
+          "ref": "inline 1327689639 PR#5825",
+          "quote": "Quotes?"
+        },
+        {
+          "ref": "inline 1368981832 PR#5877",
+          "quote": "Ideally this would use `getopts`"
+        }
+      ]
+    },
+    {
+      "id": "scripts-check-prereqs-and-run-locally",
+      "title": "Developer-facing scripts check required tools and keep working outside CI",
+      "area": "ci-scripts",
+      "problem": "The nimbus-cli installer didn't check for `unzip` (missing on WSL Ubuntu), an option was silently overridden, and a build script was changed to rely on CI-only `$MOZ_FETCHES_DIR`.",
+      "rule": "Scripts under repo root, libs/ and components/*/ios/scripts must `command -v` check every non-POSIX tool they invoke (unzip, curl/wget, xattr, jq...) and must not depend unconditionally on CI-only env vars (`MOZ_FETCHES_DIR`, `TASK_ID`, `CI`) — guard with `if [[ -n \"${CI:-}\" ]]`.",
+      "enforcement": "ast-grep/regex",
+      "detect": "For each *.sh: collect invoked commands from a known list {unzip, jq, xattr, curl, wget, shasum, sha256sum, python3, cargo}; if used but no `command -v X|type X|which X` present -> warn; regex /\\$\\{?(MOZ_FETCHES_DIR|TASK_ID|MOZ_SCM_LEVEL)\\b/ outside an `if` guard -> warn.",
+      "autofix": false,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "medium — heuristic command extraction.",
+      "evidence": [
+        {
+          "ref": "inline 1214586085 PR#5618",
+          "quote": "I think it'd be wise to add a check for `unzip` here — I ran the script on Ubuntu WSL and it didn't have it by default."
+        },
+        {
+          "ref": "inline 1214586268 PR#5618",
+          "quote": "Would also want the `unzip` check here"
+        },
+        {
+          "ref": "inline 1311731796 PR#5801",
+          "quote": "This also gets run outside of CI by devs who want to build locally."
+        }
+      ]
+    },
+    {
+      "id": "python-format-and-lint",
+      "title": "Run black + ruff (+ type checks) on taskcluster, automation and python-tests",
+      "area": "ci-scripts",
+      "problem": "Reviewers flagged single vs double quotes in taskgraph transforms ('run black'), invalid type annotations (`[T]` instead of `list[T]`), append loops instead of extend, and comment-block docstrings.",
+      "rule": "Python under taskcluster/, automation/, tools/ and megazords/*/tests/python-tests must be black-formatted and pass ruff (Q, UP, PERF, D) and a basic mypy/pyright check for annotations.",
+      "enforcement": "formatter-config",
+      "detect": "pyproject.toml: `[tool.black]`, `[tool.ruff] select = [\"E\",\"F\",\"Q\",\"UP\",\"PERF401\",\"D\"]`; CI step `black --check taskcluster automation tools megazords/*/tests` + `ruff check` + `mypy --ignore-missing-imports megazords/*/tests/python-tests` (catches `[T]` annotations).",
+      "autofix": true,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low — formatter-driven.",
+      "evidence": [
+        {
+          "ref": "inline 1213305961 PR#5622",
+          "quote": "Double quotes?  Might want to run black over this file/directory."
+        },
+        {
+          "ref": "inline 1378315924 PR#5891",
+          "quote": "The correct annotation is `list[T]`"
+        },
+        {
+          "ref": "inline 1378316200 PR#5891",
+          "quote": "self.recordings.extend(enrollment_status_extra)"
+        },
+        {
+          "ref": "inline 1200812260 PR#5557",
+          "quote": "You can use triple quotes to do a multiline string."
+        }
+      ]
+    },
+    {
+      "id": "fml-fixture-hygiene",
+      "title": "FML fixtures: no redundant default keys, block-style YAML, `.fml.yaml` for files with an about block",
+      "area": "nimbus-fml",
+      "problem": "After `allow-coenrollment` defaulted to false, fixtures still spelled it out; inline JSON-ish dict literals were used in YAML; a top-level manifest with an `about` block lacked the `.fml.yaml` suffix.",
+      "rule": "In components/support/nimbus-fml/fixtures and megazords/cirrus test resources: keys whose value equals the serde default (e.g. `allow-coenrollment: false`) are omitted; YAML uses block mappings (no `{ ... }` flow maps for values); files containing `about:` are named *.fml.yaml, include-only files *.yaml.",
+      "enforcement": "ci-script",
+      "detect": "Script: load each fixture with PyYAML; flag `allow-coenrollment: false` (generalize via a table of FML defaults); `yamllint -d '{rules: {braces: {forbid: non-empty}}}'`; flag files with top-level `about:` not ending `.fml.yaml`.",
+      "autofix": true,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "low — some fixtures deliberately test explicit defaults; allow via comment.",
+      "evidence": [
+        {
+          "ref": "inline 1251876463 PR#5688",
+          "quote": "You can probably remove this, now you're defaulting to `false`."
+        },
+        {
+          "ref": "inline 1251876553 PR#5688",
+          "quote": "You can probably remove this, now you're defaulting to `false`."
+        },
+        {
+          "ref": "inline 1251906891 PR#5688",
+          "quote": "You can probably delete this line now that `allow-coenrollment: false` is the default."
+        },
+        {
+          "ref": "inline 1206015712 PR#5607",
+          "quote": "Inline dict literals are awkward in yaml."
+        },
+        {
+          "ref": "inline 1251900918 PR#5688",
+          "quote": "Nit: rename this to `app.fml.yaml`."
+        }
+      ]
+    },
+    {
+      "id": "fml-askama-template-unused",
+      "title": "No unused `let`/`import` in nimbus-fml Askama templates or Kotlin/Swift import lists",
+      "area": "nimbus-fml",
+      "problem": "FML codegen templates gained a `{% let %}` that did nothing, a macro import never used (and pointing at the wrong language's macros), Kotlin `import` written as Askama imports, and unnecessary entries in the generated Kotlin import list.",
+      "rule": "In components/support/nimbus-fml/src/backends/**/templates, every `{% let x = ... %}` must be referenced later; every `{% import \"f\" as m %}` must have `m::` usages and `f` must match the template language; generated Kotlin/Swift must compile without unused-import warnings.",
+      "enforcement": "custom-lint",
+      "detect": "Python script over templates: regex `{%-?\\s*let\\s+(\\w+)` then search `\\b\\1\\b` later in file; `{%-?\\s*import\\s+\"([^\"]+)\"\\s+as\\s+(\\w+)` -> require `\\2::` usage and extension of \\1 == template extension; `{% import \"java.` -> error. Run ktlint `no-unused-imports` on generated test outputs (test/*.kts harness).",
+      "autofix": true,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low.",
+      "evidence": [
+        {
+          "ref": "inline 1244469474 PR#5688",
+          "quote": "I don't think this is doing anything. :("
+        },
+        {
+          "ref": "inline 1244464579 PR#5688",
+          "quote": "Well this is weird. It seems like no macros were being used in this file."
+        },
+        {
+          "ref": "inline 1244462858 PR#5688",
+          "quote": "I don't _think_ you need to add anymore Kotlin imports"
+        },
+        {
+          "ref": "inline 1251875427 PR#5688",
+          "quote": "I'm surprised this is necessary."
+        }
+      ]
+    },
+    {
+      "id": "tests-accompany-behavior-changes",
+      "title": "New behaviour and edge cases come with tests (Rust first, then bindings/Python)",
+      "area": "tests",
+      "problem": "Reviewers frequently asked for tests of untested formatting code, unhandled HTTP status branches, no-error/invalid-path cases, prefix-vs-contains matching, device-id preservation and a Python test for a newly exported method.",
+      "rule": "PRs that add a pub fn, UDL/exported method, match arm on a status/enum, or SQL query must add or modify a test in the same crate (#[cfg(test)], tests/, *Test.kt, *Tests.swift, python-tests).",
+      "enforcement": "ci-script",
+      "detect": "Diff heuristic: if added lines in components/**/src match /^\\+\\s*pub (crate )?fn |#\\[uniffi::export\\]|^\\+.*=> / or *.udl changed, and no changed path matches /(tests?\\/|_test\\.rs|#\\[cfg\\(test\\)\\]|Test\\.kt|Tests\\.swift|python-tests)/ (or no added `#[test]` lines) -> warn with list; optionally `cargo llvm-cov --json` diff coverage on changed lines < 60% -> warn.",
+      "autofix": false,
+      "count": 12,
+      "severity": "medium",
+      "false_positive_risk": "high — refactors and pure renames trigger it; warning only.",
+      "evidence": [
+        {
+          "ref": "inline 1232790616 PR#5672",
+          "quote": "I may be missing them somewhere else but are there any tests for this file?"
+        },
+        {
+          "ref": "inline 1310730752 PR#5796",
+          "quote": "Do we need a test for the `(StatusCode::NOT_MODIFIED, Json(Value::Null))` case too?"
+        },
+        {
+          "ref": "inline 1330787472 PR#5827",
+          "quote": "is this test covering the case when there's no error to be found? What about if the path is invalid?"
+        },
+        {
+          "ref": "inline 1372406159 PR#5884",
+          "quote": "let's add another test for that case, too, please—either a positive one if it's intentional, or a negative one that verifies we don't return anything."
+        },
+        {
+          "ref": "inline 1376247110 PR#5887",
+          "quote": "What do you think of adding tests for this in the Rust layer to make sure that an authentication after a auth issue correctly uses the old device id?"
+        },
+        {
+          "ref": "review 1517054966 PR#5714",
+          "quote": "is a Python test using a fixture yaml and the new uniffi'd method."
+        }
+      ]
+    },
+    {
+      "id": "test-fixtures-via-helpers-and-snapshots",
+      "title": "Factor repeated test fixtures into helpers / json! / snapshot tests",
+      "area": "tests",
+      "problem": "Large inline experiment JSON blobs and expected Suggestion structs were copy-pasted across tests; reviewers asked for parameterized helpers in tests/helpers, snapshot testing, and `json!` instead of hand-serialized strings.",
+      "rule": "Test JSON fixtures repeated more than twice move to a helper in the crate's test helpers module; comparisons of serialized JSON use `serde_json::to_value` + `json!` rather than string literals.",
+      "enforcement": "ast-grep/regex",
+      "detect": "jscpd (or PMD CPD) on tests/** and `mod tests` with min-tokens 80 -> warn; ast-grep: `assert_eq!(serde_json::to_string($X)$$$, $S)` where $S is a string literal containing `{\\\"` -> suggest `to_value` + `json!`.",
+      "autofix": true,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "medium — duplication thresholds need tuning.",
+      "evidence": [
+        {
+          "ref": "inline 1242981474 PR#5685",
+          "quote": "Can we put this in a helper function, and parameterize?"
+        },
+        {
+          "ref": "inline 1260964891 PR#5716",
+          "quote": "Let's take the opportunity to rename this to `get_targeted_experiment` and move it to `helpers`."
+        },
+        {
+          "ref": "inline 1275488291 PR#5743",
+          "quote": "shall we consider using a snapshot test crate (e.g. [insta](https://github.com/mitsuhiko/insta)) to ease that?"
+        },
+        {
+          "ref": "inline 1362789635 PR#5876",
+          "quote": "I have a slight preference for `json!` over serialized strings"
+        },
+        {
+          "ref": "inline 1260961309 PR#5716",
+          "quote": "Also: consider a shorter name (e.g. `to_local_experiments_string`?) and moving it to `helpers`."
+        }
+      ]
+    },
+    {
+      "id": "dry-duplicated-logic",
+      "title": "Extract logic duplicated across match arms/functions into helpers",
+      "area": "other",
+      "problem": "The same keyword-splitting block appeared three times, the drop-insert-drop-put ingestion sequence was repeated per suggestion type, and JSON replacement closures were duplicated.",
+      "rule": "Blocks of >= ~8 identical/near-identical lines repeated within a file or module must be extracted.",
+      "enforcement": "ast-grep/regex",
+      "detect": "Run jscpd/PMD-CPD (Rust supported) on changed files with min-lines 8, min-tokens 60; report clones introduced by the diff only.",
+      "autofix": false,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "medium — match arms over different types can't always be merged.",
+      "evidence": [
+        {
+          "ref": "inline 1255896337 PR#5715",
+          "quote": "It looks like this code is written the same in a couple places — could it be refactored out into the file scope?"
+        },
+        {
+          "ref": "inline 1337670735 PR#5841",
+          "quote": "Looks like this sequence of (drop-insert-drop-put) has been used for all the suggestion types, shall we wrap them up into another helper in DAO to keep `ingest_records()` DRY?"
+        },
+        {
+          "ref": "inline 1344574799 PR#5841",
+          "quote": "This block was used three times in this module, you can extract this as a helper function"
+        },
+        {
+          "ref": "inline 1298614716 PR#5786",
+          "quote": "This removal block was used by both arms of the match, looks like we can take them out and do it once"
+        }
+      ]
+    }
+  ],
+  "non_lintable_themes": [
+    {
+      "theme": "PRs too large / should be split or preceded by a design doc (ADR/RFC) for state machines and new APIs",
+      "count": 6,
+      "evidence": [
+        {
+          "ref": "review 1537439975 PR#5717",
+          "quote": "The PR is fairly large and introducing quite a few new concepts"
+        },
+        {
+          "ref": "review 1680875242 PR#5851",
+          "quote": "It looks like just a bit too much for a single thing to land – or even review thoroughly."
+        },
+        {
+          "ref": "review 1446724727 PR#5609",
+          "quote": "What do we think about maybe an ADR?"
+        },
+        {
+          "ref": "review 1634317365 PR#5827",
+          "quote": "how complicated would it be to separate the change from `Vec<_>` to `BTreeMap<String, _>` from the rest of this?"
+        }
+      ]
+    },
+    {
+      "theme": "Public API semantics and state-machine modelling (FxA auth states, events, which responsibilities live in Rust vs app)",
+      "count": 9,
+      "evidence": [
+        {
+          "ref": "inline 1244294096 PR#5686",
+          "quote": "This seems a little wrong to me"
+        },
+        {
+          "ref": "inline 1378181522 PR#5887",
+          "quote": "I don't like this name tbh - I don't see it as the user being logged out, but instead being in a bad state."
+        },
+        {
+          "ref": "inline 1347552571 PR#5851",
+          "quote": "What do you think about handling this fully internally?"
+        },
+        {
+          "ref": "inline 1268547269 PR#5717",
+          "quote": "This feels a little like a leaking abstraction"
+        }
+      ]
+    },
+    {
+      "theme": "Persisting partial state / transactional semantics in Kotlin wrappers and callbacks",
+      "count": 4,
+      "evidence": [
+        {
+          "ref": "inline 1346283723 PR#5851",
+          "quote": "is there a risk a kind of \"partial\" inconsistent state will be persisted?"
+        },
+        {
+          "ref": "inline 1346287180 PR#5851",
+          "quote": "If `ignoreCache` is false and we end up returning a cached value, we probably don't need to persist anything?"
+        },
+        {
+          "ref": "inline 1268290208 PR#5717",
+          "quote": "How does this change error handling in persisting the state?"
+        }
+      ]
+    },
+    {
+      "theme": "Query/data-access design: filter in SQL, LIMIT semantics vs docs, only query needed provider tables, return all hits sorted",
+      "count": 7,
+      "evidence": [
+        {
+          "ref": "inline 1265508757 PR#5723",
+          "quote": "Why do we do the filtering here in-memory and not in SQL query itself?"
+        },
+        {
+          "ref": "inline 1266121505 PR#5723",
+          "quote": "I've noticed that there is already a `LIMIT 1` in the query below"
+        },
+        {
+          "ref": "inline 1370293877 PR#5884",
+          "quote": "This will query both amo and pocket keyword tables despite that the consumer might need one of them."
+        },
+        {
+          "ref": "inline 1338021030 PR#5841",
+          "quote": "Now that we have multiple keyword sources, maybe it's time to return all the hits back (sorted by score) to the consumer instead of 1."
+        }
+      ]
+    },
+    {
+      "theme": "Remote Settings / Kinto semantics and ingestion interruptibility (filters are ANDed; reader vs writer interrupt)",
+      "count": 3,
+      "evidence": [
+        {
+          "ref": "inline 1312300769 PR#5786",
+          "quote": "Kinto seems to always combine filters with `AND`."
+        },
+        {
+          "ref": "inline 1265510204 PR#5723",
+          "quote": "Would we like to also interrupt the `writer` here too?"
+        }
+      ]
+    },
+    {
+      "theme": "Redundant comments that restate code or duplicate the doc comment",
+      "count": 4,
+      "evidence": [
+        {
+          "ref": "inline 1312206600 PR#5786",
+          "quote": "nitpick: Let's drop this comment; it feels like it's repeating the code in prose."
+        },
+        {
+          "ref": "inline 1376237878 PR#5887",
+          "quote": "this comment is a bit redundant, the doc comment on top of the function says the same thing"
+        },
+        {
+          "ref": "inline 1334897861 PR#5832",
+          "quote": "nitpick, style: I think we can drop the comments (and extra blank lines) in this new block, since they're the same as the block above."
+        }
+      ]
+    },
+    {
+      "theme": "Public docs should not expose internal details or name consumer-side classes",
+      "count": 2,
+      "evidence": [
+        {
+          "ref": "inline 1347542504 PR#5851",
+          "quote": "the last part of the comment seems like an internal detail, is it worth us mentioning in the high level docs?"
+        },
+        {
+          "ref": "inline 1361419469 PR#5851",
+          "quote": "This comment is referencing `FxaAccountManager` which is not part of the project."
+        }
+      ]
+    },
+    {
+      "theme": "Security-sensitive API shape: don't bundle encryption keys with access tokens in returned types",
+      "count": 1,
+      "evidence": [
+        {
+          "ref": "inline 1245464948 PR#5686",
+          "quote": "`AccessTokenInfo` carrying the encryption key feels like a footgun...I could see a future consumer making a mistake and sending over the key to a server along with the access token"
+        }
+      ]
+    },
+    {
+      "theme": "Determinism of Nimbus enrollment / coenrollment merge order across clients",
+      "count": 2,
+      "evidence": [
+        {
+          "ref": "inline 1244351991 PR#5684",
+          "quote": "Do we have it set up such that the order in which enrolled feature configs will enter this method will be the same across all clients/enrollment cases?"
+        },
+        {
+          "ref": "inline 1244369006 PR#5684",
+          "quote": "Is there something somewhere that re-orders them based on something deterministic?"
+        }
+      ]
+    },
+    {
+      "theme": "Taskcluster graph design (from_deps, shipping phases as separate tasks, worker-type aliases, comment/implementation drift)",
+      "count": 5,
+      "evidence": [
+        {
+          "ref": "inline 1221189484 PR#5619",
+          "quote": "I'd have expected 2 different tasks, one that runs as part of promote and one that runs as part of ship."
+        },
+        {
+          "ref": "inline 1240105364 PR#5563",
+          "quote": "I think I would avoid translating the `worker-type` here as it just adds another layer of indirection."
+        },
+        {
+          "ref": "inline 1321927646 PR#5804",
+          "quote": "It would be possible to define these dependencies using Taskgraph's"
+        }
+      ]
+    },
+    {
+      "theme": "Test strategy: avoid heavyweight deps (Glean in Rust unit tests, mockk in Kotlin), prefer named junit tests over kts scripts",
+      "count": 3,
+      "evidence": [
+        {
+          "ref": "inline 1355334752 PR#5857",
+          "quote": "adding the Glean dependency to the Rust project is probably a little bit of a heavy weight solution for the sake of unit testing"
+        },
+        {
+          "ref": "inline 1357610638 PR#5851",
+          "quote": "I would not recommend using it widely in the codebase given the troubles that we've had with it in fenix."
+        },
+        {
+          "ref": "inline 1357446231 PR#5862",
+          "quote": "I'm not the biggest fan of having unnamed tests like this"
+        }
+      ]
+    },
+    {
+      "theme": "Desktop parity for places/suggest SQL triggers and URL handling",
+      "count": 3,
+      "evidence": [
+        {
+          "ref": "inline 1228547862 PR#5653",
+          "quote": "I'm also confused about why this trigger works this way!"
+        },
+        {
+          "ref": "inline 1230648014 PR#5653",
+          "quote": "I wonder if we should do the equivalent of `delete_pending_temp_tables` here"
+        }
+      ]
+    }
+  ],
+  "suspicious": []
+}

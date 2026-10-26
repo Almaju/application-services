@@ -1,0 +1,1793 @@
+{
+  "chunk": "chunk_2",
+  "period": "2022-12-20 to 2023-05-19",
+  "threads_read": 603,
+  "rules": [
+    {
+      "id": "no-unwrap-expect-in-library-code",
+      "title": "Propagate errors with `?` instead of `.unwrap()`/`.expect()` in non-test component code",
+      "area": "errors",
+      "problem": "Reviewers repeatedly flag `.unwrap()` on serde, DB-meta, header and JSON results in component code (tabs storage, Cirrus client, remote settings). A panic inside Rust called over FFI crashes the app or surfaces as an opaque exception in Kotlin/Swift/Python; reviewers want `?`, a logged fallback, or an explicit justified invariant.",
+      "rule": "In `components/**/src` (excluding `#[cfg(test)]`, `tests/`, `examples/`, `benches/`) `.unwrap()`, `.expect()`, `panic!` and `unreachable!` on fallible values are forbidden unless annotated with `#[expect(clippy::unwrap_used, reason = \"...\")]` stating the invariant. Lock-acquisition unwraps go away via parking_lot (see use-parking-lot-locks).",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.clippy] unwrap_used = \"warn\", expect_used = \"warn\", panic = \"warn\", unwrap_in_result = \"warn\"; clippy.toml: allow-unwrap-in-tests = true, allow-expect-in-tests = true. Run `cargo clippy --workspace --all-targets -- -D warnings` in CI; roll out per crate with `#![warn(clippy::unwrap_used)]` in lib.rs, burning down existing hits. The `reason = ...` on `#[expect]` doubles as the 'comment explaining the intentional unwrap' reviewers asked for.",
+      "autofix": false,
+      "count": 9,
+      "severity": "high",
+      "false_positive_risk": "medium - genuine invariants (e.g. regex literals, mutex locks) need an `#[expect(..., reason)]`; noisy until existing code is cleaned up",
+      "evidence": [
+        {
+          "ref": "inline 1053855389 PR#5277",
+          "quote": "This unwrap is wrong - should probably treat Err as None (with a `log::err/warn`) here."
+        },
+        {
+          "ref": "inline 1053915965 PR#5277",
+          "quote": "here and below. replace the `unwrap()` with `?`."
+        },
+        {
+          "ref": "inline 1106634966 PR#5376",
+          "quote": "This unwrap is wrong (even though I don't think it will ever fail tbh, but everywhere else handles serde failures so we should too)."
+        },
+        {
+          "ref": "inline 1188987460 PR#5478",
+          "quote": "A panic should really only be used for unusual errors that are neither caller nor callees fault (e.g. out of memory, or malformed installation, corrupted memory), rather than \"you used me wrong\"."
+        },
+        {
+          "ref": "review 1417394904 PR#5478",
+          "quote": "I'm curious about all the naked unwraps, will those bubble back as Python exceptions?"
+        },
+        {
+          "ref": "inline 1183178004 PR#5423",
+          "quote": "If not, this might be safer than unwrapping"
+        }
+      ]
+    },
+    {
+      "id": "use-parking-lot-locks",
+      "title": "Use `parking_lot::Mutex`/`RwLock` instead of `std::sync` locks",
+      "area": "concurrency",
+      "problem": "std mutexes poison and force `.lock().unwrap()` everywhere, which reviewers then flag as panics. The team convention is parking_lot (no poisoning, no unwrap), but new code (rs_client, Cirrus) keeps introducing `std::sync::Mutex`.",
+      "rule": "`std::sync::Mutex` and `std::sync::RwLock` must not be used in component crates; use `parking_lot::{Mutex, RwLock}`.",
+      "enforcement": "existing-clippy",
+      "detect": "clippy.toml: disallowed-types = [{ path = \"std::sync::Mutex\", reason = \"use parking_lot::Mutex (no poisoning, no unwrap)\" }, { path = \"std::sync::RwLock\", reason = \"use parking_lot::RwLock\" }]; enable `clippy::disallowed_types` (default warn) with -D warnings. Autofix: swap the import and drop `.unwrap()`/`.expect(..)` directly following `.lock()`/`.read()`/`.write()`.",
+      "autofix": true,
+      "count": 4,
+      "severity": "medium",
+      "false_positive_risk": "low - only crates that intentionally avoid the dependency need an allow",
+      "evidence": [
+        {
+          "ref": "inline 1053915965 PR#5277",
+          "quote": "the unwraps on the mutex operations are ok - we really should move everyone to `parking_lot` which doesn't need them"
+        },
+        {
+          "ref": "inline 1130381117 PR#5423",
+          "quote": "Aaah should we use `parking_lot::Mutex` here instead of `Mutex`?"
+        },
+        {
+          "ref": "review 1331940030 PR#5423",
+          "quote": "My main `requesting changes` is to use `parking_lot` for the Mutex"
+        },
+        {
+          "ref": "inline 1187806272 PR#5478",
+          "quote": "Does this panic at runtime if it fails?"
+        }
+      ]
+    },
+    {
+      "id": "uniffi-fallible-entrypoints-must-throw",
+      "title": "UniFFI constructors/functions that parse input must be `[Throws=...]` and return `Result`",
+      "area": "uniffi",
+      "problem": "Exported entry points (e.g. `CirrusClient::new(app_context: String)`) parsed JSON with `from_str(..).unwrap()`, so bad caller input panics across the FFI instead of raising a typed `NimbusError` in Kotlin/Swift/Python.",
+      "rule": "Every UDL `constructor`/function/method and every `#[uniffi::export]`/`#[uniffi::constructor]` item whose Rust body can fail (parses strings/JSON, does IO, calls `?`-able APIs) must declare `[Throws=<Error>]` / return `Result<_, <Error>>`; its body must not contain `unwrap`/`expect`/`panic!`.",
+      "enforcement": "uniffi-checker",
+      "detect": "Parse each `*.udl` (weedle) and collect callables without `[Throws]`; map to the Rust impl (same name in the crate's scaffolding module, or `#[uniffi::export]` fns without `Result` return). Use syn to scan the fn body: flag `.unwrap()`, `.expect(`, `panic!`, `serde_json::from_str`/`from_value`/`Url::parse` results not propagated. Extra heuristic: a non-throwing callable taking a `string` argument named `*json*|*context*|*config*|*url*` -> warn.",
+      "autofix": false,
+      "count": 2,
+      "severity": "high",
+      "false_positive_risk": "low - infallible accessors are skipped because their bodies have no fallible calls",
+      "evidence": [
+        {
+          "ref": "inline 1188993886 PR#5478",
+          "quote": "To move from panic to `NimbusError`:"
+        },
+        {
+          "ref": "inline 1188987460 PR#5478",
+          "quote": "pub fn new(app_context: String) -> Result<Self> {"
+        }
+      ]
+    },
+    {
+      "id": "changelog-breaking-change-entry",
+      "title": "Breaking binding/API changes require a '⚠️ Breaking Changes ⚠️' CHANGELOG entry",
+      "area": "docs-changelog",
+      "problem": "Removing/renaming UniFFI error variants, adding enum variants (breaks exhaustive Kotlin `when`/Swift `switch`), changing Kotlin call signatures and bumping the JVM target were all caught by reviewers, not tooling. Consumers (Fenix, Focus, Firefox iOS) break on upgrade unless the change is flagged and a fix PR is ready.",
+      "rule": "If the public FFI surface changes incompatibly (UDL or `#[uniffi::*]` item removed/renamed, argument added/reordered without default, record field removed/retyped, enum/error variant added or removed, hand-written Kotlin/Swift public signature changed, Gradle jvmTarget/minSdk raised), the PR must add a bullet under `### ⚠️ Breaking Changes ⚠️` in CHANGELOG.md for that component.",
+      "enforcement": "ci-script",
+      "detect": "CI job: build the bindings for base and head (`uniffi-bindgen generate` for kotlin+swift, or dump UDL/uniffi metadata via `uniffi-bindgen print-repr`), diff the public API (Kotlin: binary-compatibility-validator `apiDump`; Swift: `swift-api-digester -diagnose-sdk`), and also diff `jvmTarget`/`minSdkVersion` in gradle files. If any incompatible change is found and the CHANGELOG.md diff has no added line under a 'Breaking Changes' header -> fail with the list of changes. Also link docs/howtos/breaking-changes.md from the PR template.",
+      "autofix": false,
+      "count": 6,
+      "severity": "high",
+      "false_positive_risk": "low - variant additions are only 'breaking' for exhaustive matches; allow an override label after manual verification",
+      "evidence": [
+        {
+          "ref": "inline 1103095712 PR#5369",
+          "quote": "This **may** be a breaking change depending on if the consuming apps depend on those errors. Which is totally okay, but lets note that in our changelog!"
+        },
+        {
+          "ref": "inline 1107895626 PR#5359",
+          "quote": "Could this be a breaking change in android? in the case where android depends on an exhaustive `when` expression that checks all the variants"
+        },
+        {
+          "ref": "review 1318765911 PR#5401",
+          "quote": "I would request though that we add a changelog entry as a breaking change noting that the jvm compat target is now 11"
+        },
+        {
+          "ref": "review 1339455709 PR#5431",
+          "quote": "one thing that does need to change is the changelog should note this is a breaking change wrt call signatures."
+        },
+        {
+          "ref": "inline 1130028305 PR#5425",
+          "quote": "Aaah if this is a breaking change, we should release 98.0.0, right?"
+        },
+        {
+          "ref": "inline 1195673781 PR#5579",
+          "quote": "How do you feel about adding a reference to this on our PR templates as well?"
+        }
+      ]
+    },
+    {
+      "id": "changelog-entry-format",
+      "title": "CHANGELOG bullets go in CHANGELOG.md, link the PR, and describe consumer-visible effect",
+      "area": "docs-changelog",
+      "problem": "Entries were added without the `([#NNNN](.../pull/NNNN))` link, out of order relative to related entries, phrased in internal jargon ('reset'), or added to the retired CHANGES_UNRELEASED.md after the switch to rolling CHANGELOG.md.",
+      "rule": "Every bullet added to CHANGELOG.md must end with a PR link `([#N](https://github.com/mozilla/application-services/pull/N))`; CHANGES_UNRELEASED.md must not be modified (file retired); entries must sit under the component heading of the current version.",
+      "enforcement": "ci-script",
+      "detect": "On PRs: `git diff -U0 base -- CHANGELOG.md | grep '^+\\s*[-*] '` -> each added bullet (or its sub-bullet parent) must match `\\(\\[#\\d+\\]\\(https://github\\.com/mozilla/application-services/pull/\\d+\\)\\)`; fail if `CHANGES_UNRELEASED.md` appears in the diff; check the added lines are below the first `# v<N>` header and under a `## <Component>` heading.",
+      "autofix": false,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1106339499 PR#5369",
+          "quote": "Can you add a link to this PR here like the changelogs above?"
+        },
+        {
+          "ref": "inline 1080622039 PR#5277",
+          "quote": "nano-nit - \"reset\" probably doesn't mean much to consumers"
+        },
+        {
+          "ref": "inline 1159655955 PR#5448",
+          "quote": "At a bare minimum it should happen occur chronologically before (and next to) your log entry."
+        },
+        {
+          "ref": "inline 1188976309 PR#5478",
+          "quote": "We should be adding things directly to `CHANGELOG.md`."
+        }
+      ]
+    },
+    {
+      "id": "new-params-appended-with-defaults",
+      "title": "Add new parameters with defaults only at the end of existing Kotlin/Swift/UDL signatures",
+      "area": "kotlin",
+      "problem": "`fun recordEvent(count: Long = 1, eventId: String)` put a defaulted parameter before the existing required one, silently breaking every positional call site in Fenix and Firefox iOS (`recordEvent(\"app_opened\")`). Python bindings also require defaulted args last.",
+      "rule": "In hand-written Kotlin/Swift wrappers and in UDL/proc-macro signatures, a parameter with a default value must not precede a parameter without one, and new parameters must be appended after existing ones; otherwise add an overload.",
+      "enforcement": "custom-lint",
+      "detect": "detekt custom rule (or regex over `*.kt`): in a `fun` parameter list, any param with `=` default followed by a param without default -> error. Swift: same check on `func` params with defaults. UDL: weedle-parse argument lists; argument with `= default` followed by one without -> error. Diff-based: if a param is inserted before an existing param of an existing public fun -> require breaking-change entry.",
+      "autofix": false,
+      "count": 1,
+      "severity": "high",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1135716674 PR#5431",
+          "quote": "This will be a breaking change for Fenix. They'll need to update the `recordEvent` calls to include the parameter name for eventId."
+        }
+      ]
+    },
+    {
+      "id": "udl-optional-fields-need-defaults",
+      "title": "Give UDL/Record optional fields defaults; prefer empty collections over nullable ones",
+      "area": "uniffi",
+      "problem": "Optional dictionary fields without `= null` force Kotlin/Swift callers to pass `bucketName = null`/`nil`; nullable lists/booleans (`sequence<T>? = null`, `boolean? = null`) push 'missing vs empty' handling into Rust.",
+      "rule": "In UDL dictionaries every `T?` field must declare `= null` (or another default); `sequence<..>?`/`record<..>?` should be non-optional with `= []`/`= {}`; `boolean?` should be `boolean` with an explicit default. Same for `#[derive(uniffi::Record)]` via `#[uniffi(default = ...)]`.",
+      "enforcement": "uniffi-checker",
+      "detect": "Parse UDL with weedle: for `dictionary` members of nullable type without a default -> warn (autofix: append ` = null`); nullable `sequence`/`record` -> suggest non-null + `= []`/`= {}`; `boolean?` -> suggest `boolean x = true|false`. For proc-macro Records, syn-scan `Option<_>` fields lacking `#[uniffi(default = None)]`.",
+      "autofix": true,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "low - some fields must stay required-nullable; allow an inline comment opt-out",
+      "evidence": [
+        {
+          "ref": "inline 1183173222 PR#5423",
+          "quote": "That should do the trick for not having to pass `bucketName = null` / `bucketName: nil` in Kotlin and Swift."
+        },
+        {
+          "ref": "inline 1169958962 PR#5475",
+          "quote": "Would this be better to default to an empty list, rather than a `null`?"
+        },
+        {
+          "ref": "inline 1169931222 PR#5475",
+          "quote": "Should this be default to `true` rather than `null`?"
+        }
+      ]
+    },
+    {
+      "id": "avoid-option-wrapped-collections",
+      "title": "Don't wrap collections in `Option` when `None` and empty mean the same thing",
+      "area": "api-design",
+      "problem": "`Option<Vec<_>>`, `Option<UnknownFields>`/`Option<Map>` created ambiguity between None and empty and led to `match ... { Some(x) => x, None => Vec::new() }` boilerplate.",
+      "rule": "Struct fields, params and return types of type `Option<Vec<T>>`, `Option<HashMap<..>>`, `Option<serde_json::Map<..>>` (incl. `UnknownFields`) are flagged; use the bare collection with `#[serde(default)]` / `Default::default()` unless the distinction is documented.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep (rust): patterns `Option<Vec<$T>>`, `Option<HashMap<$K, $V>>`, `Option<serde_json::Map<$K, $V>>`, `Option<UnknownFields>` in `field_declaration`, `parameter`, function return types; also `match $X { Some($Y) => $Y, None => Vec::new() }` -> suggest `unwrap_or_default()`.",
+      "autofix": false,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "medium - wire formats sometimes need to distinguish absent from empty; allow a `// option-collection: <why>` comment",
+      "evidence": [
+        {
+          "ref": "inline 1124736053 PR#5413",
+          "quote": "That way there's no ambiguity between `None` and an empty map."
+        },
+        {
+          "ref": "inline 1053892875 PR#5277",
+          "quote": "this too could change to just being `Vec<>` instead of `Option<Vec<>>`"
+        },
+        {
+          "ref": "inline 1175126383 PR#5471",
+          "quote": "Can we use default values here, instead of an option?"
+        }
+      ]
+    },
+    {
+      "id": "no-always-some-option-params",
+      "title": "Remove `Option` from params/config fields that are never `None` or always unwrapped",
+      "area": "api-design",
+      "problem": "Helpers took `Option<&str>` but were never called with `None`; config structs had optional fields that were unused or unconditionally `.unwrap()`ed, hiding invalid states that an enum or required field would prevent.",
+      "rule": "A crate-private fn parameter of type `Option<T>` where every call site passes `Some(..)`, or an `Option<T>` struct field that is only ever read via `.unwrap()`/`.expect()`, must become non-optional (or an enum for mutually exclusive options).",
+      "enforcement": "custom-lint",
+      "detect": "dylint late lint: for non-exported fns, collect all call sites in the crate (HIR); if every argument for an `Option<T>` param is a `Some(..)` expression -> warn. For struct fields of type `Option<T>`: if all reads are followed by `.unwrap()`/`.expect()` -> warn; if a field is never read -> warn (rustc dead_code misses pub fields).",
+      "autofix": false,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "medium - pub API params and serde-driven fields must be excluded",
+      "evidence": [
+        {
+          "ref": "inline 1148741945 PR#5432",
+          "quote": "Why is this an option? It never seems to be called with `None`"
+        },
+        {
+          "ref": "inline 1112421337 PR#5389",
+          "quote": "It looks like `socket_protocol` is unused and both `http_protocol` and `bridge_type` are regularly unwrapped - so maybe kill the former and make the latter non-options?"
+        },
+        {
+          "ref": "inline 1112411767 PR#5389",
+          "quote": "I wonder if it might make sense to express this via an enum in `PushConfiguration`"
+        }
+      ]
+    },
+    {
+      "id": "mpl-license-header",
+      "title": "Every new source/script/config file starts with the MPL-2.0 header",
+      "area": "other",
+      "problem": "New Rust, Python, YAML and shell files (remote_settings lib.rs, nimbus_client.rs, python-tests) landed without the MPL header and were caught in review.",
+      "rule": "Files with extensions .rs .kt .swift .py .sh .yml .yaml .groovy .gradle .udl .sql (excluding generated/vendored/lock files) must contain the MPL-2.0 boilerplate ('Mozilla Public' and 'mozilla.org/MPL/2.0/') within the first 10 lines.",
+      "enforcement": "ci-script",
+      "detect": "for f in $(git diff --name-only --diff-filter=A origin/main -- '*.rs' '*.kt' '*.swift' '*.py' '*.sh' '*.yml' '*.yaml' '*.groovy' '*.gradle' '*.udl' '*.sql'); do head -n 10 \"$f\" | grep -q 'mozilla.org/MPL/2.0' || echo \"missing MPL header: $f\"; done (exclude **/generated/**, third_party). Autofix: prepend the comment style appropriate to the extension.",
+      "autofix": true,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1128657583 PR#5423",
+          "quote": "Oops, missing the MPL header!"
+        },
+        {
+          "ref": "inline 1157132340 PR#5448",
+          "quote": "Nit: license."
+        },
+        {
+          "ref": "inline 1198831484 PR#5557",
+          "quote": "Nit: All these files, python, yaml, sh need a license at the top."
+        }
+      ]
+    },
+    {
+      "id": "new-crate-manifest-checklist",
+      "title": "New crates declare license/description/authors, join `default-members`, and add no redundant files",
+      "area": "deps-build",
+      "problem": "New crates (rs_client, nimbus-cli, remote_settings) were added without `license`/`description`/`authors`, were missing from workspace `default-members` (so `cargo test` skipped them), or shipped a per-crate .gitignore duplicating the root one.",
+      "rule": "Every workspace package under components/ must set `license = \"MPL-2.0\"`, a non-empty `description`, and `authors`; every workspace member must also be in `default-members` unless allowlisted; no crate-level .gitignore containing only `/target` or `Cargo.lock`.",
+      "enforcement": "ci-script",
+      "detect": "`cargo metadata --format-version 1 --no-deps | jq` -> for packages whose manifest_path starts with components/: assert .license == \"MPL-2.0\", .description != null, .authors != []; compare root Cargo.toml `[workspace].members` globs vs `default-members`; `git ls-files 'components/**/.gitignore'` -> fail if contents subset of {/target, /Cargo.lock}.",
+      "autofix": false,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1103088284 PR#5369",
+          "quote": "we should add at least the `license`, `description` and `author` fields here"
+        },
+        {
+          "ref": "inline 1175488968 PR#5494",
+          "quote": "heh I'm surprised we didn't add the fml to the `default-members` but we should add this one there"
+        },
+        {
+          "ref": "inline 1128653727 PR#5423",
+          "quote": "huh, were those not automatically gitignored by the high level gitignore we have?"
+        },
+        {
+          "ref": "inline 1183171090 PR#5423",
+          "quote": "If so, I wonder if that's worth capturing that somehow, in the description or a README."
+        }
+      ]
+    },
+    {
+      "id": "uniffi-dependency-hygiene",
+      "title": "Depend on `uniffi` only (no `uniffi_macros`), with one consistent version spec",
+      "area": "deps-build",
+      "problem": "Crates kept depending on `uniffi_macros` and calling `uniffi_macros::include_scaffolding!` after UniFFI 0.23 folded macros into `uniffi`; dependency specs were inconsistent (`{ version = \"0.23\" }` vs workspace/plain string).",
+      "rule": "Cargo.toml files must not list `uniffi_macros`; Rust code must use `uniffi::include_scaffolding!`/`uniffi::setup_scaffolding!`; all crates must resolve a single uniffi version.",
+      "enforcement": "ast-grep/regex",
+      "detect": "regex: `^\\s*uniffi_macros\\s*=` in any Cargo.toml -> error; `uniffi_macros::` in *.rs -> error (autofix to `uniffi::`); `cargo tree -d -i uniffi` must be empty or cargo-deny `[bans] multiple-versions = \"deny\"` scoped to uniffi*.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1183792159 PR#5423",
+          "quote": "there should no longer be a need to depend on `uniffi_macros`"
+        },
+        {
+          "ref": "inline 1090890920 PR#5352",
+          "quote": "nit: we don't need the `version`"
+        }
+      ]
+    },
+    {
+      "id": "remove-unneeded-dependencies",
+      "title": "Drop unused or heavyweight dependencies (direct viaduct, nimbus-sdk for one struct, test-only HTTP mocks)",
+      "area": "deps-build",
+      "problem": "After refactors crates kept direct dependencies they no longer needed (nimbus -> viaduct), or added a whole component crate for a single type (nimbus-fml -> nimbus-sdk for `FeatureConfig`), increasing build size and coupling.",
+      "rule": "No unused dependencies in any workspace crate; component-to-component path dependencies must be on an allowlist (e.g. nimbus-fml must not depend on nimbus-sdk).",
+      "enforcement": "ci-script",
+      "detect": "Run `cargo machete` (fast) or `cargo +nightly udeps --workspace --all-targets` in CI and fail on findings; maintain a deny-list of path-dependency edges in cargo-deny `[bans] deny = [{ name = \"nimbus-sdk\", wrappers = [<allowed dependents>] }]`.",
+      "autofix": true,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "low - cargo-machete may need `[package.metadata.cargo-machete] ignored` for macro-only deps",
+      "evidence": [
+        {
+          "ref": "inline 1103057754 PR#5369",
+          "quote": "Can we remove the direct dependency on `viaduct` ?"
+        },
+        {
+          "ref": "inline 1189774982 PR#5557",
+          "quote": "Conceptually, I'd prefer that this is not a dependency; especially as we're only using the `FeatureConfig` struct."
+        },
+        {
+          "ref": "inline 1103084587 PR#5369",
+          "quote": "That way we remove both the `viaduct_reqwest` and the mockito dependencies for nimbus!"
+        }
+      ]
+    },
+    {
+      "id": "cargo-feature-gating-consistency",
+      "title": "Gate optional deps and everything that touches them behind the same Cargo feature; check every feature combo",
+      "area": "deps-build",
+      "problem": "Nimbus' `stateful` split repeatedly had a non-optional `remote_settings` dep, error variants/`pub use`/UDL variants compiled outside the feature, and `cfg_if!` blocks wrapping whole files; each was caught by hand.",
+      "rule": "An optional dependency may only be referenced from items gated by the feature that enables it (error variants, `pub use`, `From` impls, UDL enum variants listed in the feature-specific UDL). Prefer `#[cfg(feature = ...)]` on items/`mod` declarations over wrapping whole files in `cfg_if!`. Each crate with features must build and pass clippy for every feature (and `--no-default-features`).",
+      "enforcement": "ci-script",
+      "detect": "CI: `cargo hack clippy --each-feature --no-dev-deps -p nimbus-sdk -p nimbus-fml -- -D warnings` (+ `--no-default-features`), which surfaces ungated uses, dead code and unused imports per feature. Script: for each `optional = true` dep in Cargo.toml, ensure the dep is listed in some `[features]` entry and every `use <dep>::` / `<dep>::` path occurs under a `#[cfg(feature = \"...\")]`. ast-grep: `cfg_if::cfg_if! { if #[cfg($F)] { $$$BODY } }` with no else branch -> suggest `#[cfg($F)]` on the items.",
+      "autofix": false,
+      "count": 7,
+      "severity": "medium",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1192458613 PR#5423",
+          "quote": "`remote_settings` should be optional and included as a dependency only when the `stateful` feature is enabled."
+        },
+        {
+          "ref": "inline 1192463665 PR#5423",
+          "quote": "Related to `remote_settings` being an optional dependency, this error should only be compiled when the `stateful` feature is enabled."
+        },
+        {
+          "ref": "inline 1192464767 PR#5423",
+          "quote": "The `cirrus.udl` is only used when the `stateful` feature is disabled, so `\"ClientError\"` does not need to be here"
+        },
+        {
+          "ref": "inline 1192508673 PR#5423",
+          "quote": "This should move to the \"stateful\" section of the `cfg_if` below"
+        },
+        {
+          "ref": "inline 1161995444 PR#5477",
+          "quote": "Since this is only used in stateful files I think this should have the \"stateful\" feature attribute"
+        },
+        {
+          "ref": "inline 1159606089 PR#5448",
+          "quote": "Nit: I'd keep this as `#[cfg(feature = \"stateful\")]` on the `fn` for the sake of indentation."
+        }
+      ]
+    },
+    {
+      "id": "no-unjustified-allow-attributes",
+      "title": "Replace `#[allow(...)]` with `#[expect(..., reason = ...)]` so stale suppressions are detected",
+      "area": "dead-code",
+      "problem": "`#[allow(unused)]`, `#![cfg_attr(..., allow(unused))]` and `#[allow(clippy::derivable_impls)]` were left after the code became used or the toolchain moved on; reviewers had to ask whether each was still needed and when it could be removed.",
+      "rule": "`#[allow(...)]`/`#![allow(...)]` in component code is forbidden; use `#[expect(lint, reason = \"...\")]` (Rust >= 1.81), which errors via `unfulfilled_lint_expectations` once the suppression is no longer needed. Reasons that depend on a future condition (MSRV, follow-up) must cite it.",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.clippy] allow_attributes = \"warn\", allow_attributes_without_reason = \"warn\"; [workspace.lints.rust] unfulfilled_lint_expectations = \"deny\". clippy --fix can rewrite `allow` -> `expect`; reasons must be added by hand.",
+      "autofix": true,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low - `expect` can misfire under some feature combos; combine with cargo-hack per-feature runs",
+      "evidence": [
+        {
+          "ref": "inline 1100919383 PR#5369",
+          "quote": "is this annotation still needed? It looks like nimbus now calls it."
+        },
+        {
+          "ref": "inline 1146167686 PR#5439",
+          "quote": "Maybe note that we should switch to Derive once the min-version is 1.68."
+        },
+        {
+          "ref": "inline 1157614525 PR#5448",
+          "quote": "I'm guessing that we'll need to start using this again once we start re-organizing `dbcache.rs`"
+        },
+        {
+          "ref": "inline 1159607887 PR#5448",
+          "quote": "Is this necessary? I think `Result` is needed event if the `stateful` feature isn't enabled."
+        }
+      ]
+    },
+    {
+      "id": "todo-xxx-must-link-issue",
+      "title": "TODO/XXX/'should die'/deprecation comments must link a tracking issue",
+      "area": "docs-changelog",
+      "problem": "Reviewers keep asking for a link to the GitHub issue/Jira ticket on temporary branches ('this branch should die', iOS-migration-only APIs, deprecated rc_log, serde workarounds) and push back on bare `XXX` question comments left in code.",
+      "rule": "Added lines containing `TODO`, `XXX`, `FIXME`, `HACK`, `deprecated`, `should die`, `temporary`, `remove once` in comments must include an issue reference (`#\\d+`, a github.com/.../issues/N URL, `mozilla-hub.atlassian.net/browse/KEY-N`, or `bugzilla.mozilla.org/show_bug.cgi?id=N`). Bare question comments (`XXX - do we need this?`, `????`) are rejected.",
+      "enforcement": "ast-grep/regex",
+      "detect": "CI on the PR diff: `git diff -U0 origin/main | grep -E '^\\+.*(//|#|/\\*).*\\b(TODO|XXX|FIXME|HACK|should die|deprecated|remove once)\\b' | grep -vE '(#[0-9]+|/issues/[0-9]+|atlassian\\.net/browse/[A-Z]+-[0-9]+|show_bug\\.cgi\\?id=[0-9]+)'` -> fail; also flag `\\?{3,}` inside comments.",
+      "autofix": false,
+      "count": 8,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1080644267 PR#5277",
+          "quote": "Please add a link to https://github.com/mozilla/application-services/issues/5199 here as this branch should die."
+        },
+        {
+          "ref": "inline 1053972438 PR#5277",
+          "quote": "include a link to #5199 in that `else` block"
+        },
+        {
+          "ref": "inline 1095175158 PR#5360",
+          "quote": "nit: a comment here or in the UDL that this is only used by iOS migration and should be killed as part of killing that might be helpful to our future selvss."
+        },
+        {
+          "ref": "inline 1097783952 PR#5362",
+          "quote": "Maybe even file a ticket to remove it too so we won't forget and can refer to it"
+        },
+        {
+          "ref": "inline 1160925037 PR#5473",
+          "quote": "nit: Should we link the issue here for future us?"
+        },
+        {
+          "ref": "inline 1136427150 PR#5432",
+          "quote": "Please change this comment to make it clear that yes, they should"
+        }
+      ]
+    },
+    {
+      "id": "no-leftover-debug-code",
+      "title": "No debugging artifacts (test log records, dbg!, println!) in shipped code",
+      "area": "dead-code",
+      "problem": "The rust-log-forwarder PR shipped hard-coded diagnostic log calls (`target: \"log-test\"`, `message: \"in call_once\"`) left over from debugging infinite recursion.",
+      "rule": "Non-test, non-example code must not contain `dbg!`, `println!`/`eprintln!`, or log/record calls whose literal target/message looks like a debugging marker (\"test\", \"log-test\", \"here\", \"in <fn>\").",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.clippy] dbg_macro = \"warn\", print_stdout = \"warn\", print_stderr = \"warn\" (allow in bins/examples/build.rs via crate-level expect). ast-grep: struct literal or log macro with string literal matching /^(log-)?test$|^in [a-z_]+$|^here$/ outside #[cfg(test)] -> warn. Groovy/Kotlin: flag stray `println` in tools/nimbus-gradle-plugin.",
+      "autofix": false,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1097793775 PR#5362",
+          "quote": "Was this an artifact left from testing"
+        },
+        {
+          "ref": "inline 1097806396 PR#5362",
+          "quote": "ditto on is this a testing artifact?"
+        }
+      ]
+    },
+    {
+      "id": "doc-comments-on-exported-api",
+      "title": "Exported UniFFI items and public support-crate APIs need `///` doc comments (not `//`)",
+      "area": "docs-changelog",
+      "problem": "New UDL namespaces/functions, public helper functions and macro parameters lacked docs, or used `//` comments that do not reach rustdoc or the generated Kotlin/Swift; the meaning of optional args (e.g. `Logger? = None` disables forwarding) was undocumented.",
+      "rule": "Every item exposed through UniFFI (UDL namespace fn, interface method, dictionary/enum and their fields/variants; `#[uniffi::export]`/`#[derive(uniffi::*)]` items) and every `pub` item of a support crate must carry a `///` docstring; nullable params must say what `null` means. A `//` comment block directly above a `pub` item should be `///`.",
+      "enforcement": "uniffi-checker",
+      "detect": "[lints.rust] missing_docs = \"warn\" on component/support crates' lib.rs; UDL checker: each definition/member must be preceded by a `///` line (UniFFI >= 0.26 forwards these to Kotlin/Swift); ast-grep: `// ...` comment node immediately preceding `pub fn|pub struct|pub enum|pub trait` -> suggest `///` (autofix); for `T?` arguments, require the docstring to mention `null`/`None`.",
+      "autofix": true,
+      "count": 6,
+      "severity": "medium",
+      "false_positive_risk": "medium - missing_docs is noisy on existing code; scope to changed items initially",
+      "evidence": [
+        {
+          "ref": "inline 1097785533 PR#5362",
+          "quote": "nit: Can we put doc comments here? Or maybe in the `lib.rs` (or maybe both!) in case we ever want to understand what the functions do without looking into them"
+        },
+        {
+          "ref": "inline 1097810091 PR#5362",
+          "quote": "nit: What do you think of using a doc comment"
+        },
+        {
+          "ref": "inline 1053899306 PR#5277",
+          "quote": "Let's add a comment to this function."
+        },
+        {
+          "ref": "inline 1104577039 PR#5375",
+          "quote": "nit: Should we add a note in the doc comment to what `Error` is?"
+        },
+        {
+          "ref": "inline 1126550484 PR#5411",
+          "quote": "let's document how it works function comment."
+        },
+        {
+          "ref": "inline 1097781919 PR#5362",
+          "quote": "Do we need the Logger to be optional, or can we enforce it to be called with a Logger and not `None`?"
+        }
+      ]
+    },
+    {
+      "id": "no-network-io-in-constructors",
+      "title": "Don't do network I/O in constructors of UniFFI-exposed objects; resolve lazily",
+      "area": "uniffi",
+      "problem": "The remote-settings `Client::new` fetched the attachments base URL from the server: construction became slow, blocked the calling (possibly main) thread, failed entirely on a flaky network, and pushed lazy-init complexity onto every Kotlin/Swift consumer.",
+      "rule": "UDL `constructor`s, `#[uniffi::constructor]`s and `fn new` of exported objects must not (transitively, within the crate) perform network requests; defer them to the first method that needs the data (e.g. `OnceCell`).",
+      "enforcement": "custom-lint",
+      "detect": "dylint/syn call-graph within the crate: start from constructors of UDL interfaces / `#[uniffi::constructor]` / `impl X { fn new }` where X is exported; flag any reachable call to `viaduct::Request::{get,post,..}(..).send()`, `Request::send`, or crate fns already known to call it. Docs check: constructor docstrings mentioning 'will fetch'/'GET' -> warn.",
+      "autofix": false,
+      "count": 2,
+      "severity": "high",
+      "false_positive_risk": "low - opening the local DB in a constructor is an accepted pattern and is not matched",
+      "evidence": [
+        {
+          "ref": "inline 1183153056 PR#5423",
+          "quote": "`Client::new` now hides a side effect. It's definitely a personal preference, but I usually try to avoid I/O in constructors."
+        },
+        {
+          "ref": "review 1411066429 PR#5423",
+          "quote": "Was also about to agree entirely with the \"please don't do IO in the constructor\" but notice you've already agreed"
+        }
+      ]
+    },
+    {
+      "id": "utf8-safe-string-truncation",
+      "title": "Never truncate/slice `String`s at arbitrary byte offsets; use a shared char-boundary-safe helper",
+      "area": "other",
+      "problem": "Tab-title trimming used `title.truncate(MAX - 3)` + ASCII '...', which panics when the offset lands inside a multi-byte char (emoji/CJK titles) and crashes sync; follow-ups mixed char counts with byte counts and mis-sized the U+2026 ellipsis.",
+      "rule": "`String::truncate(n)`, `&s[..n]`/`&s[a..b]` on str with computed offsets, and `split_at(n)` are forbidden unless `n` is produced by `is_char_boundary`/`floor_char_boundary` or a shared helper (e.g. in support/types); truncation markers must use '\\u{2026}' and account for its UTF-8 length.",
+      "enforcement": "existing-clippy",
+      "detect": "Enable clippy restriction lint `string_slice = \"warn\"` (flags &str range indexing) plus `indexing_slicing` in component crates; ast-grep: `$S.truncate($N)` where $S is a String and $N is not a call to the shared helper -> error; `$S.push_str(\"...\")` within 3 lines of a truncate -> suggest '\\u{2026}'. Require tests with multi-byte input (emoji, CJK) for any helper.",
+      "autofix": false,
+      "count": 7,
+      "severity": "high",
+      "false_positive_risk": "low - slicing at offsets from `find()`/`char_indices()` is safe and can be expect()-ed with a reason",
+      "evidence": [
+        {
+          "ref": "inline 1115080352 PR#5376",
+          "quote": "I think we need to use a unicode ellipsis character"
+        },
+        {
+          "ref": "inline 1122322947 PR#5411",
+          "quote": "That depends on how many bytes that unicode character below uses."
+        },
+        {
+          "ref": "inline 1122324402 PR#5411",
+          "quote": "I think this truncates things based on unicode chars, but you want to be truncating based on the `idx` values."
+        },
+        {
+          "ref": "inline 1122325068 PR#5411",
+          "quote": "I think you should check that the truncated titles are exactly `MAX_TITLE_CHAR_LENGTH` bytes here to makes sure you're testing the right thing."
+        },
+        {
+          "ref": "review 1320657311 PR#5411",
+          "quote": "I think this still doesn't do the right thing for some unicode values, but I'm not totally sure."
+        },
+        {
+          "ref": "inline 1126562955 PR#5411",
+          "quote": "I'm pretty sure this check is O(1), and therefore this is a better method than iterating with `char_indices()`"
+        }
+      ]
+    },
+    {
+      "id": "sync-payload-roundtrip-unknown-fields",
+      "title": "Sync record payloads must round-trip unknown fields and unknown enum values (ADR-0008)",
+      "area": "serde",
+      "problem": "Engines that deserialize server records into fixed structs drop fields/enum values written by newer Firefox versions and re-upload the lossy record (e.g. unknown device type -> `DeviceType::Unknown`). Reviewers demanded `unknown_fields` preservation plus tests for 3-way merge, fork and dedupe paths.",
+      "rule": "Every `Deserialize` struct used as a sync payload (passed to `IncomingBso::into_content*`/built into `OutgoingBso`) must have a `#[serde(flatten)] unknown_fields: UnknownFields` (or equivalent) that is persisted and written back on upload; synced enums must not collapse unrecognized strings into a lossy catch-all that is re-uploaded. Engines need roundtrip tests covering merge/fork/dedupe.",
+      "enforcement": "custom-lint",
+      "detect": "syn/dylint: find types T used as `into_content::<T>()`/`into_content_with_fixup::<T>()` or `OutgoingBso::from_content_with_id(T)`; require a field with `#[serde(flatten)]` whose type is `UnknownFields`/`serde_json::Map<String, Value>`. For enums deserialized in sync code: flag `#[serde(other)]` variants and hand-written `_ => Self::Unknown` arms unless the raw string is retained. Test check: each engine dir has a test file matching `*unknown*|*payload_evolution*`.",
+      "autofix": false,
+      "count": 5,
+      "severity": "high",
+      "false_positive_risk": "medium - some payload parts are intentionally frozen (e.g. top-level of address payloads)",
+      "evidence": [
+        {
+          "ref": "inline 1064867144 PR#4861",
+          "quote": "It makes logical sense, but it seems like there could be issues with syncing:"
+        },
+        {
+          "ref": "inline 1137201553 PR#5432",
+          "quote": "**3 way merge:** there's a record in the mirror table with `unknown_fields` set, an incoming record with new `unknown_fields`, and local changes."
+        },
+        {
+          "ref": "review 1341664868 PR#5432",
+          "quote": "I think the addresses code is correct, but there are a couple corner cases that I think we should test."
+        },
+        {
+          "ref": "inline 1145661003 PR#5432",
+          "quote": "The other thing this test should do is somehow check that `reconciled` now has `new-unknown-field` in its mirror"
+        },
+        {
+          "ref": "inline 1169523979 PR#5470",
+          "quote": "Could you please add a test with deduping involved?"
+        }
+      ]
+    },
+    {
+      "id": "no-silent-data-drop",
+      "title": "Don't silently swallow parse/DB errors with `_ => None`/`.ok()`; log or report so data loss is visible",
+      "area": "errors",
+      "problem": "Code turned malformed stored JSON, missing SELECT columns or deserialization failures into `None` (or skipped records as Malformed) with a `// ???? Should maybe log/report` comment, making data loss untraceable.",
+      "rule": "In non-test code, a match arm or combinator that discards an `Err`/unexpected variant from `serde_json::from_*`, `row.get`, or record parsing (`Err(_) => None`, `_ => None`, `.ok()`, `.unwrap_or_default()`) must log (`log::warn!`) or report via `error_support::report_error!`, or return an error.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep rules: (1) `match serde_json::from_str($$$) { $$$ Err(_) => $DEFAULT $$$ }` where the arm body has no `log::`/`report_error!`/`breadcrumb!` -> warn; (2) `serde_json::from_$F($$$).ok()` and `.unwrap_or_default()` on those -> warn; (3) `match $V { serde_json::Value::Object($M) => $$$, _ => None }` -> warn; (4) comment regex `\\?{3,}|should (maybe )?(log|report)` -> warn.",
+      "autofix": false,
+      "count": 4,
+      "severity": "high",
+      "false_positive_risk": "medium - some fallbacks are intentionally silent; require a justification comment",
+      "evidence": [
+        {
+          "ref": "inline 1124669944 PR#5413",
+          "quote": "Definitely should, otherwise how would we notice/troubleshoot data loss?"
+        },
+        {
+          "ref": "inline 1124715135 PR#5413",
+          "quote": "It seems like the data was corrupted in some way and now we're going to drop it."
+        },
+        {
+          "ref": "inline 1124712083 PR#5413",
+          "quote": "I think it indicates that you want to get the `unknown_fields`, but forgot to include it in your SELECT list."
+        },
+        {
+          "ref": "inline 1144011184 PR#5438",
+          "quote": "Will this still parse and flag records with invalid (wrong type or missing) properties, or will those now fall through to the `IncomingKind::Malformed` case?"
+        }
+      ]
+    },
+    {
+      "id": "schema-change-requires-migration",
+      "title": "Any change to a CREATE TABLE schema needs a version bump, an `upgrade_from` step and an upgrade test; no data-dropping migrations",
+      "area": "sql",
+      "problem": "A new `unknownFields` column was added to places' shared schema without a DB migration; a tabs migration simply `DROP TABLE`d user data; new columns were added that were not needed at all.",
+      "rule": "If a PR modifies `components/*/sql/*.sql` or `CREATE TABLE`/`CREATE INDEX` text in `schema.rs`, it must (a) bump the schema `VERSION`/`END_VERSION`, (b) add an `upgrade_from` arm for the previous version, and (c) touch the crate's `test_all_upgrades` (or equivalent) test. `DROP TABLE`/`DELETE FROM` inside upgrade code requires an explicit `-- data-loss-ok: <reason>` annotation.",
+      "enforcement": "ci-script",
+      "detect": "PR script: changed_sql = git diff --name-only origin/main -- 'components/*/sql/*.sql' + files whose diff touches `CREATE (TABLE|INDEX|TRIGGER)`; for each affected crate grep the diff of `schema.rs`/`db.rs` for a changed `const VERSION`/`END_VERSION` and a new `\\d+ =>`/`upgrade_from_v\\d+` arm; otherwise fail. Also grep `upgrade_from` bodies for `DROP TABLE|DELETE FROM` without the annotation. Optionally run the places_utils/`test_all_upgrades` suite against a DB created at the base schema.",
+      "autofix": false,
+      "count": 4,
+      "severity": "high",
+      "false_positive_risk": "low - TEMP tables and staging-schema changes can be allowlisted",
+      "evidence": [
+        {
+          "ref": "inline 1148732321 PR#5438",
+          "quote": "This needs a db migration, right?"
+        },
+        {
+          "ref": "review 1358246654 PR#5438",
+          "quote": "Probably worth running the `places_utils` example too to ensure the upgrade works and that syncing still works after."
+        },
+        {
+          "ref": "inline 1053837279 PR#5277",
+          "quote": "this strategy means that no tabs will be available until a first sync."
+        },
+        {
+          "ref": "inline 1134860975 PR#5432",
+          "quote": "I don't think we need this column at all - we can just extract it from the mirror table's payload."
+        }
+      ]
+    },
+    {
+      "id": "minimal-visibility",
+      "title": "Use the narrowest visibility; no gratuitous `pub`/`pub(crate)`/`pub(super)`",
+      "area": "api-design",
+      "problem": "Fields and type aliases in sync modules were made `pub(crate)`/`pub(super)`/`pub` only to work around another item's visibility; reviewers asked to remove the `pub` entirely.",
+      "rule": "Items must not be more visible than their uses require; `pub` items unreachable from the crate's public API are flagged.",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.rust] unreachable_pub = \"warn\"; [workspace.lints.clippy] redundant_pub_crate = \"warn\" (nursery). Exempt fields of UniFFI Records/derive(uniffi::Record) which must be pub.",
+      "autofix": true,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "medium - UniFFI-exposed records need pub fields; unreachable_pub is noisy in crates that re-export selectively",
+      "evidence": [
+        {
+          "ref": "inline 1136472837 PR#5432",
+          "quote": "`pub(self)` is probably all you need here as nothing outside the sync module knows about this."
+        },
+        {
+          "ref": "inline 1136473230 PR#5432",
+          "quote": "I think these pub changes are only needed because of the visibility of `UnknownEntry`"
+        },
+        {
+          "ref": "inline 1136473434 PR#5432",
+          "quote": "but even then, you probably don't need this `pub` at all?"
+        },
+        {
+          "ref": "review 1340495537 PR#5432",
+          "quote": "Let me know if you can remove all the `pub` stuff entirely - I think you can."
+        },
+        {
+          "ref": "inline 1135870396 PR#5423",
+          "quote": "nit: does this need to be `pub`?"
+        }
+      ]
+    },
+    {
+      "id": "no-underscore-prefix-on-used-bindings",
+      "title": "Don't `_`-prefix bindings that are actually used",
+      "area": "naming",
+      "problem": "Parameters named `_literal` were then matched on, misleading readers into thinking they are unused.",
+      "rule": "A binding/parameter starting with `_` must not be read.",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.clippy] used_underscore_binding = \"warn\" (pedantic); `cargo clippy --fix` renames.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1100333687 PR#5361",
+          "quote": "Nit: remove the `_` prefix for variables that are in use."
+        },
+        {
+          "ref": "inline 1100348225 PR#5361",
+          "quote": "Again:"
+        }
+      ]
+    },
+    {
+      "id": "clippy-idiom-lints",
+      "title": "Enable the idiom lints reviewers apply by hand (format args, lifetimes, ok_or_else, derivable Default)",
+      "area": "other",
+      "problem": "Reviewers spend comments on mechanical idioms: needless explicit lifetimes, `format!` with no args, positional instead of inlined format args, manual `match` instead of `ok_or_else`, and hand-written `Default` impls that a derive would cover.",
+      "rule": "CI runs clippy with these lints at warn/deny: needless_lifetimes, useless_format, uninlined_format_args, manual_ok_or, option_if_let_else (or manual_let_else), derivable_impls.",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.clippy] uninlined_format_args = \"warn\", manual_ok_or = \"warn\", manual_let_else = \"warn\", needless_lifetimes = \"warn\", useless_format = \"warn\", derivable_impls = \"warn\"; CI: `cargo clippy --workspace --all-targets --all-features -- -D warnings`; offer `cargo clippy --fix` in a pre-commit hook.",
+      "autofix": true,
+      "count": 6,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1097809395 PR#5362",
+          "quote": "nit: What do you think about removing the explicit lifetime"
+        },
+        {
+          "ref": "inline 1100919911 PR#5369",
+          "quote": "clippy is complaining here - it just wants you to drop the `format!()`"
+        },
+        {
+          "ref": "inline 1112409891 PR#5389",
+          "quote": "mildly surprised clippy isn't complaining about you not using `{auth}` instead of using it as a param"
+        },
+        {
+          "ref": "inline 1113657529 PR#5390",
+          "quote": "nit: we can use `ok_or_else` here on the option!"
+        },
+        {
+          "ref": "inline 1124018257 PR#5389",
+          "quote": "So please either replace that with a derived `Default` or add a comment?"
+        },
+        {
+          "ref": "inline 1053892534 PR#5277",
+          "quote": "It might make this easier to read and understand if we early return on None"
+        }
+      ]
+    },
+    {
+      "id": "avoid-needless-clone-and-borrow-mismatch",
+      "title": "Take `self`/args by value when consuming, avoid clone-then-return and `&mut` + returned copy",
+      "area": "perf",
+      "problem": "Methods took `&self` then cloned fields (`to_client_config`), took `&mut Vec` but returned a cloned `Vec`, cloned a value out of a mutex guard, or cloned a URL string already owned - extra allocations and confusing ownership.",
+      "rule": "Flag: conversion methods `to_*`/`into_*` that clone all fields of `&self` (use `impl From<T>`/`into_*(self)`); fns with a `&mut Vec<T>` param that also return `Vec<T>` built from it; `.lock().clone()` on large values followed by re-locking; `.clone()` of a value not used afterwards.",
+      "enforcement": "existing-clippy",
+      "detect": "[workspace.lints.clippy] redundant_clone = \"warn\" (nursery), needless_pass_by_value = \"warn\", wrong_self_convention = \"warn\", implicit_clone = \"warn\", unnecessary_to_owned = \"warn\"; ast-grep: `fn $F($$$, $P: &mut Vec<$T>, $$$) -> $R` where body ends with `$P.to_vec()`/`$P.clone()` -> warn.",
+      "autofix": false,
+      "count": 5,
+      "severity": "low",
+      "false_positive_risk": "medium - redundant_clone is nursery and occasionally wrong",
+      "evidence": [
+        {
+          "ref": "inline 1053689111 PR#5297",
+          "quote": "Nit: did you mean `&self`?"
+        },
+        {
+          "ref": "inline 1100911153 PR#5369",
+          "quote": "it would be better to \"consume\" it - so `to_client_config()` could take `self` instead of `&self`, and then you wouldn't need to clone in its impl."
+        },
+        {
+          "ref": "inline 1110254146 PR#5376",
+          "quote": "Do we need to return the Vec if we are modifying it in place by passing a mutable reference?"
+        },
+        {
+          "ref": "inline 1130382853 PR#5423",
+          "quote": "Can we get away without the clone here?"
+        },
+        {
+          "ref": "inline 1183178627 PR#5423",
+          "quote": "Since you already parsed the URL, and don't use it after this point, you can take ownership of its string when you construct the error."
+        }
+      ]
+    },
+    {
+      "id": "uniffi-enum-variant-hygiene",
+      "title": "UniFFI enum/error variants: consistent error suffix, no implementation details, no unused/relic variants",
+      "area": "uniffi",
+      "problem": "Exposed error enums mixed `NetworkFailure` with `*Error` variants (and that variant was never constructed), named variants after internals (`WeakReferenceDropped`), or used 'Invalid' where 'Unknown' described the condition; exposed enums (SyncReason) gained relic variants that Rust treats identically to existing ones. These names become Kotlin/Swift types and cases and are breaking to rename or remove later.",
+      "rule": "For each `[Error]` UDL enum / `#[derive(uniffi::Error)]` type: all variants share one naming convention (all end in `Error` or none do) and contain no implementation tokens (Weak, Arc, Mutex, Cell, Rkv, Serde, Bincode, Sqlite). For every UniFFI-exposed enum (UDL `enum`, `[Error]`, `#[derive(uniffi::Enum|Error)]`): each variant must be constructed or matched distinctly somewhere in the crate (not only in a catch-all arm that also handles another variant).",
+      "enforcement": "uniffi-checker",
+      "detect": "Parse UDL `[Error] enum` / `[Error] interface` and syn-scan `#[derive(uniffi::Error)]` enums: compute suffix set of variant names -> warn if mixed; regex variant names against implementation-token list; grep crate for `<Enum>::<Variant>` construction/match (or `#[from]` attr) -> warn if never referenced, or only referenced in an or-pattern arm together with another variant (`A | B => same`) - rustc dead_code doesn't fire on pub enums.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "medium - suffix consistency is a convention, not correctness; variants consumed only by foreign code may look unused",
+      "evidence": [
+        {
+          "ref": "inline 1130460130 PR#5423",
+          "quote": "nano-nit - one being `Failure` and the rest being `Error` seems odd?"
+        },
+        {
+          "ref": "inline 1095223927 PR#5359",
+          "quote": "we might be able to kill this - it looks like iOS already doesn't do the right thing here so we prefer the fxa record for the name."
+        },
+        {
+          "ref": "inline 1095226976 PR#5359",
+          "quote": "Android treats `DidLogin` and `EnabledChange` as the same"
+        },
+        {
+          "ref": "inline 1113748706 PR#5390",
+          "quote": "\"Weak reference\" is a bit of an implementation detail"
+        },
+        {
+          "ref": "inline 1188972876 PR#5556",
+          "quote": "I wonder if \"unknown\" is a better description than \"invalid\"?"
+        }
+      ]
+    },
+    {
+      "id": "uniffi-public-error-model",
+      "title": "Separate public (UniFFI) errors from internal errors; expose only actionable variants plus one reported catch-all",
+      "area": "errors",
+      "problem": "New components exposed their internal error enum directly: several JSON variants consumers cannot distinguish, stringified `viaduct::Response`, data-carrying variants (`Backoff(duration)`) flattened to strings, and `anyhow` across trait boundaries. The team pattern (logins, error_support) is a small public error + `InternalError`/`UnexpectedError` that reports to Sentry via `handle_error!`.",
+      "rule": "A type annotated `[Error]` in UDL or `#[derive(uniffi::Error)]` must not be the crate's internal `Error` and must not carry `#[from]` conversions of third-party errors (serde_json::Error, rusqlite::Error, url::ParseError, std::io::Error, viaduct::Error). The crate must `impl GetErrorHandling for <internal Error>` and exported fns must use `#[handle_error(<internal Error>)]` returning `ApiResult`.",
+      "enforcement": "uniffi-checker",
+      "detect": "syn-scan component crates: find the public error type (UDL [Error] name or uniffi::Error derive); fail if it has variants with `#[from] <external path>` or if the same enum is used as `Result<T, E>` inside non-exported fns; check presence of `impl error_support::GetErrorHandling for` and that every UDL callable with `[Throws=PublicError]` maps to a Rust fn with `#[handle_error(...)]`/`handle_error!`.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "medium - small crates may intentionally expose one error type",
+      "evidence": [
+        {
+          "ref": "inline 1183806814 PR#5423",
+          "quote": "we only expose errors the errors we expect consumers might want to actually inspect and handle, plus one other error called something like `InternalError` or `UnexpectedError`"
+        },
+        {
+          "ref": "inline 1128656456 PR#5423",
+          "quote": "What's the reason behind having multiple JSON related errors? Will consumer be able to differentiate between them? (and should they care?)"
+        },
+        {
+          "ref": "inline 1130487569 PR#5423",
+          "quote": "I'm thinking specifically of `ClientError::Backoff(duration)` and whether the Kotlin caller will be able to sanely handle that and extract the duration."
+        },
+        {
+          "ref": "inline 1100917625 PR#5369",
+          "quote": "Is there a reason you don't have this be a `viaduct::Response` instead of a string?"
+        },
+        {
+          "ref": "inline 1113552111 PR#5390",
+          "quote": "How do we feel about using a concert `sync15::Error` error? that way consumers can consumer specific errors without downcasting?"
+        }
+      ]
+    },
+    {
+      "id": "error-reporting-noise",
+      "title": "Report only actionable errors to Sentry; no breadcrumbs/reports on per-sync or per-record hot paths",
+      "area": "logging-privacy",
+      "problem": "URL-parse errors were reported to Sentry although they never indicate a component bug; breadcrumbs were added on branches iOS hits every sync; reviewers questioned whether the reported context (`action`) actually reaches Sentry.",
+      "rule": "In `impl GetErrorHandling`, errors caused by external input (url::ParseError, network/HTTP/backoff errors, interrupted) must map to `.log_warning()`/`.log_info()`, not `.report_error(..)`. `error_support::breadcrumb!`/`report_error!` must not be called inside loops or per-record sync paths (`apply_incoming`, `stage_incoming`, `get_remote_tabs`, `fetch_outgoing`).",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: inside `impl GetErrorHandling for $E { fn get_error_handling(&self) $$$ }`, match arms whose pattern mentions `UrlParse|ParseError|Network|Request|Backoff|Interrupted` and whose body contains `report_error(` -> warn. ast-grep: `breadcrumb!($$$)`/`report_error!($$$)` within `for`/`while`/`.for_each(` bodies or in fns named apply_incoming|stage_incoming|get_remote_tabs -> warn.",
+      "autofix": false,
+      "count": 4,
+      "severity": "medium",
+      "false_positive_risk": "medium - some loops legitimately report once and break",
+      "evidence": [
+        {
+          "ref": "review 1236540428 PR#5304",
+          "quote": "I don't really understand why we don't just never report `UrlParseError` whereever it happens?"
+        },
+        {
+          "ref": "inline 1061130121 PR#5277",
+          "quote": "I doubt we want every sync there to report this breadcrumb?"
+        },
+        {
+          "ref": "inline 1097823194 PR#5364",
+          "quote": "Could this be useful in the future? I'm not sure, but would it be possible breadcrumbing here can help us track other issue?"
+        },
+        {
+          "ref": "review 1388945745 PR#5485",
+          "quote": "I think the `action` isn't going to be sent to senty, and I wanted to confirm that is expected"
+        }
+      ]
+    },
+    {
+      "id": "lock-once-per-operation",
+      "title": "Acquire a lock once per operation and keep it at the layer that owns the state",
+      "area": "concurrency",
+      "problem": "Backoff handling locked the same mutex several times in one call (lock, clone, unlock, re-lock to assign), and a Mutex was placed at the outer API layer only because an inner `Cell` wasn't `Sync`; `log::Log::enabled` was going to take an RwLock on every log call.",
+      "rule": "Within one function body, the same lock receiver must not be acquired more than once (pass the guard or `&mut` state instead); locks protecting a single field should live next to that field; hot paths (logging, per-record) should use atomics.",
+      "enforcement": "custom-lint",
+      "detect": "ast-grep/dylint: count `$X.lock()`/`$X.read()`/`$X.write()` with identical receiver expression in one fn body -> warn if >1; pattern `let $V = $X.lock()$$$.clone();` followed later by `$X.lock()` -> warn. Enable clippy `significant_drop_tightening` and `significant_drop_in_scrutinee` (nursery) to catch guards held across calls.",
+      "autofix": false,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "medium - deliberate unlock/relock around blocking calls must be allowed with a comment",
+      "evidence": [
+        {
+          "ref": "inline 1130380153 PR#5423",
+          "quote": "we should just assign the value to `*current_state` instead of relocking the mutex"
+        },
+        {
+          "ref": "inline 1128675028 PR#5423",
+          "quote": "I was wondering why we need the `Mutex` here, then I realized that `Client` held on to a `Cell<RemoteState>`, and `Cell` is not `Sync`"
+        },
+        {
+          "ref": "inline 1097788818 PR#5362",
+          "quote": "Should this return `self.0.read().is_some()` instead?"
+        }
+      ]
+    },
+    {
+      "id": "ios-megazord-and-xcode-registration",
+      "title": "New UniFFI components must be wired into the iOS megazord, and generated `.swift` must not be in Xcode Compile Sources",
+      "area": "swift",
+      "problem": "The remote_settings component was added to the Android megazord only; the iOS megazord needed the Cargo dep + `pub use`, header generation in build-xcframework.sh and an import in MozillaRustComponents.h. Separately, Xcode added the UDL-generated `remote_settings.swift` to Compile Sources, which breaks the build because a build rule already generates it.",
+      "rule": "(1) Every crate re-exported from megazords/full/src/lib.rs that ships UniFFI bindings must also be in megazords/ios-rust (Cargo.toml + `pub use`), build-xcframework.sh and MozillaRustComponents.h, unless on an android-only allowlist. (2) project.pbxproj must not list `<name>.swift in Sources` when `<name>.udl` exists.",
+      "enforcement": "ci-script",
+      "detect": "Script: crates = parse `pub use (\\w+);` in megazords/full/src/lib.rs, filter to those with `src/*.udl` or `uniffi::setup_scaffolding!`; for each, grep megazords/ios-rust/src/lib.rs, megazords/ios-rust/build-xcframework.sh and megazords/ios-rust/MozillaRustComponents.h; fail on missing. For every `*.udl` basename B: `grep -E \"/\\* B\\.swift in Sources \\*/\" megazords/ios-rust/**/project.pbxproj` -> fail.",
+      "autofix": false,
+      "count": 4,
+      "severity": "medium",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1128715178 PR#5423",
+          "quote": "Do we want to expose this to firefox-ios as well?"
+        },
+        {
+          "ref": "review 1421576409 PR#5423",
+          "quote": "Add the dependency and a `pub use` to `megazords/ios-rust`, just like you did for the full Megazord."
+        },
+        {
+          "ref": "inline 1191629625 PR#5423",
+          "quote": "adding the generated `.swift` file as a source actually causes all sorts of problems"
+        },
+        {
+          "ref": "inline 1191630131 PR#5423",
+          "quote": "...And nix this line, too, please."
+        }
+      ]
+    },
+    {
+      "id": "cross-platform-dependency-version-sync",
+      "title": "Keep Glean (and other shared deps) in sync across Gradle, Cargo and Xcode; no unintended submodule/Package.resolved changes",
+      "area": "deps-build",
+      "problem": "A Glean bump updated build.gradle to 52.4.0 while Cargo used 52.4.1 and the iOS test project still pinned the old glean-swift; unrelated PRs accidentally modified the glean submodule pointer or Package.resolved, and stale submodules left Cargo.lock out of date in CI.",
+      "rule": "The Glean version in build.gradle (`glean_version`), Cargo.lock (`glean`/`glean-core`), and Package.resolved/project.pbxproj (glean-swift) must match. A PR that changes a submodule gitlink or Package.resolved must also change the corresponding declared version (otherwise it is treated as accidental).",
+      "enforcement": "ci-script",
+      "detect": "Script: v_gradle = regex `glean_version\\s*=\\s*'([\\d.]+)'` in build.gradle; v_cargo = `cargo metadata` package glean-core version; v_swift = jq '.pins[]|select(.identity==\"glean-swift\").state.version' Package.resolved; fail unless equal. On PRs: if `git diff --submodule=short` shows components/external/glean moved or Package.resolved changed without a matching version change -> fail.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1132837575 PR#5426",
+          "quote": "Should this be 52.4.1 now?"
+        },
+        {
+          "ref": "review 1333923648 PR#5426",
+          "quote": "We should probably also bump the iOS dependency (by bumping the version in Xcode)"
+        },
+        {
+          "ref": "review 1335609391 PR#5426",
+          "quote": "one thing we should do before landing is update the iOS dependency too"
+        },
+        {
+          "ref": "inline 1190556608 PR#5423",
+          "quote": "nitpick: Could you revert the Glean changes to this file, too, please?"
+        },
+        {
+          "ref": "review 1314244278 PR#5405",
+          "quote": "CI is complaining because of the Cargo.lock isn't up to date.. it's most likely because you need to update your local glean git submodule"
+        }
+      ]
+    },
+    {
+      "id": "advisory-ignores-need-reason",
+      "title": "RUSTSEC ignores must carry a reason, and advisory checks must run regardless of which files changed",
+      "area": "deps-build",
+      "problem": "`cargo audit --ignore RUSTSEC-...` flags were added without justification; advisories were only noticed when unrelated PRs happened to touch the files that trigger the dependency check, so PRs failed for unrelated reasons.",
+      "rule": "Advisory ignores live in deny.toml `[advisories] ignore = [{ id = \"RUSTSEC-...\", reason = \"...\" }]` (no bare CLI `--ignore`); the advisory job runs on a schedule and on every PR touching Cargo.lock, independent of other path filters.",
+      "enforcement": "ci-script",
+      "detect": "Fail if `.github/workflows/*.y*ml` contain `cargo audit .*--ignore`; parse deny.toml and fail on ignore entries lacking `reason`; add a nightly cron workflow running `cargo deny check advisories` and opening an issue on failure.",
+      "autofix": false,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1175486391 PR#5494",
+          "quote": "Can we add a comment above as well for the reason why we can safely ignore this?"
+        },
+        {
+          "ref": "review 1362083341 PR#5452",
+          "quote": "The fact that we don't catch it without certain files occasionally getting hit is a bit concerning"
+        },
+        {
+          "ref": "review 1333186989 PR#5417",
+          "quote": "The failing dependency check is https://bugzilla.mozilla.org/show_bug.cgi?id=1820927 and unrelated to this Python dependency change."
+        }
+      ]
+    },
+    {
+      "id": "no-wall-clock-in-test-expectations",
+      "title": "Tests must not derive expected values from the current date/time",
+      "area": "time",
+      "problem": "Nimbus event-store tests computed expectations with `Utc::now()` and weekday arithmetic, so they failed depending on the day of the week/year (e.g. in January); other suites showed flaky failures that were just re-run.",
+      "rule": "In `#[cfg(test)]` modules and tests/ dirs, `Utc::now()`, `Local::now()`, `SystemTime::now()`, `Timestamp::now()` must not feed into expected values or calendar arithmetic (`weekday()`, `ordinal()`, `day()`, `month()`); use fixed timestamps or an injectable clock.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep scoped to test code: `$T.weekday()`, `$T.ordinal()`, `$T.ordinal0()`, `$T.month()` where `$T` is bound from `Utc::now()`/`Local::now()` in the same fn -> warn; `assert_eq!($$$ Utc::now() $$$)` -> warn. Track flaky tests via `cargo nextest --retries 2` + report of tests that passed on retry.",
+      "autofix": false,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "high - many tests legitimately use now() as an arbitrary base",
+      "evidence": [
+        {
+          "ref": "inline 1149860536 PR#5449",
+          "quote": "the default event store boots up with the beginnings of everything set to the first day of the year"
+        },
+        {
+          "ref": "inline 1150785466 PR#5449",
+          "quote": "since these are SUM queries, we don't necessarily need to use the `same_<time>` methods and could just passively check two buckets instead of one."
+        },
+        {
+          "ref": "review 1359855352 PR#5445",
+          "quote": "Re: broken tests I'd re-run them and maybe open a ticket - seems like flaky tests?"
+        }
+      ]
+    },
+    {
+      "id": "slow-test-budget",
+      "title": "Enforce a per-test time budget instead of reviewers asking 'how long does this take?'",
+      "area": "tests",
+      "problem": "Tests generating 10,000 history visits or looping 1000 enrollments to eyeball timing slow CI; reviewers have to ask about duration and request separate benchmark tests.",
+      "rule": "Unit tests must finish under a budget (e.g. 10s Rust, 5s pytest); performance loops belong in benches or explicitly marked slow tests.",
+      "enforcement": "ci-script",
+      "detect": ".config/nextest.toml: `[profile.ci] slow-timeout = { period = \"10s\", terminate-after = 3 }`; pytest: `--durations=10 --timeout=30` (pytest-timeout); flag `for _ in range(1000+)`/`for i in 0..1000` loops in test files with no assertion inside.",
+      "autofix": false,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "medium - some integration tests are legitimately slow; allow per-test overrides",
+      "evidence": [
+        {
+          "ref": "inline 1061072867 PR#5310",
+          "quote": "how long does this test take to run? Anything more than a few seconds might mean we should work something else out?"
+        },
+        {
+          "ref": "inline 1189126609 PR#5478",
+          "quote": "Do you still need to do this 1000 time part?"
+        }
+      ]
+    },
+    {
+      "id": "lint-python-and-shell-scripts",
+      "title": "Run ruff (format + lint) on Python and shellcheck + strict mode on shell scripts",
+      "area": "ci-scripts",
+      "problem": "Python test/taskgraph code got nits for blank-line spacing, unnecessary `.keys()`, try/except without `else`, verbose branches; shell scripts used `|| exit` per command instead of `set -e`.",
+      "rule": "automation/**, taskcluster/** and tools/** Python must pass `ruff format --check` and `ruff check` (E,W,F,SIM,B,PT); shell scripts must pass shellcheck and start with `set -euo pipefail` (or `set -e`).",
+      "enforcement": "formatter-config",
+      "detect": "pyproject.toml/ruff.toml: `[lint] select = [\"E\", \"W\", \"F\", \"SIM\", \"B\", \"PT\"]` (SIM118 catches `in d.keys()`, E302/E303 blank lines); CI: `ruff format --check . && ruff check .`; `shellcheck automation/*.sh taskcluster/scripts/*.sh`; regex: first non-comment line of each *.sh matches `^set -e`.",
+      "autofix": true,
+      "count": 6,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1164678455 PR#5478",
+          "quote": "We could add ```set -e``` to exit if a command fails, instead of using ```|| exit``` for each command."
+        },
+        {
+          "ref": "inline 1189129148 PR#5478",
+          "quote": "Can you add a space here, it should be 2 lines after imports."
+        },
+        {
+          "ref": "inline 1189125278 PR#5478",
+          "quote": "extra space"
+        },
+        {
+          "ref": "inline 1189126934 PR#5478",
+          "quote": "extra space could be removed"
+        },
+        {
+          "ref": "inline 1189128782 PR#5478",
+          "quote": "You could use the ```else``` clause here, at the end of the try catch, since it seems you are expecting only 1 type of error."
+        },
+        {
+          "ref": "inline 1189587271 PR#5501",
+          "quote": "nit: no need for `.keys()`?"
+        }
+      ]
+    },
+    {
+      "id": "taskgraph-cron-target-tasks",
+      "title": "Don't override `target_tasks_method` for cron decision tasks in Python; .cron.yml owns it",
+      "area": "ci-scripts",
+      "problem": "get_decision_parameters forced `parameters[\"target_tasks_method\"]` inside the `tasks_for == \"cron\"` branch twice, duplicating/overriding what .cron.yml already sets.",
+      "rule": "In taskcluster/app_services_taskgraph/__init__.py, no assignment to `parameters[\"target_tasks_method\"]` inside a branch conditioned on `tasks_for == \"cron\"`.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep (python): `if $P[\"tasks_for\"] == \"cron\": $$$ $P[\"target_tasks_method\"] = $V $$$` -> error; cross-check every target_tasks_method named in .cron.yml exists as an `@_target_task` in target_tasks.py.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1124778915 PR#5408",
+          "quote": "Nit: I wouldn't force this value here. `cron` decision task already set `target_tasks_method`."
+        },
+        {
+          "ref": "inline 1192490506 PR#5560",
+          "quote": "If we're coming from cron, target-tasks-method should already be set (in .cron.yml)?"
+        }
+      ]
+    },
+    {
+      "id": "glean-metrics-metadata",
+      "title": "New/changed Glean metrics need team + author notification emails and a data review",
+      "area": "other",
+      "problem": "Nimbus/sync metrics were added with only one notification email (missing the team alias for a permanent collection), and metric additions/changes needed explicit data-review forms.",
+      "rule": "Every metric/ping in components/**/metrics.yaml and pings.yaml must list >= 2 `notification_emails` including a team alias, have non-empty `data_reviews` URLs and `expires`; a PR changing these files must link a data review.",
+      "enforcement": "ci-script",
+      "detect": "Run `glean_parser check` (or `glean_parser translate --allow-reserved -f kotlin -o /tmp`) on all metrics.yaml; YAML script: for each metric assert len(notification_emails) >= 2 and any(e.endswith('-dev@mozilla.com') or e in TEAM_ALIASES), data_reviews non-empty and not 'TODO'; if metrics.yaml in diff and PR body lacks a bugzilla/data-review URL -> add 'needs-data-review' label.",
+      "autofix": false,
+      "count": 3,
+      "severity": "medium",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "review 1268307889 PR#5344",
+          "quote": "Small nit: you should add your email as well as `nimbus-dev` since this is a permanent collection"
+        },
+        {
+          "ref": "review 1356564351 PR#5440",
+          "quote": "**All questions are mandatory. You must receive review from a data steward peer on your responses to these questions before shipping new data collection.**"
+        },
+        {
+          "ref": "inline 1164554976 PR#5479",
+          "quote": "We might need a data review for changes but now could be the time to modify those while we are at it?"
+        }
+      ]
+    },
+    {
+      "id": "spellcheck-and-inclusive-language",
+      "title": "Spell-check docs, comments, CHANGELOG and commit messages; flag non-inclusive terms",
+      "area": "docs-changelog",
+      "problem": "A large share of review comments are pure typo/grammar fixes in ADRs, howtos, doc comments and commit messages ('haeder', 'tring', 'conts', 'monp-repo', 'existing'->'exists'), plus a request to rename a 'sanity' test.",
+      "rule": "Changed text in *.md, doc/line comments, string-free code identifiers and commit messages must pass a spell checker with a project dictionary; a short deny-list of non-inclusive terms (sanity check, whitelist/blacklist, master/slave) fails CI.",
+      "enforcement": "ci-script",
+      "detect": "crate-ci/typos with _typos.toml (extend-words for a-s jargon: uniffi, megazord, fenix, rkv, ...) run on changed files and on `git log --format=%B origin/main..HEAD`; regex deny-list `\\bsanity\\b|white-?list|black-?list|\\bslave\\b` on added lines (`woke` can do the same).",
+      "autofix": true,
+      "count": 13,
+      "severity": "low",
+      "false_positive_risk": "low - needs an allowlist for domain words",
+      "evidence": [
+        {
+          "ref": "inline 1185437318 PR#5510",
+          "quote": "typo: s/haeder/header"
+        },
+        {
+          "ref": "inline 1145487373 PR#5438",
+          "quote": "/// have issues trying to merge its children."
+        },
+        {
+          "ref": "inline 1137746279 PR#5434",
+          "quote": "The pros and cons:"
+        },
+        {
+          "ref": "inline 1072827754 PR#5296",
+          "quote": "nit: I think there may be a word missing between \"of\" and \"to\""
+        },
+        {
+          "ref": "review 1252580674 PR#5338",
+          "quote": "nit: there's a typo in the commit message"
+        },
+        {
+          "ref": "inline 1157688263 PR#5468",
+          "quote": "I know it's a common phrase (and I've definitely used it before), but it can have hurtful connotations"
+        }
+      ]
+    },
+    {
+      "id": "editorconfig-whitespace",
+      "title": "Enforce final newline, no stray blank/comment lines and consistent indentation in non-Rust files",
+      "area": "other",
+      "problem": "Reviewers flagged a missing newline at end of build.gradle, mis-indented columns in an embedded CREATE TABLE, and stray empty comment lines.",
+      "rule": "All text files end with a newline and have no trailing whitespace; SQL schema files are formatted; empty `//` comment lines directly after another comment line are flagged.",
+      "enforcement": "formatter-config",
+      "detect": ".editorconfig with `insert_final_newline = true`, `trim_trailing_whitespace = true`, `indent_style = space`; CI `editorconfig-checker`; `sqlfluff lint components/*/sql/*.sql --dialect sqlite`; regex on added Rust lines: `^\\+\\s*//\\s*$` following a `//` comment line -> warn.",
+      "autofix": true,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1088238527 PR#5348",
+          "quote": "nano-nit: missing new line at the end of file"
+        },
+        {
+          "ref": "inline 1053834279 PR#5277",
+          "quote": "nano-nit - indentation"
+        },
+        {
+          "ref": "inline 1160253423 PR#5470",
+          "quote": "nit: extra comment line"
+        }
+      ]
+    },
+    {
+      "id": "swift-access-control-and-hygiene",
+      "title": "Swift: deliberate access control for consumer-facing types, `let` for immutable properties, no unused imports",
+      "area": "swift",
+      "problem": "HardcodedNimbusFeatures shipped without `public` modifiers (needing a follow-up PR), reviewers had to ask whether new Swift types needed `public`, and nits about `var` vs `let` and an unused `import UIKit` recur.",
+      "rule": "Top-level Swift declarations in components/*/ios must have an explicit access level; types intended for app use must be exercised from a test target that does NOT use `@testable import`; immutable model properties use `let`; no unused imports.",
+      "enforcement": "formatter-config",
+      "detect": ".swiftlint.yml: opt_in_rules: [explicit_top_level_acl], analyzer_rules: [unused_import] (run `swiftlint analyze` with a compile log); add a 'consumer API' XCTest file in MozillaTestServices with plain `import MozillaRustComponents` exercising public entry points so missing `public` fails CI; regex: `public var` in classes with no mutation outside init -> warn.",
+      "autofix": false,
+      "count": 4,
+      "severity": "medium",
+      "false_positive_risk": "medium - explicit_top_level_acl adds churn to existing files",
+      "evidence": [
+        {
+          "ref": "review 1394571811 PR#5490",
+          "quote": "Not sure how we could write it but I think it could be worth adding a unit test for the class at some point."
+        },
+        {
+          "ref": "inline 1178150670 PR#5497",
+          "quote": "Is there anything here that needs to be marked `public` or is it fine since it's being used in the `NimbusBuilder`?"
+        },
+        {
+          "ref": "inline 1164540428 PR#5479",
+          "quote": "nit: Just curious, do we need this import?"
+        },
+        {
+          "ref": "inline 1107890454 PR#5359",
+          "quote": "nit should those be `let` and not `var`?"
+        }
+      ]
+    },
+    {
+      "id": "remote-settings-response-handling",
+      "title": "Handle HTTP response edge cases (missing headers, 304/empty bodies, attachment base URL) without unwrap",
+      "area": "other",
+      "problem": "The remote settings client unwrapped the `ETag` header, parsed JSON from responses whose status (304) may have an empty body, and built attachment URLs from the server URL instead of the `attachments.base_url` capability (404s).",
+      "rule": "viaduct `Response` header lookups must not be `.unwrap()`ed (map to a `ResponseError`); `.json::<T>()` must only be called after a status check that excludes bodiless statuses; attachment locations must be joined to the server-advertised `capabilities.attachments.base_url`.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: `$R.headers.get_as($$$).unwrap()`, `$R.headers.get($$$).unwrap()` -> error; in a fn containing `status_codes::NOT_MODIFIED` or `== 304` and `$R.json::<$T>()` -> warn; in components/remote_settings: `format!(\"{}{}\", $SERVER, $LOCATION)` / `Url::join` on server_url with `attachment.location` -> warn unless base_url from capabilities.",
+      "autofix": false,
+      "count": 5,
+      "severity": "medium",
+      "false_positive_risk": "medium",
+      "evidence": [
+        {
+          "ref": "inline 1190550442 PR#5423",
+          "quote": "I'm a little wary of the `.unwrap()` here causing problems if the `ETag` is missing"
+        },
+        {
+          "ref": "inline 1137863408 PR#5423",
+          "quote": "It's probably worth a comment here too about the unwrap so casual readers know it is intentional"
+        },
+        {
+          "ref": "inline 1191299370 PR#5423",
+          "quote": "Will this work correctly for a 304? If the body was empty (which I think is typical with that response?) then I suspect this json parsing might fail."
+        },
+        {
+          "ref": "inline 1191301149 PR#5423",
+          "quote": "If the body really is empty here, a possibility might be a new enum, or even `Result<Option<Response>>`?"
+        },
+        {
+          "ref": "inline 1156586614 PR#5423",
+          "quote": "I think we might need to resolve `attachment_location` against the attachment capability's `base_url`?"
+        }
+      ]
+    },
+    {
+      "id": "payload-size-not-mem-size",
+      "title": "Measure payload limits on serialized bytes, not `std::mem::size_of`/capacity",
+      "area": "perf",
+      "problem": "Tab trimming estimated record size with `capacity * size_of::<T>()` (compile-time sizes ignoring heap data) and `mem::size_of_val(&*json)` instead of `json.len()`; the server limit applies to the serialized (encrypted) JSON.",
+      "rule": "Code enforcing sync/server size limits must use the length of the serialized payload; `std::mem::size_of*` on heap-owning types in non-FFI code is flagged.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: `$V.capacity() * std::mem::size_of::<$T>()`, `mem::size_of_val(&*$S)` (where $S is a String) -> warn (autofix: `$S.len()`); any `size_of::<$T>()` in components/*/src outside ffi/ modules -> info.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1103706678 PR#5376",
+          "quote": "is probably not an accurate size, since that is the compile time size."
+        },
+        {
+          "ref": "inline 1106634852 PR#5376",
+          "quote": "isn't this just `json.len()`?"
+        }
+      ]
+    },
+    {
+      "id": "reuse-constants-no-magic-strings",
+      "title": "Reuse existing constants and lift repeated string literals into consts/enums",
+      "area": "other",
+      "problem": "Tests redefined a `pub` TTL constant ('same as in storage.rs'), encryption call sites passed ad-hoc 'action' strings, and JSON fixtures were wrapped in functions instead of `const &str`.",
+      "rule": "A `const` in test code whose name or value duplicates a `pub`/`pub(crate)` const in the same crate is flagged; identical string literals passed as the same argument position of the same fn in >= 3 places should become a const/enum.",
+      "enforcement": "ci-script",
+      "detect": "Script: collect `const NAME: TY = LIT;` across crate (syn); report duplicates by NAME or by (TY, LIT) where one is in #[cfg(test)]; flag comments matching /same as in \\S+\\.rs/. ast-grep: fns with no params returning a single raw string literal (`fn $F() -> String { r#\"...\"#.to_string() }`) in tests -> suggest `const`.",
+      "autofix": false,
+      "count": 3,
+      "severity": "low",
+      "false_positive_risk": "medium",
+      "evidence": [
+        {
+          "ref": "inline 1080642759 PR#5277",
+          "quote": "The one in storage.rs is `pub` so just `use` it here?"
+        },
+        {
+          "ref": "inline 1173119386 PR#5485",
+          "quote": "nit: is there a way for us to move around the magic strings? either make them an enum `EncryptionDecryptionReason`, or maybe consts?"
+        },
+        {
+          "ref": "inline 1128710982 PR#5423",
+          "quote": "does this and the following functions need to be functions? can we define `const` string slices?"
+        }
+      ]
+    },
+    {
+      "id": "no-positional-bool-option-args",
+      "title": "Replace runs of positional bool/None/table-name args with a struct or enum",
+      "area": "api-design",
+      "problem": "Calls like `start_app(false, Some(&payload), true, None)` and `common_change_guid(tx, \"addresses_data\", Some(\"addresses_mirror\"), old, new)` are unreadable at the call site.",
+      "rule": "Functions with more than one `bool` parameter, or call sites passing >= 2 bare `true`/`false`/`None` literals, should take an options struct or enums.",
+      "enforcement": "existing-clippy",
+      "detect": "clippy.toml: max-fn-params-bools = 1, too-many-arguments-threshold = 5; [workspace.lints.clippy] fn_params_excessive_bools = \"warn\". ast-grep: call expressions with >= 2 literal args in {true,false,None} -> info.",
+      "autofix": false,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "medium",
+      "evidence": [
+        {
+          "ref": "inline 1147649260 PR#5432",
+          "quote": "nit: maybe this should input a struct rather than positional arguments."
+        },
+        {
+          "ref": "inline 1199307048 PR#5590",
+          "quote": "Do we need this `None` here since it's optional?"
+        }
+      ]
+    },
+    {
+      "id": "import-hygiene",
+      "title": "No redundant imports; call well-known free functions qualified (`serde_json::from_str`)",
+      "area": "other",
+      "problem": "Imports duplicated items already brought in by a glob (`persistence::*` + `persistence::Database`), and `use serde_json::{from_str, from_value}` made call sites ambiguous.",
+      "rule": "Enable redundant-import detection; `use serde_json::{from_str|from_value|to_string|to_value|...}` of free functions is flagged in favour of qualified calls.",
+      "enforcement": "ast-grep/regex",
+      "detect": "[workspace.lints.rust] redundant_imports = \"warn\" (allow-by-default lint) plus unused_imports; ast-grep: `use serde_json::{$$$}` whose list contains a lowercase identifier (function) -> warn, autofix by qualifying call sites.",
+      "autofix": true,
+      "count": 2,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1157620405 PR#5448",
+          "quote": "Nit: is `Database` included in `persistence::*`?"
+        },
+        {
+          "ref": "inline 1188968128 PR#5478",
+          "quote": "Nit: I'd prefer to see well known functions like this be used explicitly/qualified."
+        }
+      ]
+    },
+    {
+      "id": "uniffi-json-custom-types",
+      "title": "JSON custom types over FFI: compact serialization, no clone-from-borrow, no needless newtypes/JsonArray",
+      "area": "uniffi",
+      "problem": "`UniffiCustomTypeConverter` impls pretty-printed JSON that no human sees, cloned maps out of `as_object()` instead of matching by value, wrapped `serde_json::Value` in a needless newtype, and a `JsonArray` custom type was introduced where `sequence<JsonObject>` works.",
+      "rule": "Inside custom-type converters (`impl UniffiCustomTypeConverter` / `uniffi::custom_type!`): no `to_string_pretty`, no `.as_object()...clone()`; UDL custom typedefs named `*Array` over `string` are flagged in favour of `sequence<...>`; newtypes whose only purpose is the converter should be type aliases.",
+      "enforcement": "ast-grep/regex",
+      "detect": "ast-grep: within `impl UniffiCustomTypeConverter for $T { $$$ }`: `serde_json::to_string_pretty($$$)` -> error (autofix `to_string`); `$J.as_object()` followed by `.clone()` -> warn (suggest `match $J { Value::Object(m) => Ok(m), .. }`). UDL regex: `\\[Custom\\]\\s*typedef\\s+string\\s+\\w*Array\\b` -> warn.",
+      "autofix": true,
+      "count": 4,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "inline 1130450342 PR#5423",
+          "quote": "seems mildly wasteful for this to be pretty, especially given the Kotlin code never actually sees the string"
+        },
+        {
+          "ref": "inline 1130439819 PR#5423",
+          "quote": "Why the custom `JsonObject` instead of using `serde_json::Value` directly?"
+        },
+        {
+          "ref": "inline 1183188285 PR#5423",
+          "quote": "serde_json::Value::Object(obj) => Ok(obj),"
+        },
+        {
+          "ref": "inline 1179610104 PR#5475",
+          "quote": "Should this be a `sequence<JsonObject>` instead of a `JsonArray`?"
+        }
+      ]
+    },
+    {
+      "id": "docs-summary-links",
+      "title": "New docs (ADRs, howtos) must be linked from docs/SUMMARY.md",
+      "area": "docs-changelog",
+      "problem": "New howtos and ADRs (0005, 0007 and a UniFFI howto) were added without being linked from the book's SUMMARY.md, so they never appear in the published docs.",
+      "rule": "Every docs/**/*.md (except SUMMARY.md, README.md and includes) must be referenced from docs/SUMMARY.md.",
+      "enforcement": "ci-script",
+      "detect": "for f in $(git ls-files 'docs/**/*.md'); do grep -qF \"${f#docs/}\" docs/SUMMARY.md || echo \"not in SUMMARY: $f\"; done (mdbook also warns for missing chapters with `create-missing = false`).",
+      "autofix": false,
+      "count": 1,
+      "severity": "low",
+      "false_positive_risk": "low",
+      "evidence": [
+        {
+          "ref": "review 1244478994 PR#5326",
+          "quote": "we may want to link the how to in the application services book in https://github.com/mozilla/application-services/blob/main/docs/SUMMARY.md"
+        }
+      ]
+    }
+  ],
+  "non_lintable_themes": [
+    {
+      "theme": "Test strength: assert the specific outcome, cover failure/negative paths and corner cases (not just the happy path)",
+      "count": 11,
+      "evidence": [
+        {
+          "ref": "inline 1053915419 PR#5277",
+          "quote": "let's also assert the id we got back is the correct one."
+        },
+        {
+          "ref": "inline 1053916908 PR#5277",
+          "quote": "it doesn't look like this test checks it was replaced?"
+        },
+        {
+          "ref": "inline 1104579549 PR#5375",
+          "quote": "nit: Can we add another failing case of `#[handle_error(String)]` or some other type that isn't the correct one?"
+        },
+        {
+          "ref": "inline 1107896193 PR#5359",
+          "quote": "do we need more tests for this, or do we think it's good enough to test the happy path?"
+        },
+        {
+          "ref": "inline 1187898454 PR#5557",
+          "quote": "Probably wanna test for an invalid path as well?"
+        },
+        {
+          "ref": "inline 1100345897 PR#5362",
+          "quote": "What do you think about adding another test to test the setting of the `max_level`?"
+        }
+      ]
+    },
+    {
+      "theme": "Comment/doc accuracy: misleading, misplaced or stale comments after behavior changes",
+      "count": 9,
+      "evidence": [
+        {
+          "ref": "inline 1053843171 PR#5277",
+          "quote": "This comment is a bit misleading - it almost implies there are 2 representations of the same ID."
+        },
+        {
+          "ref": "inline 1112425220 PR#5389",
+          "quote": "This comment was wildly mis-placed before"
+        },
+        {
+          "ref": "inline 1124017438 PR#5389",
+          "quote": "I think the existing comments are wrong too"
+        },
+        {
+          "ref": "inline 1190537603 PR#5423",
+          "quote": "nitpick: It won't anymore!"
+        },
+        {
+          "ref": "inline 1195117618 PR#5577",
+          "quote": "At the very least the comment should change here"
+        },
+        {
+          "ref": "inline 1188802574 PR#5556",
+          "quote": "plural `events` here seems wrong."
+        }
+      ]
+    },
+    {
+      "theme": "Explain non-obvious decisions in code (why Uuid::new_v4, why a Mutex, why a space default, why prune, odd channel names)",
+      "count": 7,
+      "evidence": [
+        {
+          "ref": "inline 1175127115 PR#5471",
+          "quote": "This needs a comment here, I think."
+        },
+        {
+          "ref": "inline 1169964722 PR#5475",
+          "quote": "This would make `enroll` non-deterministic, I think? Is this transitory, or is this intentional?"
+        },
+        {
+          "ref": "inline 1160345093 PR#5470",
+          "quote": "Would be nice to have some comments of why this exists and why we need to prune"
+        },
+        {
+          "ref": "inline 1189251452 PR#5441",
+          "quote": "Maybe a comment that the global sync ID is irrelevant here"
+        },
+        {
+          "ref": "inline 1199310069 PR#5590",
+          "quote": "why is it called `\"firefox-internal\"`??"
+        }
+      ]
+    },
+    {
+      "theme": "Naming and API clarity (type/method/crate names, redundant prefixes vs iOS megazord namespace clashes, abbreviations)",
+      "count": 13,
+      "evidence": [
+        {
+          "ref": "inline 1113746178 PR#5390",
+          "quote": "`SharedStorageDb` doesn't feel like quite the right name"
+        },
+        {
+          "ref": "inline 1143066952 PR#5390",
+          "quote": "nitpick: Let's name this method `thread_safe_storage_db()`, to match the new name you gave the type."
+        },
+        {
+          "ref": "inline 1183189514 PR#5423",
+          "quote": "(Since we're already in the `rs_client` crate, let's drop the `RemoteSettings` qualifier!"
+        },
+        {
+          "ref": "inline 1183800445 PR#5423",
+          "quote": "the use of `remote_settings` vs `remotesettings` bothers me in a tiny way"
+        },
+        {
+          "ref": "inline 1099632060 PR#5362",
+          "quote": "I wonder if `rust-logs` is the correct name here?"
+        },
+        {
+          "ref": "inline 1188981725 PR#5478",
+          "quote": "Could this be a little bit more descriptive. e.g. `CirrusState`, or `CirrusMutableState`."
+        }
+      ]
+    },
+    {
+      "theme": "Sync engine semantics: reset vs wipe, forking/guid changes and mirror, dedupe, atomicity of timestamp updates, batching",
+      "count": 8,
+      "evidence": [
+        {
+          "ref": "inline 1053918579 PR#5277",
+          "quote": "I don't think we should wipe local tabs here"
+        },
+        {
+          "ref": "inline 1144024111 PR#5438",
+          "quote": "How come we want to carry over unknown fields between resets?"
+        },
+        {
+          "ref": "inline 1145640086 PR#5432",
+          "quote": "I think it's mildly preferable to just change the mirror guid in `change_local_guid`"
+        },
+        {
+          "ref": "inline 1189265263 PR#5441",
+          "quote": "Can you remind me why this isn't atomic, please?"
+        },
+        {
+          "ref": "inline 1189268489 PR#5441",
+          "quote": "I think the lack of per-batch calls (and reading everything in one request) is an artifact of us implementing batches \"transparently\" on Desktop"
+        }
+      ]
+    },
+    {
+      "theme": "FFI API shape: what crosses the FFI (typed records vs opaque JSON strings), mobile-specific contexts in server-side (Cirrus) APIs, returning metadata with records",
+      "count": 9,
+      "evidence": [
+        {
+          "ref": "inline 1169887646 PR#5475",
+          "quote": "we should be transparently taking the JSON (perhaps even as a string) from Remote Settings and squirting it into Rust."
+        },
+        {
+          "ref": "inline 1169905502 PR#5475",
+          "quote": "I think this looks quite mobile specific."
+        },
+        {
+          "ref": "inline 1130478843 PR#5423",
+          "quote": "a better return type might be a struct with, say, `last_modified: u64, records: Vec<JsonObject>` or similar."
+        },
+        {
+          "ref": "inline 1179611241 PR#5475",
+          "quote": "Are we ferrying the experiments across the FFI every request?"
+        },
+        {
+          "ref": "inline 1182488666 PR#5475",
+          "quote": "Perhaps we should make this more clear, by naming them `OpaqueEnrollments` or `OpaqueString`"
+        },
+        {
+          "ref": "inline 1128684872 PR#5423",
+          "quote": "Is it prefered for us to return the Json directly as we have here, or to define a typed struct representing it?"
+        }
+      ]
+    },
+    {
+      "theme": "Module organisation for feature splits (stateful vs stateless Nimbus, schema.rs, include! placement)",
+      "count": 6,
+      "evidence": [
+        {
+          "ref": "inline 1157626630 PR#5448",
+          "quote": "The rest of this current file is schema declarations for interacting with remote settings, so perhaps should be in its own `schema.rs`."
+        },
+        {
+          "ref": "inline 1157633001 PR#5448",
+          "quote": "These make me think we should separate them out to different modules"
+        },
+        {
+          "ref": "inline 1159621750 PR#5448",
+          "quote": "should move into its own file e.g. `enrollments::stateful` or `stateful::enrollments`."
+        },
+        {
+          "ref": "inline 1169950188 PR#5475",
+          "quote": "I think let's move these `include!` calls to their respective `nimbus_client.rs` and `cirrus_client.rs` files"
+        }
+      ]
+    },
+    {
+      "theme": "Concurrency/lifetime design: Arc+Weak store ownership, close() vs Drop, rusqlite panics on failed close, logger init races",
+      "count": 6,
+      "evidence": [
+        {
+          "ref": "inline 1113671472 PR#5390",
+          "quote": "Hmmm what do you think about implementing `Drop` on the `SharedStorageDb`?"
+        },
+        {
+          "ref": "inline 1113752322 PR#5390",
+          "quote": "Could we unwrap this and panic if we didn't consume the inner DB?"
+        },
+        {
+          "ref": "inline 1113620689 PR#5390",
+          "quote": "I think [this is where the panic happens]"
+        },
+        {
+          "ref": "inline 1097800711 PR#5362",
+          "quote": "is it possible that this races with the app calling `set_max_level`?"
+        }
+      ]
+    },
+    {
+      "theme": "Taskcluster/release automation design (release-type params, index routes, shipping phases, soft/if-dependencies, nightly detection)",
+      "count": 11,
+      "evidence": [
+        {
+          "ref": "inline 1185443758 PR#5510",
+          "quote": "Gecko calls this parameter `release-type`, might be worth making it consistent."
+        },
+        {
+          "ref": "inline 1186464211 PR#5510",
+          "quote": "This means if you have both staging and prod release types, the former could overwrite the latter."
+        },
+        {
+          "ref": "inline 1187422396 PR#5546",
+          "quote": "if another one is added before you switch to release promotion this will likely end up running at unwanted times."
+        },
+        {
+          "ref": "inline 1191247421 PR#5543",
+          "quote": "just in case more kind-dependencies get added in the future."
+        },
+        {
+          "ref": "inline 1192493638 PR#5560",
+          "quote": "Any reason not to look for `project.application-services.v2.branch.main.revision.{head_rev}.taskgraph.decision-nightly` instead?"
+        }
+      ]
+    },
+    {
+      "theme": "Coordinate with consumers before landing (mobile sign-off, Android/iOS PRs ready, threading-model changes)",
+      "count": 5,
+      "evidence": [
+        {
+          "ref": "inline 1053837279 PR#5277",
+          "quote": "We should probably get mobile to weigh in here"
+        },
+        {
+          "ref": "review 1285802986 PR#5362",
+          "quote": "We should probably have iOS and android PRs ready before landing this"
+        },
+        {
+          "ref": "review 1289490461 PR#5362",
+          "quote": "communicate the change in the threading model"
+        },
+        {
+          "ref": "inline 1195123588 PR#5579",
+          "quote": "Have approved PRs ready to land which fix"
+        }
+      ]
+    },
+    {
+      "theme": "ADR/process content and wording (rapid releases, remote-settings client options, payload evolution)",
+      "count": 45,
+      "evidence": [
+        {
+          "ref": "review 1224684031 PR#5302",
+          "quote": "Especially because some criterias were not evaluated precisely"
+        },
+        {
+          "ref": "inline 1062905632 PR#5294",
+          "quote": "This seems maybe a bit overly restrictive?"
+        },
+        {
+          "ref": "inline 1137230652 PR#5434",
+          "quote": "I think this is could be a considered option rather than a decision driver."
+        },
+        {
+          "ref": "inline 1142755430 PR#5434",
+          "quote": "I wonder if we should be a bit more precise about what \"perceive as data-loss\" means."
+        }
+      ]
+    },
+    {
+      "theme": "Gradle plugin / build tooling correctness (paths relative to project vs root, download URLs, OS triples, tar excludes, actionable error messages)",
+      "count": 7,
+      "evidence": [
+        {
+          "ref": "inline 1088992429 PR#5348",
+          "quote": "I think that a cache directory should probably be relative to the root directory, but not sure if this is confusing."
+        },
+        {
+          "ref": "inline 1128540410 PR#5421",
+          "quote": "This line was not in the fenix version of the file, so this test has never worked."
+        },
+        {
+          "ref": "inline 1192637189 PR#5569",
+          "quote": "leaves us some flexibility around what we build"
+        },
+        {
+          "ref": "inline 1198254887 PR#5586",
+          "quote": "Just to confirm, this excludes files that **start with** `._`? i.e the `.` here isn't a wild card?"
+        },
+        {
+          "ref": "inline 1088242307 PR#5348",
+          "quote": "Could we maybe describe what the setting of `applicationServicesDir` looks like?"
+        }
+      ]
+    }
+  ],
+  "suspicious": []
+}

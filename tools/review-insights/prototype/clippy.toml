@@ -1,0 +1,35 @@
+# Proposed replacement for the (empty) top-level clippy.toml.
+# Each entry encodes something reviewers asked for repeatedly; see RULES.md for the evidence.
+
+# Restriction lints (unwrap_used, expect_used, panic, indexing_slicing, dbg_macro, print_*)
+# stay quiet in #[test] code and #[cfg(test)] modules.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# rules: parking-lot-locks, persisted-values-stable
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "use parking_lot::Mutex (no poisoning, no .lock().unwrap())" },
+  { path = "std::sync::RwLock", reason = "use parking_lot::RwLock" },
+  { path = "std::collections::hash_map::DefaultHasher", reason = "its output changes between Rust releases; never persist it" },
+]
+
+# rule: tracing-support-logging
+disallowed-macros = [
+  { path = "log::trace", reason = "log through tracing_support so the app's subscriber sees it" },
+  { path = "log::debug", reason = "log through tracing_support so the app's subscriber sees it" },
+  { path = "log::info", reason = "log through tracing_support so the app's subscriber sees it" },
+  { path = "log::warn", reason = "log through tracing_support so the app's subscriber sees it" },
+  { path = "log::error", reason = "log through tracing_support so the app's subscriber sees it" },
+]
+
+# rule: utf8-safe-truncation (String::truncate panics off a char boundary)
+disallowed-methods = [
+  { path = "alloc::string::String::truncate", reason = "panics on multi-byte chars; use a char-boundary-safe helper" },
+]
+
+# rule: naming
+disallowed-names = ["foo", "bar", "baz", "tmp", "nm", "og", "th", "ta"]

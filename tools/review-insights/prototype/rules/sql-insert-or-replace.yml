@@ -1,0 +1,9 @@
+id: sql-insert-or-replace
+language: rust
+severity: warning
+message: "`INSERT OR REPLACE` deletes the conflicting row (and fires ON DELETE cascades) before inserting. Prefer `INSERT … ON CONFLICT(…) DO UPDATE`."
+rule:
+  any:
+    - kind: string_literal
+    - kind: raw_string_literal
+  regex: "(?i)(INSERT\\s+OR\\s+REPLACE|REPLACE\\s+INTO)"

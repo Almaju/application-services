@@ -1,0 +1,13 @@
+id: log-possible-pii
+language: rust
+severity: warning
+message: "Possible PII in a log/report message (url, title, username, origin, payload). Redact or drop it."
+rule:
+  kind: macro_invocation
+  all:
+    - has:
+        field: macro
+        regex: "^((log|tracing|tracing_support|error_support)::)?(trace|debug|info|warn|error|report_error|breadcrumb)$"
+    - has:
+        kind: token_tree
+        regex: "\\b([a-z_]*url|href|title|username|origin|payload|password|record)\\b"

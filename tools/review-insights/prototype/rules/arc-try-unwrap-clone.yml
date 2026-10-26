@@ -1,0 +1,9 @@
+id: arc-try-unwrap-clone
+language: rust
+severity: error
+message: "`Arc::try_unwrap`/`into_inner` on a fresh clone always fails: the original still holds a reference."
+rule:
+  any:
+    - pattern: Arc::try_unwrap($X.clone())
+    - pattern: Arc::into_inner($X.clone())
+    - pattern: std::sync::Arc::try_unwrap($X.clone())

@@ -1,0 +1,2151 @@
+{
+ "file": "fixes_2",
+ "prs": [
+  {
+   "pr": 6514,
+   "title": "Add missing license headers",
+   "is_bugfix": true,
+   "bug": "Many scripts, manifests and source files lacked the MPL license header, which the mozilla-central license linter flags after vendoring.",
+   "root_cause": "license-header-missing",
+   "preventable_by_lint": "yes",
+   "rule": "Every tracked source/config file (rs, py, sh, kt, swift, js, css, html, xml, properties, gradle) must start with the MPL-2.0 header.",
+   "detect": "CI script over `git ls-files` that checks the first ~5 lines for 'This Source Code Form is subject to the terms of the Mozilla Public' (allowing a shebang first), with an allowlist for generated/third-party files; or run m-c's `license` linter config.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6512,
+   "title": "Fix file permission issues",
+   "is_bugfix": true,
+   "bug": "Non-scripts (png, yml) were marked executable and sourced shell scripts lacked a shebang, tripping m-c's file-perms linter.",
+   "root_cause": "file-permissions",
+   "preventable_by_lint": "yes",
+   "rule": "Files with the executable bit must start with a shebang; data files (png, yml, md, json...) must never be executable.",
+   "detect": "CI script: `git ls-files -s` mode 100755 => first bytes must be '#!'; mode 100755 on known non-script extensions => error.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6482,
+   "title": "nimbus doesn't use/need glean-build",
+   "is_bugfix": true,
+   "bug": "nimbus kept an unused `glean-build` build-dependency, pulling extra crates (xshell...) into the dependency/license summaries.",
+   "root_cause": "unused-dependency",
+   "preventable_by_lint": "yes",
+   "rule": "No unused [dependencies]/[build-dependencies] in component Cargo.toml files.",
+   "detect": "Run `cargo machete` (or `cargo udeps` on nightly) in CI with a small ignore list for build.rs/feature-only deps.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6479,
+   "title": "Bug 1931812 - Don't reingest the DB on each query benchmark",
+   "is_bugfix": true,
+   "bug": "Query benchmarks re-ingested the whole Suggest DB on every iteration, inflating benchmark time.",
+   "root_cause": "perf/benchmark-setup",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6472,
+   "title": "fix: set proper filter_expression format",
+   "is_bugfix": true,
+   "bug": "JEXL filter context lacked the `env` wrapper and used `app_version` instead of `version`, so real Remote Settings filter expressions never matched.",
+   "root_cause": "serde-format/logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6466,
+   "title": "fix: downgrade regex to 1.9",
+   "is_bugfix": true,
+   "bug": "Components required regex 1.10.5 while mozilla-central vendors 1.9, blocking vendoring.",
+   "root_cause": "dependency-version-mismatch",
+   "preventable_by_lint": "yes",
+   "rule": "Dependency version requirements must be satisfiable by the crate versions currently vendored in mozilla-central.",
+   "detect": "CI script that fetches (or keeps a pinned copy of) m-c's Cargo.lock and fails if any a-s Cargo.toml requirement's minimum version exceeds the m-c version (semver compare per crate).",
+   "confidence": "high"
+  },
+  {
+   "pr": 6462,
+   "title": "Fix ranker docstring",
+   "is_bugfix": true,
+   "bug": "A doc comment line used `//` instead of `///`, silently dropping the 'Return' line from the exported function's docs.",
+   "root_cause": "doc-comment-syntax",
+   "preventable_by_lint": "yes",
+   "rule": "Don't interleave plain `//` comment lines inside a `///` doc block.",
+   "detect": "Regex/ast-grep: a line matching `^\\s*//[^/!]` sandwiched between `^\\s*///` lines (multiline rg: `///.*\\n\\s*//[^/!].*\\n\\s*///`).",
+   "confidence": "high"
+  },
+  {
+   "pr": 6456,
+   "title": "Bug 1929375 - Fix schema::clear_database() and add a migration",
+   "is_bugfix": true,
+   "bug": "`clear_database()` did not clear tables added by later migrations (geonames, ingested_records, rs_cache, ...), so migrations that should force re-ingestion left stale data.",
+   "root_cause": "sql-migration",
+   "preventable_by_lint": "partially",
+   "rule": "Every table in the schema must be cleared by `clear_database()` or be on an explicit allowlist.",
+   "detect": "Test-harness: open a fully migrated DB, populate it (or insert one row per table), call clear_database(), then iterate `sqlite_master` tables and assert each is empty unless allowlisted; alternatively a CI script comparing CREATE TABLE names in schema.rs with the clear list.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6451,
+   "title": "Bug 1928544 - For weather suggestions, don't match on airport codes or abbreviations when they're the only term in the query",
+   "is_bugfix": true,
+   "bug": "Weather suggestions matched on airport codes/abbreviations when they were the only query term.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6424,
+   "title": "Properly close webext storage database close function",
+   "is_bugfix": true,
+   "bug": "The webext-storage close function did not actually close the underlying DB connection.",
+   "root_cause": "resource-lifecycle",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6423,
+   "title": "Fix Suggest icon metrics",
+   "is_bugfix": true,
+   "bug": "Icon download time was measured as ingestion time because the icon path skipped the download timer.",
+   "root_cause": "metrics/logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6422,
+   "title": "Bug 1925601 - Fix the iOS build (again)",
+   "is_bugfix": true,
+   "bug": "The iOS build hack used `awk` that printed the patched module.modulemap to stdout instead of writing it, so the viaduct header was still missing.",
+   "root_cause": "build-script/shell",
+   "preventable_by_lint": "partially",
+   "rule": "After building the xcframework, every header in Headers/ must be referenced by Modules/module.modulemap.",
+   "detect": "CI post-build check in the swift build task: list Headers/*.h and grep each in module.modulemap; fail on missing. (shellcheck does not catch an awk without redirect.)",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6418,
+   "title": "Bug 1925601 - Fix the iOS build",
+   "is_bugfix": true,
+   "bug": "The iOS xcframework lacked RustViaductFFI.h because viaduct is not a UniFFI component, breaking the iOS build.",
+   "root_cause": "platform-config",
+   "preventable_by_lint": "partially",
+   "rule": "After building the xcframework, every header in Headers/ must be referenced by module.modulemap and every component's FFI header must be present.",
+   "detect": "Same xcframework consistency check as #6422: compare the set of `*FFI.h` expected from megazord deps with Headers/ and module.modulemap.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6412,
+   "title": "Fix up some internal dependences.",
+   "is_bugfix": true,
+   "bug": "Several crates kept unused deps (ffi-support, nss_build_common, libsqlite3-sys) left over from older FFI approaches.",
+   "root_cause": "unused-dependency",
+   "preventable_by_lint": "yes",
+   "rule": "No unused dependencies in component Cargo.toml files.",
+   "detect": "`cargo machete` / `cargo udeps` in CI.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6407,
+   "title": "Fix: index new topic guides",
+   "is_bugfix": true,
+   "bug": "New topic-guide pages were added but not listed in docs/SUMMARY.md, so mdbook never published them.",
+   "root_cause": "docs-index-missing",
+   "preventable_by_lint": "yes",
+   "rule": "Every docs/**/*.md page must be reachable from SUMMARY.md (or allowlisted).",
+   "detect": "CI script: collect links from docs/SUMMARY.md and diff against `git ls-files docs/*.md`; fail on orphans.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6404,
+   "title": "fix: remove deleted file and link",
+   "is_bugfix": true,
+   "bug": "SUMMARY.md linked to a document that had been deleted.",
+   "root_cause": "docs-broken-link",
+   "preventable_by_lint": "yes",
+   "rule": "All links in SUMMARY.md (and docs) must resolve.",
+   "detect": "mdbook-linkcheck or a CI script checking that each SUMMARY.md target path exists.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6393,
+   "title": "Fix OpenSSL license URL",
+   "is_bugfix": true,
+   "bug": "The OpenSSL license file URL used by the dependency summary moved on the upstream site.",
+   "root_cause": "external-change",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6392,
+   "title": "fix: remove empty variable",
+   "is_bugfix": true,
+   "bug": "generate_docs.sh referenced an unset variable ($DOC_DIR) and aborted under `set -u`.",
+   "root_cause": "build-script/shell",
+   "preventable_by_lint": "yes",
+   "rule": "Shell scripts must pass shellcheck (no referenced-but-unassigned variables).",
+   "detect": "Run shellcheck on all *.sh in CI; SC2154 flags `$DOC_DIR` referenced but never assigned.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6390,
+   "title": "Fix the path to the megazord symbols when uploading (backport #6389)",
+   "is_bugfix": true,
+   "bug": "Backport of #6389: symbol upload pointed at the wrong extraction directory.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6389,
+   "title": "Fix the path to the megazord symbols when uploading",
+   "is_bugfix": true,
+   "bug": "fetch-content extracted the symbols archive one directory deeper than the upload command expected.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6387,
+   "title": "Fix: add default values for suggest component",
+   "is_bugfix": true,
+   "bug": "Optional fields/args of Suggest's exported Records/constructors had no UniFFI defaults, forcing consumers to pass every argument (Bug 1919998).",
+   "root_cause": "uniffi-api-ergonomics",
+   "preventable_by_lint": "partially",
+   "rule": "Option<T> fields of uniffi Records and Option<T> args of exported constructors/methods should declare `default = None` unless explicitly opted out.",
+   "detect": "Custom syn/ast-grep check: in `#[derive(uniffi::Record)]` structs flag `Option<...>` fields without `#[uniffi(default = ...)]`; in `#[uniffi::constructor]`/`#[uniffi::method]` flag Option args not listed in `default(...)`; UDL: `T?` dictionary members without `= null`.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6369,
+   "title": "Return non-zero exit code when symbol uploading fails",
+   "is_bugfix": true,
+   "bug": "upload_symbols.py ignored the False return of upload_symbols(), so the release task passed even though symbol upload failed.",
+   "root_cause": "error-swallowed",
+   "preventable_by_lint": "partially",
+   "rule": "Automation scripts must not discard success/failure return values; main() must exit non-zero on failure.",
+   "detect": "Custom Python AST check (or ruff plugin): an expression-statement call to a locally defined function whose return statements are all bool literals is flagged as an ignored status.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6368,
+   "title": "Revert \"Expose webext-storage bridged engine logic\"",
+   "is_bugfix": false,
+   "bug": "Revert of webext-storage bridged-engine exposure because the m-c side was backed out.",
+   "root_cause": "revert",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6353,
+   "title": "Back out \"Support for a new \"close all inactive tabs\" command.\"",
+   "is_bugfix": false,
+   "bug": "Backout of the 'close all inactive tabs' feature.",
+   "root_cause": "revert",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6334,
+   "title": "Bug 1908802 - Handle deleted suggest records",
+   "is_bugfix": true,
+   "bug": "Deleted Remote Settings records lack a `type` field, so type-filtered server queries never delivered deletions and stale suggestions stayed ingested.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6318,
+   "title": "Fix record types for SuggestionProvider::AmpMobile",
+   "is_bugfix": true,
+   "bug": "SuggestionProvider::AmpMobile wrongly included the AmpWikipedia (desktop) record type.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6311,
+   "title": "Removing pending commands for Close Tab should only affect devices th…",
+   "is_bugfix": true,
+   "bug": "Removing pending close-tab commands deleted commands for devices that had not synced yet.",
+   "root_cause": "sql-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6278,
+   "title": "FxaError::Other error should show a description of the other error",
+   "is_bugfix": true,
+   "bug": "FxaError::Other carried no message, so consumers only saw 'other error' with no cause.",
+   "root_cause": "error-context-lost",
+   "preventable_by_lint": "yes",
+   "rule": "Catch-all variants of public (FFI) error enums must carry a reason string.",
+   "detect": "Custom lint over `#[derive(uniffi::Error)]`/UDL `[Error]` enums: a variant named Other/Unexpected*/Unknown* with no fields (or whose `#[error]` format has no interpolation) is an error.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6277,
+   "title": "Refactor fxa command encryption to avoid duplicated code",
+   "is_bugfix": false,
+   "bug": "Refactor of fxa command encryption into a shared keys module.",
+   "root_cause": "refactor",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6243,
+   "title": "Add missing license to support/types crate.",
+   "is_bugfix": true,
+   "bug": "components/support/types/Cargo.toml had no `license` field, blocking vendoring into mozilla-central.",
+   "root_cause": "manifest-metadata-missing",
+   "preventable_by_lint": "yes",
+   "rule": "Every workspace Cargo.toml must declare `license = \"MPL-2.0\"`.",
+   "detect": "CI script over `cargo metadata --no-deps` asserting each package has license == MPL-2.0 (or cargo-deny `[licenses]` with private crates checked).",
+   "confidence": "high"
+  },
+  {
+   "pr": 6242,
+   "title": "chore: Update vendoring should error if a subprocess has an issue.",
+   "is_bugfix": true,
+   "bug": "update-moz-central-vendoring.py ignored subprocess failures and reported success.",
+   "root_cause": "error-swallowed",
+   "preventable_by_lint": "yes",
+   "rule": "subprocess.run in automation must use check=True or inspect returncode.",
+   "detect": "Existing ruff/pylint rule PLW1510 (subprocess-run-without-check) on automation/, tools/, taskcluster/.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6208,
+   "title": "Fixes tests that depend  map ordering",
+   "is_bugfix": true,
+   "bug": "Tests compared serde_json maps in a fixed key order that only held because `preserve_order` was enabled via workspace feature unification.",
+   "root_cause": "test-order-dependence",
+   "preventable_by_lint": "partially",
+   "rule": "Tests must not depend on HashMap/serde_json::Map iteration order unless the crate itself enables an ordered map.",
+   "detect": "CI job that runs each crate's tests in isolation (`cargo test -p <crate>` / cargo-hack --each-package) so feature-unification-dependent behaviour fails; optionally flag expect-test snapshots of Map Debug output.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6189,
+   "title": "Bug 1889440 - Fixing the suggest database migration",
+   "is_bugfix": true,
+   "bug": "A Suggest migration passed two SQL statements to `execute()`, which ran only the first, leaving upgraded DBs without a table.",
+   "root_cause": "sql-migration",
+   "preventable_by_lint": "yes",
+   "rule": "Never pass multiple SQL statements to execute()/execute_cached()/prepare(); use execute_batch. Every migration must keep the upgraded schema identical to a fresh one.",
+   "detect": "Custom lint/ast-grep: string-literal (or const) SQL argument to `.execute(`/`.execute_cached(`/`.prepare(` containing `;` followed by another statement keyword. Test-harness: fresh-vs-migrated schema equality test (sql_support MigratedDatabaseFile::assert_schema_matches_new_database) required for every component with migrations.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6179,
+   "title": "Uplift fix for Bug 1887071 - Clear out tokens/keys when starting an oauth flow",
+   "is_bugfix": true,
+   "bug": "Starting a new OAuth flow kept the previous session token/keys, causing Bug 1887071.",
+   "root_cause": "state-management",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6153,
+   "title": "Bug 1883413 - Handle `Disconnect` event from `AuthIssues` state",
+   "is_bugfix": true,
+   "bug": "The FxA AuthIssues state did not handle the Disconnect event.",
+   "root_cause": "state-machine-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6145,
+   "title": "Fxa state checker: handle public events that immediately transition to a new state",
+   "is_bugfix": true,
+   "bug": "The FxA state checker did not handle public events that transition immediately to a terminal state, producing Sentry errors.",
+   "root_cause": "state-machine-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6143,
+   "title": "Prevent outgoing scrubbed credit card records",
+   "is_bugfix": true,
+   "bug": "An `unwrap()` inside a query_map closure (marked 'XXX') panicked on bad rows, and scrubbed credit cards were uploaded.",
+   "root_cause": "panic/unwrap",
+   "preventable_by_lint": "partially",
+   "rule": "Library code must not unwrap() on fallible results from DB rows/external data.",
+   "detect": "clippy::unwrap_used (and expect_used) denied in non-test code of components (baseline existing uses with #[allow]); additionally grep for `unwrap()` with an XXX/TODO comment on the same line. The scrubbed-record upload part is not lintable.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6126,
+   "title": "Fixes race condition in unit tests for push",
+   "is_bugfix": true,
+   "bug": "A new push test used the static MockConnection without taking the shared test lock, racing other tests.",
+   "root_cause": "test-race/global-state",
+   "preventable_by_lint": "partially",
+   "rule": "Tests that touch process-global state (mockall static contexts, global logger) must be serialized.",
+   "detect": "Custom lint for test modules: if a test calls `Mock*::*_context()` or a helper that relies on it (get_test_manager), it must also call `get_lock(&MTX)` or be `#[serial]`; flag tests in the same module that don't.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6125,
+   "title": "Fixup JEXL transform panic",
+   "is_bugfix": true,
+   "bug": "eventLastSeen returned usize::MAX as a count, overflowing when added to the starting bucket and panicking inside a JEXL transform, which poisoned the evaluator mutex.",
+   "root_cause": "integer-overflow/panic",
+   "preventable_by_lint": "partially",
+   "rule": "Code reachable from JEXL transforms/FFI must use checked/saturating arithmetic and never panic.",
+   "detect": "Enable clippy::arithmetic_side_effects (and clippy::panic, indexing_slicing) for nimbus stateful behavior/targeting modules; add a test-harness that evaluates every transform with boundary arguments.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6096,
+   "title": "Bug 1875113 - Handle JSON errors when parsing attachments",
+   "is_bugfix": true,
+   "bug": "Invalid JSON in one Suggest attachment aborted ingestion instead of marking the record unparsable.",
+   "root_cause": "error-handling",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6060,
+   "title": "Don't report sentry errors for metadata view times too long",
+   "is_bugfix": true,
+   "bug": "Expected 'view time too long' metadata errors were reported to Sentry, creating noise.",
+   "root_cause": "wrong-error-severity",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6055,
+   "title": "[DISCO-2718] Suggest: fix: Add score to AMP suggestions",
+   "is_bugfix": true,
+   "bug": "AMP suggestions lacked a score, so ranking against AMO suggestions was wrong.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6044,
+   "title": "Make ErrorPath handle multi-token errors",
+   "is_bugfix": true,
+   "bug": "FML ErrorPath computed wrong spans for errors spanning multiple tokens (reported at 0,0).",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6040,
+   "title": "Bug 1873218: Do not fail verify connection if there is no local uaid",
+   "is_bugfix": true,
+   "bug": "verify_connection failed when there was no local UAID instead of returning no changes.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6033,
+   "title": "Update tests to use recordPastEvent to handle 01 Jan boundary (backport #6032)",
+   "is_bugfix": true,
+   "bug": "Backport of #6032: event-store tests built dates from Utc::now() and failed across the Jan 1 boundary.",
+   "root_cause": "time/test-flaky",
+   "preventable_by_lint": "partially",
+   "rule": "Tests must not depend on the current wall-clock date.",
+   "detect": "Custom lint: in #[cfg(test)] code under components/nimbus flag `Utc::now()`/`SystemTime::now()`/`Timestamp::now()` used with calendar arithmetic (Duration, with_month, Interval::Months/Weeks); plus a periodic CI run under libfaketime at boundary dates.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6032,
+   "title": "Update tests to use recordPastEvent to handle 01 Jan boundary",
+   "is_bugfix": true,
+   "bug": "Event-store tests advanced counters from Utc::now(), so results changed across the Jan 1 year boundary.",
+   "root_cause": "time/test-flaky",
+   "preventable_by_lint": "partially",
+   "rule": "Tests must not depend on the current wall-clock date.",
+   "detect": "Custom lint flagging wall-clock `now()` in tests that do calendar math; periodic faketime CI run at Dec 31/Jan 1.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6028,
+   "title": "Fixes DISCO-2712: Add an `ON DELETE CASCADE` action to `prefix_keywords.suggestion_id`. (backport #6016)",
+   "is_bugfix": true,
+   "bug": "Backport of #6016: prefix_keywords.suggestion_id lacked ON DELETE CASCADE.",
+   "root_cause": "sql-schema",
+   "preventable_by_lint": "yes",
+   "rule": "Every REFERENCES/FOREIGN KEY clause must declare an explicit ON DELETE action.",
+   "detect": "Schema test: on a fresh DB iterate tables and `PRAGMA foreign_key_list(t)`; fail when on_delete == 'NO ACTION' unless allowlisted. Or regex over schema SQL: `REFERENCES\\s+\\w+\\([^)]*\\)(?!\\s*ON DELETE)`.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6017,
+   "title": "Revert \"Uniffi webext-storage component\"",
+   "is_bugfix": false,
+   "bug": "Revert of the UniFFI webext-storage component.",
+   "root_cause": "revert",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6016,
+   "title": "Fixes DISCO-2712: Add an `ON DELETE CASCADE` action to `prefix_keywords.suggestion_id`.",
+   "is_bugfix": true,
+   "bug": "prefix_keywords.suggestion_id referenced suggestions(id) without ON DELETE CASCADE, so re-ingesting AMO/Pocket suggestions failed with FOREIGN KEY constraint errors.",
+   "root_cause": "sql-schema",
+   "preventable_by_lint": "yes",
+   "rule": "Every REFERENCES/FOREIGN KEY clause must declare an explicit ON DELETE action.",
+   "detect": "Schema test using `PRAGMA foreign_key_list` on a fresh DB (on_delete != 'NO ACTION' unless allowlisted).",
+   "confidence": "high"
+  },
+  {
+   "pr": 5957,
+   "title": "Fixes FeatureHolderAny initializer not public",
+   "is_bugfix": true,
+   "bug": "The Swift FeatureHolderAny initializer was internal, so firefox-ios could not construct it.",
+   "root_cause": "api-visibility",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5948,
+   "title": "Don't run PRAGMA optimize on close of read-only connection",
+   "is_bugfix": true,
+   "bug": "PRAGMA optimize was run when closing read-only places connections, failing and spamming logs.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5895,
+   "title": "[DISCO-2661] Suggest: fix: use lowercase keyword to find suggestion (backport #5892)",
+   "is_bugfix": true,
+   "bug": "Backport of #5892: suggestion lookup used the un-lowercased keyword.",
+   "root_cause": "case-sensitivity",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5892,
+   "title": "[DISCO-2661] Suggest: fix: use lowercase keyword to find suggestion",
+   "is_bugfix": true,
+   "bug": "Suggestion lookup used the query keyword as typed, so mixed-case input never matched lowercase stored keywords.",
+   "root_cause": "case-sensitivity",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5867,
+   "title": "Fixes DISCO-2637: Replace `SuggestionQuery` options with `providers`. [firefox-android: linabutler/DISCO-2637] [firefox-ios: linabutler/DISCO-2637]",
+   "is_bugfix": false,
+   "bug": "API change replacing include_sponsored flags with a providers list.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5859,
+   "title": "Document that push `KeyInfo` elements are base64 encoded. Fixes #2069",
+   "is_bugfix": false,
+   "bug": "Documentation that push KeyInfo values are base64.",
+   "root_cause": "docs",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5858,
+   "title": "Fix rust log forwarder bindings for Focus iOS",
+   "is_bugfix": true,
+   "bug": "After #5840 the Focus iOS megazord did not include rust-log-forwarder (crate dep, re-export and FFI header), breaking Focus builds.",
+   "root_cause": "megazord-config",
+   "preventable_by_lint": "partially",
+   "rule": "Each megazord must re-export and include headers for every UniFFI component in its dependency closure.",
+   "detect": "CI script: compute UniFFI crates reachable from megazords/ios-rust/focus via `cargo metadata`, then assert each has `pub use` in src/lib.rs and `#import \"<name>FFI.h\"` in MozillaRustComponents.h.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5852,
+   "title": "Fixing `./gradlew ktlintFormat`",
+   "is_bugfix": true,
+   "bug": "./gradlew ktlintFormat failed on newer JDKs without --add-opens.",
+   "root_cause": "tooling-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5849,
+   "title": "Avoid `brew update-reset` each time we check Swift formatting",
+   "is_bugfix": false,
+   "bug": "Removed an obsolete `brew update-reset` CI hack.",
+   "root_cause": "ci-cleanup",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5847,
+   "title": "Removes incorrect comment declaring viaduct not safe for binary bodies",
+   "is_bugfix": false,
+   "bug": "Removed a stale comment about binary bodies in viaduct.",
+   "root_cause": "docs",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5826,
+   "title": "Fixes DISCO-2605: Replace template parameters in AMP suggestion URLs.",
+   "is_bugfix": false,
+   "bug": "Feature: cook template parameters in AMP URLs.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5806,
+   "title": "Fixes DISCO-2587: Generate Swift bindings for the Suggest Rust component.",
+   "is_bugfix": false,
+   "bug": "Feature: generate Swift bindings for Suggest.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5790,
+   "title": "Fixes SYNC-3866: Remove the read-only transaction from `fetch_tree_with_depth`.",
+   "is_bugfix": true,
+   "bug": "fetch_tree_with_depth held an unnecessary read transaction, causing failures when called concurrently.",
+   "root_cause": "lock/concurrency",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5786,
+   "title": "Suggest: fixes [DISCO-2564] - Store unknown records",
+   "is_bugfix": false,
+   "bug": "Feature: track unparsable Remote Settings records.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5785,
+   "title": "suggest: Ensure that each store test uses a unique database",
+   "is_bugfix": true,
+   "bug": "Suggest store tests could share named shared-cache in-memory databases, cross-contaminating each other.",
+   "root_cause": "test-isolation",
+   "preventable_by_lint": "partially",
+   "rule": "Each test must use a unique database; no duplicated `file:NAME?mode=memory&cache=shared` literals.",
+   "detect": "CI script: rg all `file:[^?]+\\?mode=memory&cache=shared` literals and fail on duplicate names across the repo's tests (or require a unique_test_store() helper).",
+   "confidence": "low"
+  },
+  {
+   "pr": 5783,
+   "title": "Update files that are failing via swiftformat",
+   "is_bugfix": true,
+   "bug": "An unpinned swiftformat upgrade started failing CI on previously accepted code.",
+   "root_cause": "tool-version-drift",
+   "preventable_by_lint": "partially",
+   "rule": "Pin formatter/linter versions used in CI.",
+   "detect": "CI config: install swiftformat/swiftlint at pinned versions (e.g., via mint or a Package.swift tool dependency) and fail the lint job if `--version` differs from the pinned value.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5772,
+   "title": "Fixing KeyErrors in the branch build transform",
+   "is_bugfix": true,
+   "bug": "The branch-build transform raised KeyError when firefox-android/ios params were absent.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5767,
+   "title": "Fixes DISCO-2571: Fix re-ingesting icons in the Suggest Rust component",
+   "is_bugfix": true,
+   "bug": "Icons were stored with INSERT instead of INSERT OR REPLACE, so re-ingesting an updated icon hit a unique-constraint error.",
+   "root_cause": "sql-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5766,
+   "title": "Fixes DISCO-2569: Prepare to support other types of suggestions in the Suggest Rust component",
+   "is_bugfix": false,
+   "bug": "Refactor preparing Suggest for other suggestion types.",
+   "root_cause": "refactor",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5765,
+   "title": "Fixes DISCO-2565: Ignore unknown Remote Settings records in the Suggest collection",
+   "is_bugfix": true,
+   "bug": "Unknown or malformed Remote Settings records did not advance the last-ingest timestamp.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5764,
+   "title": "Fixes DISCO-2566: Improve Remote Settings client ergonomics for the Suggest component",
+   "is_bugfix": false,
+   "bug": "Remote Settings client ergonomics refactor.",
+   "root_cause": "refactor",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5759,
+   "title": "Fix tabs timestamp being reset to zero on desktop",
+   "is_bugfix": true,
+   "bug": "When used as a bridged engine the tabs engine stored a zero last-sync timestamp, resetting desktop's tabs timestamp.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5743,
+   "title": "Fixes DISCO-2493: Add tests for the Suggest component",
+   "is_bugfix": false,
+   "bug": "Tests for the Suggest component.",
+   "root_cause": "tests",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5736,
+   "title": "Fix nimbus-fml breaking deterministic builds",
+   "is_bugfix": true,
+   "bug": "nimbus-fml used HashMap in serialized/generated structures, making its output nondeterministic and breaking reproducible builds.",
+   "root_cause": "nondeterministic-iteration",
+   "preventable_by_lint": "yes",
+   "rule": "Code generators/serialized manifests must use ordered collections.",
+   "detect": "clippy.toml in components/support/nimbus-fml: `disallowed-types = [\"std::collections::HashMap\", \"std::collections::HashSet\"]` (use BTreeMap/IndexMap), or enable clippy::iter_over_hash_type for that crate; plus a test that generates output twice and compares bytes.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5733,
+   "title": "Bug 1843907 Fixup URI crash for Fenix",
+   "is_bugfix": true,
+   "bug": "Nimbus ArgumentProcessor called query APIs on opaque (non-hierarchical) URIs, crashing Fenix.",
+   "root_cause": "kotlin-platform-api",
+   "preventable_by_lint": "partially",
+   "rule": "Check Uri.isHierarchical before calling Uri.getQueryParameter*/queryParameterNames.",
+   "detect": "Custom detekt rule: flag calls to `getQueryParameter`, `getQueryParameters`, `queryParameterNames`, `getBooleanQueryParameter` in a function without a preceding `isHierarchical` check.",
+   "confidence": "low"
+  },
+  {
+   "pr": 5731,
+   "title": "Fixes depedency summaries",
+   "is_bugfix": true,
+   "bug": "A PR merged with a stale DEPENDENCIES.md because auto-merge only required the run-tests job, not the dependency check.",
+   "root_cause": "ci-required-checks",
+   "preventable_by_lint": "yes",
+   "rule": "The dependency-summary/audit check must be a required status on every PR that changes Cargo.lock or manifests.",
+   "detect": "Branch protection/auto-merge config: require the dependency-check job; the job runs `tools/dependency_summary.py --check` whenever Cargo.lock changes.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5723,
+   "title": "Fixes DISCO-2470: Implement the foundation of a Firefox Suggest component",
+   "is_bugfix": false,
+   "bug": "Feature: initial Suggest component.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5722,
+   "title": "Fixes SYNC-3801: Improve local dev of rust-components-swift",
+   "is_bugfix": false,
+   "bug": "Dev tooling: force_build flag and moving hand-written sync15 Swift files.",
+   "root_cause": "tooling",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5714,
+   "title": "Fixes EXP-3655: Expose getter for coenrolling feature ids in FML client and udl",
+   "is_bugfix": false,
+   "bug": "Feature: expose get_coenrolling_feature_ids.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5712,
+   "title": "Ensure `swift-build` task runs on pushes",
+   "is_bugfix": true,
+   "bug": "The swift-build task did not run on pushes, so its artifacts/index were missing for main.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5708,
+   "title": "2nd attempt to fix the swift-build artifacts directory issue",
+   "is_bugfix": true,
+   "bug": "Second fix: the mac worker's stale artifacts directory was deleted at the wrong relative path.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5707,
+   "title": "Fix for the swift-build artifacts dir",
+   "is_bugfix": true,
+   "bug": "Leftover artifacts directories on reused mac workers broke swift-build.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5703,
+   "title": "Revert \"Remove support for migrating from pre-app-services fxaccount …",
+   "is_bugfix": false,
+   "bug": "Revert of removing fxaccount migration support due to firefox-ios breakage.",
+   "root_cause": "revert",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5695,
+   "title": "Fix for the swift-build task artifacts",
+   "is_bugfix": true,
+   "bug": "The swift-build task listed the same files as both artifacts and release-artifacts, failing the nightly.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "partially",
+   "rule": "Generate the full taskgraph (and run task validation) for every parameter set, including nightly/release, in PR CI.",
+   "detect": "CI script: `taskgraph full -p taskcluster/test/params/<each>.yml` for all param files; a custom check that a task's artifact names are not duplicated across artifacts and release-artifacts.",
+   "confidence": "low"
+  },
+  {
+   "pr": 5689,
+   "title": "Fixing the decision task breakage",
+   "is_bugfix": true,
+   "bug": "The worker transform raised ValueError for the new b-osx worker type, breaking the decision task.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "partially",
+   "rule": "Generate the full taskgraph for every parameter set in PR CI.",
+   "detect": "CI script running `taskgraph full` against every file in taskcluster/test/params/ on PRs touching taskcluster/.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5688,
+   "title": "Fixes EXP-3624: Allow coenrollment in Nimbus FML",
+   "is_bugfix": false,
+   "bug": "Feature: coenrollment in Nimbus FML.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5680,
+   "title": "Fixes broken dependency check",
+   "is_bugfix": false,
+   "bug": "Dependency bump for RUSTSEC-2023-0044 (openssl, h2).",
+   "root_cause": "dependency-bump",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5665,
+   "title": "Ensure the nimbus-cli experiments aren't overwritten on restart",
+   "is_bugfix": true,
+   "bug": "Experiments set via nimbus-cli were overwritten by bundled experiments on restart.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5656,
+   "title": "Fix beetmover action",
+   "is_bugfix": true,
+   "bug": "The beetmover task used the wrong action for the ship phase.",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5653,
+   "title": "Ensure places/origins are removed when a bookmark with no visits etc is removed.",
+   "is_bugfix": true,
+   "bug": "Deleting a bookmark with no visits left orphaned places/origins rows.",
+   "root_cause": "sql-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5647,
+   "title": "Fixes intermittent test by reseting glean stores",
+   "is_bugfix": true,
+   "bug": "An iOS Nimbus test was intermittent because Glean stores were not reset between tests (Glean bug workaround).",
+   "root_cause": "test-isolation",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5631,
+   "title": "Don't write duplicate entries to dependency-licenses.xml",
+   "is_bugfix": true,
+   "bug": "dependency_summary.py wrote duplicate entries to dependency-licenses.xml.",
+   "root_cause": "tooling-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5624,
+   "title": "Renaming Sync metrics to prevent name collision",
+   "is_bugfix": false,
+   "bug": "Renamed sync metrics to *_v2 to avoid Glean name collisions when moving telemetry into a-s.",
+   "root_cause": "migration",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5610,
+   "title": "Fixing the nimbus-cli index",
+   "is_bugfix": true,
+   "bug": "The nimbus-cli assemble task published to the nimbus-fml.latest index route (copy-paste), clobbering the FML index.",
+   "root_cause": "ci-config/copy-paste",
+   "preventable_by_lint": "partially",
+   "rule": "Taskcluster index routes must be unique across tasks and name the task's own artifact.",
+   "detect": "CI script over the generated full taskgraph: collect all `index.*` routes and fail on duplicates; optionally assert the route segment equals the task's `nimbus-binary`/artifact name.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5589,
+   "title": "Don't generate module map for remote settings",
+   "is_bugfix": false,
+   "bug": "Cleanup: stop generating an unneeded Swift module map.",
+   "root_cause": "cleanup",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5579,
+   "title": "Adding documentation on how to handle breaking changes",
+   "is_bugfix": false,
+   "bug": "Docs on handling breaking changes.",
+   "root_cause": "docs",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5569,
+   "title": "nimbus-gradle-plugin arch fix",
+   "is_bugfix": true,
+   "bug": "The nimbus gradle plugin still selected the musl FML binary after the build switched to gnu.",
+   "root_cause": "build-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5560,
+   "title": "Don't build nightlies if there isn't a new commit",
+   "is_bugfix": false,
+   "bug": "Feature: skip nightly builds when there is no new commit.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5555,
+   "title": "Handle incoming history records with a null title",
+   "is_bugfix": true,
+   "bug": "Incoming history records with an explicit null title failed to deserialize, because `#[serde(default)]` only covers missing fields.",
+   "root_cause": "serde-format",
+   "preventable_by_lint": "partially",
+   "rule": "Incoming sync-payload String/collection fields with #[serde(default)] must also tolerate explicit null.",
+   "detect": "Custom lint over structs deriving Deserialize in */sync/* and *record.rs: non-Option field with `#[serde(default)]` but no `deserialize_with` null handler => warn; plus a test-harness that feeds null for every field.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5538,
+   "title": "Fixing the branch build code (gh-5502) [firefox-android: main]",
+   "is_bugfix": true,
+   "bug": "Branch-build version string was not a valid version (needed 0.0a-<sha>).",
+   "root_cause": "ci-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5536,
+   "title": "Fixes keychain infinite recursion",
+   "is_bugfix": true,
+   "bug": "MZKeychainWrapper.set(Int) called itself (Int(truncating:) resolved to the same overload), causing infinite recursion.",
+   "root_cause": "infinite-recursion",
+   "preventable_by_lint": "yes",
+   "rule": "Swift wrappers must build with warnings as errors.",
+   "detect": "The Swift compiler emits 'function call causes an infinite recursion'; build MozillaTestServices / the wrapper sources in CI with `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES` (or `-warnings-as-errors`).",
+   "confidence": "high"
+  },
+  {
+   "pr": 5531,
+   "title": "Fixes sync15 not referencing the megazord",
+   "is_bugfix": true,
+   "bug": "sync15's uniffi.toml lacked cdylib_name = \"megazord\", so Kotlin tried to load a nonexistent per-crate library and DeviceType crashed in Fenix.",
+   "root_cause": "uniffi-config",
+   "preventable_by_lint": "yes",
+   "rule": "Every component bundled in the Android megazord must set `[bindings.kotlin] cdylib_name = \"megazord\"`.",
+   "detect": "CI script: for each crate depended on by megazords/full that has a uniffi.toml or .udl/uniffi exports, parse uniffi.toml and assert cdylib_name == 'megazord'.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5519,
+   "title": "fix dependency check jon as sqlcipher made a trivial license change",
+   "is_bugfix": true,
+   "bug": "SQLCipher made a trivial license text change, breaking the dependency check.",
+   "root_cause": "external-change",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5500,
+   "title": "Don't always run the swift-build task",
+   "is_bugfix": false,
+   "bug": "CI cost: only run swift-build on full CI.",
+   "root_cause": "ci-cleanup",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5483,
+   "title": "Fixing the objcopy path when building the megazord",
+   "is_bugfix": true,
+   "bug": "Newer NDKs dropped the per-arch objcopy binaries, breaking symbol generation.",
+   "root_cause": "build-script/toolchain",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5462,
+   "title": "Places migration fix",
+   "is_bugfix": true,
+   "bug": "Places schema version needed a bump for a migration on the release branch (details truncated in the patch).",
+   "root_cause": "schema-version",
+   "preventable_by_lint": "partially",
+   "rule": "A change to schema SQL or upgrade code must bump the schema VERSION constant.",
+   "detect": "CI diff check: if a PR modifies sql/*.sql, schema.rs SQL constants or upgrade_from arms but not the VERSION/END_VERSION constant, fail; complemented by the fresh-vs-migrated schema test.",
+   "confidence": "low"
+  },
+  {
+   "pr": 5452,
+   "title": "Update openssl to avoid a couple of advisories",
+   "is_bugfix": false,
+   "bug": "Dependency bump for openssl advisories.",
+   "root_cause": "dependency-bump",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5451,
+   "title": "Update chrono to avoid RUSTSEC-2020-0159. Fixes #4590",
+   "is_bugfix": false,
+   "bug": "Dependency bump for chrono advisory RUSTSEC-2020-0159.",
+   "root_cause": "dependency-bump",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5449,
+   "title": "Fixup days in a week test failure",
+   "is_bugfix": true,
+   "bug": "A week-interval test only passed on Mondays because it depended on the current weekday.",
+   "root_cause": "time/test-flaky",
+   "preventable_by_lint": "partially",
+   "rule": "Tests must not depend on the current wall-clock date/weekday.",
+   "detect": "Custom lint flagging `Utc::now()` in nimbus tests that query Weeks/Months intervals; periodic CI run under libfaketime on different weekdays.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5447,
+   "title": "Fixing branch build APK output [firefox-android: main]",
+   "is_bugfix": true,
+   "bug": "Branch-build Fenix APK path was stale after the firefox-android monorepo move.",
+   "root_cause": "external-change",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5432,
+   "title": "Allow autofill to roundtrip data it doesn't know about",
+   "is_bugfix": false,
+   "bug": "Feature: autofill roundtrips unknown fields.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5421,
+   "title": "Fix Nimbus gradle plugin issues [firefox-android: gabrielluong:1818826]",
+   "is_bugfix": true,
+   "bug": "The Nimbus gradle plugin did not add generated sources or make compile tasks depend on generation.",
+   "root_cause": "build-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5413,
+   "title": "logins syncing roundtrips data it doesn't know about.",
+   "is_bugfix": false,
+   "bug": "Feature: logins roundtrips unknown fields (with schema migration).",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5411,
+   "title": "Ensure we only truncate at char bounds",
+   "is_bugfix": true,
+   "bug": "Tab titles were truncated with String::truncate at a byte index, panicking on multi-byte characters.",
+   "root_cause": "string/char-boundary",
+   "preventable_by_lint": "yes",
+   "rule": "Never truncate or slice a String at an arbitrary byte index.",
+   "detect": "clippy.toml `disallowed-methods = [{ path = \"alloc::string::String::truncate\", reason = \"use a char-boundary-safe helper\" }]` plus `clippy::string_slice` (restriction) in components.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5407,
+   "title": "Tabs storage should create DB when adding meta rows",
+   "is_bugfix": true,
+   "bug": "Tabs put_meta silently did nothing when the DB did not exist yet, losing the last-sync time.",
+   "root_cause": "error-swallowed/logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5403,
+   "title": "Another fix for test_logging",
+   "is_bugfix": true,
+   "bug": "test_logging was intermittent because other tests changed the global max log level.",
+   "root_cause": "test-race/global-state",
+   "preventable_by_lint": "partially",
+   "rule": "Tests mutating process-global state must be serialized and must set the state they depend on.",
+   "detect": "Custom lint: in a test module where any test takes TEST_LOCK/#[serial], every test calling set_logger/set_max_level must do the same.",
+   "confidence": "low"
+  },
+  {
+   "pr": 5402,
+   "title": "Remove obsolete lib-crash-sentry-legacy and tooling-glean-gradle AC projects",
+   "is_bugfix": false,
+   "bug": "Removed obsolete android-components projects from CI config after upstream removal.",
+   "root_cause": "ci-cleanup",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5386,
+   "title": "Ensure syncing history sees the most recent 5000 records",
+   "is_bugfix": true,
+   "bug": "History sync requested a limit without specifying sort order, so it might not fetch the newest 5000 records.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5385,
+   "title": "Fix the `test_logging` test",
+   "is_bugfix": true,
+   "bug": "rust-log-forwarder tests raced on the global logger when cargo ran them in parallel.",
+   "root_cause": "test-race/global-state",
+   "preventable_by_lint": "partially",
+   "rule": "Tests mutating process-global state must be serialized.",
+   "detect": "Require `#[serial]` (serial_test) or a shared lock on tests calling set_logger/set_max_level; custom lint checks this.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5352,
+   "title": "Don't use workspace dependencies for UniFFI.",
+   "is_bugfix": true,
+   "bug": "Using `workspace = true` dependency inheritance for uniffi broke vendoring into mozilla-central.",
+   "root_cause": "vendoring-incompatibility",
+   "preventable_by_lint": "yes",
+   "rule": "Component manifests must only use features mozilla-central's vendoring supports.",
+   "detect": "CI check (at that time): forbid `workspace = true` in components/**/Cargo.toml; more generally a periodic job that vendors a-s into a pinned m-c checkout (`mach vendor rust`) and fails on errors.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5325,
+   "title": "Upgrades tokio after cargo audit fails",
+   "is_bugfix": false,
+   "bug": "Dependency bump for tokio advisory RUSTSEC-2023-0001.",
+   "root_cause": "dependency-bump",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5315,
+   "title": "Fix serialization and deserialization of `Option<DeviceType>` in sync15.",
+   "is_bugfix": true,
+   "bug": "RemoteClient deserialized unknown device types as Some(Unknown) but refused to serialize Unknown, so records could not roundtrip.",
+   "root_cause": "serde-format",
+   "preventable_by_lint": "partially",
+   "rule": "Serialize/Deserialize impls of sync payload types must roundtrip, including unknown enum values.",
+   "detect": "Test-harness: property/roundtrip test (deserialize -> serialize -> deserialize) for each payload type with unknown enum strings and nulls; flag enums whose Serialize errors on a variant Deserialize can produce.",
+   "confidence": "low"
+  },
+  {
+   "pr": 5304,
+   "title": "Don't report URL parsing errors",
+   "is_bugfix": true,
+   "bug": "Known invalid-URL parse errors from Fenix were reported to Sentry as noise.",
+   "root_cause": "wrong-error-severity",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5303,
+   "title": "Update incorrect comments and add new comments about record IDs",
+   "is_bugfix": false,
+   "bug": "Comment updates about record IDs.",
+   "root_cause": "docs",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5293,
+   "title": "Fix iOS  naming conflict",
+   "is_bugfix": true,
+   "bug": "autofill and logins both exported a top-level `create_key`, colliding in the shared Swift module for iOS.",
+   "root_cause": "uniffi-name-collision",
+   "preventable_by_lint": "yes",
+   "rule": "Top-level names exported by components that share one Swift module must be unique.",
+   "detect": "uniffi checker in CI: generate Swift for all iOS megazord components (library mode), collect top-level `public func`/type/typealias names per component and fail on duplicates (or compile all generated files together on every PR).",
+   "confidence": "high"
+  },
+  {
+   "pr": 5291,
+   "title": "Don't delete all existing tab records if we don't have any to apply.",
+   "is_bugfix": true,
+   "bug": "Applying a sync with zero incoming tab records wiped all stored remote tabs.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5277,
+   "title": "Dont reset the tabs engine every sync, use the db for storing last sync",
+   "is_bugfix": true,
+   "bug": "The tabs engine reset and refetched everything on every sync (Bug 1800186).",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 5272,
+   "title": "Fixes swift warnings",
+   "is_bugfix": true,
+   "bug": "Swift wrappers produced compiler warnings (unused results/bindings) that surfaced in consumer apps.",
+   "root_cause": "compiler-warnings",
+   "preventable_by_lint": "yes",
+   "rule": "Swift wrappers must build with warnings as errors.",
+   "detect": "`SWIFT_TREAT_WARNINGS_AS_ERRORS=YES` / `-warnings-as-errors` for the wrapper sources in CI.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5269,
+   "title": "Autofill scrubbing fixes",
+   "is_bugfix": true,
+   "bug": "Autofill reset_storage opened an unchecked transaction and never committed it, so scrub_encrypted_data's last-sync reset was rolled back; empty ciphertext was also reported to Sentry.",
+   "root_cause": "sql-transaction-not-committed",
+   "preventable_by_lint": "yes",
+   "rule": "A transaction created in a function must be committed, explicitly rolled back, or returned.",
+   "detect": "Custom lint (dylint or ast-grep): `let $TX = $DB.(unchecked_transaction|transaction|begin_transaction)()?` in a fn body with no `$TX.commit()` and no move of `$TX` out of the function => error (allow via attribute for intentional read guards).",
+   "confidence": "high"
+  },
+  {
+   "pr": 5259,
+   "title": "Fix deprecation warnings in iOS Swift Keychain Wrapper code",
+   "is_bugfix": true,
+   "bug": "Keychain wrapper code used deprecated APIs and produced warnings in consumer builds.",
+   "root_cause": "compiler-warnings/deprecation",
+   "preventable_by_lint": "yes",
+   "rule": "Swift wrappers must build with warnings (including deprecations) as errors.",
+   "detect": "`-warnings-as-errors` for wrapper sources in CI.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5223,
+   "title": "Fixed error field name for tabs error",
+   "is_bugfix": true,
+   "bug": "Tabs.swift threw UnexpectedTabsError(message:) after the field was renamed to reason:, breaking the Swift build.",
+   "root_cause": "uniffi-binding-mismatch",
+   "preventable_by_lint": "yes",
+   "rule": "Hand-written Swift/Kotlin wrappers must compile against freshly generated bindings on every PR touching UDL/exports.",
+   "detect": "CI: build the Swift wrapper sources (MozillaTestServices) on PRs that touch *.udl, uniffi exports or ios/ dirs, not only on full-ci/nightly.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5192,
+   "title": "Refactor autofill so it doesn't lean as heavily on sync15::Payload",
+   "is_bugfix": false,
+   "bug": "Refactor of autofill payload handling.",
+   "root_cause": "refactor",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5182,
+   "title": "Fixes missing titles in iOS history migration",
+   "is_bugfix": true,
+   "bug": "iOS history migration kept existing moz_places rows without titles even when titles were available.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5181,
+   "title": "Fixes name conflict in swift generated code",
+   "is_bugfix": true,
+   "bug": "tabs exported a `Guid` custom type that collided with places' Guid in the shared Swift module, breaking firefox-ios.",
+   "root_cause": "uniffi-name-collision",
+   "preventable_by_lint": "yes",
+   "rule": "Top-level names exported by components that share one Swift module must be unique.",
+   "detect": "Same cross-component Swift name-uniqueness check as #5293.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5172,
+   "title": "Sync Manager syncs engines in a deterministic order, fixes #5171",
+   "is_bugfix": true,
+   "bug": "Sync manager synced engines in HashMap order, i.e. nondeterministically, instead of desktop's priority order.",
+   "root_cause": "nondeterministic-iteration",
+   "preventable_by_lint": "partially",
+   "rule": "Don't iterate HashMap/HashSet where the order is observable.",
+   "detect": "Enable clippy::iter_over_hash_type (restriction) in sync_manager/sync15; noise on order-insensitive loops needs #[allow].",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5157,
+   "title": "Fixup regression in calculating install dates",
+   "is_bugfix": true,
+   "bug": "A Kotlin refactor regressed days_since_install/update because install dates were no longer updated before enrollment.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5150,
+   "title": "Run Rust 1.61 tests with -j2 to prevent OOM",
+   "is_bugfix": true,
+   "bug": "Rust 1.61 min-version tests OOMed on CI.",
+   "root_cause": "ci-resources",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5127,
+   "title": "Fix the iOS build",
+   "is_bugfix": true,
+   "bug": "The iOS CI build lacked a `python` symlink.",
+   "root_cause": "ci-environment",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5082,
+   "title": "Fix tab example's use of sync key",
+   "is_bugfix": true,
+   "bug": "The tabs example passed the key id (kid) instead of the encoded key bytes as the sync key.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5080,
+   "title": "Adds missing musl-gcc to nimbus-fml build script",
+   "is_bugfix": true,
+   "bug": "build-dist.sh lacked musl-gcc on PATH and had no `set -e`, so Linux FML releases silently failed to build.",
+   "root_cause": "build-script/shell",
+   "preventable_by_lint": "partially",
+   "rule": "CI shell scripts must run with `set -euo pipefail`.",
+   "detect": "CI script: every *.sh under automation/, taskcluster/scripts/, components/**/scripts must contain `set -e` (ideally -euo pipefail) before the first command; the missing toolchain itself is not lintable.",
+   "confidence": "high"
+  },
+  {
+   "pr": 5069,
+   "title": "[93.5 fix] Remove tests on expired metrics",
+   "is_bugfix": true,
+   "bug": "Tests on the 93.5 release branch exercised Glean metrics that had expired, failing CI.",
+   "root_cause": "metric-expiry",
+   "preventable_by_lint": "partially",
+   "rule": "Fail CI ahead of Glean metric expiry.",
+   "detect": "CI script over all metrics.yaml: error if `expires` is a date within N days (or a version <= next release), so metrics are renewed or tests removed before branches break.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 5068,
+   "title": " Cherry-picked fixes for 93.7.2: Glean upgrade ",
+   "is_bugfix": false,
+   "bug": "Cherry-picked Glean upgrade for 93.7.2.",
+   "root_cause": "dependency-bump",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5066,
+   "title": "Cherry-picked fixes for 93.5.1: Glean upgrade (and tool update)",
+   "is_bugfix": false,
+   "bug": "Cherry-picked Glean upgrade (and dep-checker tool update) for 93.5.1.",
+   "root_cause": "dependency-bump",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5034,
+   "title": "Fix the dep checker: the windows-rs repository moved its license files",
+   "is_bugfix": true,
+   "bug": "windows-rs moved its license files, breaking the dependency checker.",
+   "root_cause": "external-change",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 5030,
+   "title": "Fix autofill sync failures when tombstones are in the mirror.",
+   "is_bugfix": true,
+   "bug": "Autofill sync failed when the mirror held tombstones, which were parsed as full records.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 4975,
+   "title": "Fix iOS SyncUnlockInfo breaking change",
+   "is_bugfix": true,
+   "bug": "SyncUnlockInfo's Swift init gained a required tabsLocalId parameter, a breaking change for firefox-ios.",
+   "root_cause": "api-breaking-change",
+   "preventable_by_lint": "partially",
+   "rule": "Public Swift/Kotlin wrapper API changes must be detected and either made backward compatible or flagged as breaking.",
+   "detect": "CI API diff: swift-api-digester (-dump-sdk/-diagnose-sdk) for Swift wrappers and Kotlin binary-compatibility-validator (apiCheck) against the last release; fail unless CHANGELOG has a breaking-change entry.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 4954,
+   "title": "Don't warn if we fail to open a database that doesn't exist and we di…",
+   "is_bugfix": true,
+   "bug": "Opening a non-existent DB without the create flag logged a scary warning.",
+   "root_cause": "logging-level",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 4940,
+   "title": "Ensure that recording metadata with a view time of zero doesn't fail …",
+   "is_bugfix": true,
+   "bug": "History highlights query returned a SQL error when the score was NULL (view time 0).",
+   "root_cause": "sql-null-handling",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 4938,
+   "title": "Fixes for nighly builds",
+   "is_bugfix": false,
+   "bug": "Nightly build routing improvements.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 4932,
+   "title": "Fix a-c and fenix branch build tests [ac: main] [fenix: main]",
+   "is_bugfix": false,
+   "bug": "Branch-build support for owners/robolectric.",
+   "root_cause": "feature",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 4920,
+   "title": "Fixes map on String and Variables being internal in Nimbus ios",
+   "is_bugfix": true,
+   "bug": "Swift extensions on String/Variables used by FML-generated code were internal, so generated code failed to compile in consumer modules.",
+   "root_cause": "api-visibility/codegen",
+   "preventable_by_lint": "partially",
+   "rule": "FML-generated Swift/Kotlin must be compiled in a separate module from Nimbus in CI.",
+   "detect": "Test-harness: compile FML-generated fixtures (nimbus-fml/test/*.swift) as a separate Swift module that only imports Nimbus, so internal symbols referenced by generated code fail the build.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 4915,
+   "title": "Fixup missing mapper when working with optionals",
+   "is_bugfix": true,
+   "bug": "FML codegen dropped the value mapper for optional enum/object types.",
+   "root_cause": "codegen-logic",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 4861,
+   "title": "Avoid Option<DeviceType> in all structs",
+   "is_bugfix": true,
+   "bug": "Option<DeviceType> made unknown device types awkward to (de)serialize and roundtrip; switched to a non-optional DeviceType with Unknown.",
+   "root_cause": "serde-format/api-design",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "low"
+  },
+  {
+   "pr": 4792,
+   "title": "Fix gradle builds for Apple Silicon running arm64 JDKs",
+   "is_bugfix": true,
+   "bug": "Gradle builds failed on Apple Silicon arm64 JDKs (no darwin-aarch64 target/libs).",
+   "root_cause": "platform-config",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  }
+ ],
+ "rules": [
+  {
+   "id": "license-metadata-check",
+   "title": "Require MPL headers and Cargo license fields",
+   "area": "deps-build",
+   "problem": "Files without the MPL header and crates without `license` in Cargo.toml block or dirty vendoring into mozilla-central, whose linters catch them only after the fact.",
+   "rule": "Every tracked source/config file starts with the MPL-2.0 header (after an optional shebang); every workspace Cargo.toml declares license = \"MPL-2.0\".",
+   "enforcement": "ci-script",
+   "detect": "Script over `git ls-files` checking the first lines for the MPL header (allowlist generated/third-party paths); `cargo metadata --no-deps | jq` asserting license == MPL-2.0 for every package.",
+   "prs": [
+    6514,
+    6243
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - deterministic text check with an allowlist"
+  },
+  {
+   "id": "exec-bit-matches-shebang",
+   "title": "Keep executable bits and shebangs consistent",
+   "area": "ci-scripts",
+   "problem": "Data files committed as executable and shell scripts without shebangs trip m-c's file-perms linter.",
+   "rule": "A file is executable iff it starts with `#!`; non-script extensions (png, yml, json, md) are never executable.",
+   "enforcement": "ci-script",
+   "detect": "`git ls-files -s`: mode 100755 => first two bytes must be '#!'; mode 100755 with a data extension => error.",
+   "prs": [
+    6512
+   ],
+   "severity": "low",
+   "false_positive_risk": "low - purely mechanical"
+  },
+  {
+   "id": "no-unused-deps",
+   "title": "Fail CI on unused crate dependencies",
+   "area": "deps-build",
+   "problem": "Leftover deps (glean-build, ffi-support, nss_build_common) inflate builds and license/dependency summaries.",
+   "rule": "Component manifests must not declare unused dependencies or build-dependencies.",
+   "enforcement": "ci-script",
+   "detect": "`cargo machete` (fast, stable) or `cargo +nightly udeps` per workspace member, with a `[package.metadata.cargo-machete] ignored` escape hatch.",
+   "prs": [
+    6482,
+    6412
+   ],
+   "severity": "low",
+   "false_positive_risk": "medium - build.rs-only or feature-gated deps need ignore entries"
+  },
+  {
+   "id": "mc-vendoring-compat",
+   "title": "Check dependency requirements against mozilla-central",
+   "area": "deps-build",
+   "problem": "Requiring newer crate versions than m-c vendors (regex 1.10) or manifest features m-c cannot vendor (workspace inheritance at the time) breaks vendoring into Firefox.",
+   "rule": "Every dependency requirement must be satisfiable by m-c's vendored Cargo.lock, and manifests must stay vendorable.",
+   "enforcement": "ci-script",
+   "detect": "Script comparing each Cargo.toml requirement's minimum version against a pinned copy of m-c's Cargo.lock (semver per crate); periodic job running `mach vendor rust` against an m-c checkout.",
+   "prs": [
+    6466,
+    5352
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - exact version comparison; needs the m-c lock snapshot refreshed"
+  },
+  {
+   "id": "rustdoc-block-continuity",
+   "title": "Don't mix // and /// inside doc blocks",
+   "area": "docs-changelog",
+   "problem": "A `//` line inside a `///` block silently disappears from the published docs of an exported function.",
+   "rule": "Doc comment blocks must use `///` (or `//!`) on every line.",
+   "enforcement": "ast-grep/regex",
+   "detect": "Multiline rg: `^\\s*///.*\\n\\s*//[^/!].*\\n\\s*///`.",
+   "prs": [
+    6462
+   ],
+   "severity": "low",
+   "false_positive_risk": "low - the pattern is rarely intentional"
+  },
+  {
+   "id": "docs-summary-integrity",
+   "title": "Keep docs/SUMMARY.md complete and link-clean",
+   "area": "docs-changelog",
+   "problem": "New guides were not added to SUMMARY.md (never published) and SUMMARY.md linked to deleted pages.",
+   "rule": "Every docs page is reachable from SUMMARY.md (or allowlisted) and every SUMMARY link resolves.",
+   "enforcement": "ci-script",
+   "detect": "mdbook-linkcheck plus a script diffing SUMMARY.md link targets against `git ls-files 'docs/**/*.md'`.",
+   "prs": [
+    6407,
+    6404
+   ],
+   "severity": "low",
+   "false_positive_risk": "low - allowlist intentionally unlisted pages"
+  },
+  {
+   "id": "shell-strict-and-shellcheck",
+   "title": "Run shellcheck and require strict mode in scripts",
+   "area": "ci-scripts",
+   "problem": "Scripts referenced unset variables or kept going after failed steps, silently producing broken or missing artifacts.",
+   "rule": "All *.sh pass shellcheck and begin with `set -euo pipefail` (or at least `set -e`).",
+   "enforcement": "ci-script",
+   "detect": "shellcheck on `git ls-files '*.sh'` (SC2154 catches $DOC_DIR); grep that each script contains `set -e` before its first command.",
+   "prs": [
+    6392,
+    5080
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - sourced setup scripts may need `# shellcheck shell=bash` directives"
+  },
+  {
+   "id": "python-propagate-failures",
+   "title": "Make Python automation exit non-zero on failure",
+   "area": "ci-scripts",
+   "problem": "Automation scripts ignored subprocess return codes or a False status, so failed vendoring or symbol uploads reported success.",
+   "rule": "subprocess.run uses check=True or inspects returncode; bool status results are not discarded; main() exits non-zero on failure.",
+   "enforcement": "ci-script",
+   "detect": "ruff PLW1510 (subprocess-run-without-check) on automation/, tools/, taskcluster/; a small custom AST check flagging expression-statement calls to local functions that only return bool literals.",
+   "prs": [
+    6242,
+    6369
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low for PLW1510; medium for the custom ignored-bool check"
+  },
+  {
+   "id": "uniffi-option-defaults",
+   "title": "Default Option fields and args to None in UniFFI APIs",
+   "area": "uniffi",
+   "problem": "Optional Record fields and constructor/method args without defaults force every Kotlin/Swift caller to pass them, which turns additions into breaking changes.",
+   "rule": "Option<T> fields of uniffi Records and Option<T> args of exported functions declare `default = None` unless explicitly opted out.",
+   "enforcement": "uniffi-checker",
+   "detect": "syn-based scan of `#[derive(uniffi::Record)]` structs and `#[uniffi::export]` impls (and UDL `T?` members without `= null`), reporting Option-typed items without a default.",
+   "prs": [
+    6387
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - some Options are intentionally required; needs an opt-out attribute or comment"
+  },
+  {
+   "id": "error-catchall-has-reason",
+   "title": "Give catch-all FFI error variants a reason",
+   "area": "errors",
+   "problem": "`FxaError::Other` had no payload, so consumers only saw 'other error'.",
+   "rule": "Catch-all variants (Other, Unexpected*, Unknown*) of public/FFI error enums must carry a reason string that is interpolated in the message.",
+   "enforcement": "custom-lint",
+   "detect": "Scan enums deriving uniffi::Error/thiserror::Error that are exported (or UDL [Error] interfaces): flag such variants with no fields or an `#[error]` format string without interpolation.",
+   "prs": [
+    6278
+   ],
+   "severity": "low",
+   "false_positive_risk": "low - name-based and narrow"
+  },
+  {
+   "id": "sql-single-statement-execute",
+   "title": "Use execute_batch for multi-statement SQL",
+   "area": "sql",
+   "problem": "A migration passed two statements to execute(), which ran only the first, leaving upgraded databases without a table.",
+   "rule": "SQL passed to execute/execute_cached/prepare/query_* must contain exactly one statement.",
+   "enforcement": "custom-lint",
+   "detect": "ast-grep/dylint: string-literal or const &str arguments to those methods containing `;` followed by another SQL keyword (CREATE/INSERT/UPDATE/DELETE/DROP/ALTER).",
+   "prs": [
+    6189
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - trailing semicolons and semicolons inside string literals/triggers need handling"
+  },
+  {
+   "id": "sql-migration-harness",
+   "title": "Test every schema migration against a fresh schema",
+   "area": "sql",
+   "problem": "Migrations diverged from fresh schemas, schema versions weren't bumped, and clear_database() missed tables added later.",
+   "rule": "Each component with migrations has (a) a fresh-vs-migrated schema equality test, (b) a test that clear_database() empties every table not on an allowlist, and (c) a VERSION bump whenever schema SQL or upgrade code changes.",
+   "enforcement": "test-harness",
+   "detect": "Shared sql_support helper (MigratedDatabaseFile::run_all_upgrades + assert_schema_matches_new_database), a clear_database test that iterates sqlite_master, and a CI diff check that fails when schema SQL/upgrade_from changes without the VERSION constant changing.",
+   "prs": [
+    6189,
+    6456,
+    5462
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - tests are deterministic; the diff check may need an override label for comment-only edits"
+  },
+  {
+   "id": "sql-fk-explicit-on-delete",
+   "title": "Require explicit ON DELETE on every foreign key",
+   "area": "sql",
+   "problem": "A REFERENCES clause without ON DELETE CASCADE caused FOREIGN KEY failures when re-ingesting suggestions.",
+   "rule": "Every REFERENCES/FOREIGN KEY clause states an ON DELETE action.",
+   "enforcement": "test-harness",
+   "detect": "Schema test: on a fresh DB run `PRAGMA foreign_key_list(t)` for each table and fail when on_delete == 'NO ACTION' unless allowlisted.",
+   "prs": [
+    6016,
+    6028
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - an intentional NO ACTION can be spelled explicitly"
+  },
+  {
+   "id": "sql-transaction-must-commit",
+   "title": "Commit or explicitly roll back every transaction",
+   "area": "sql",
+   "problem": "A function opened unchecked_transaction(), wrote to it and returned without commit(), so the write was silently rolled back on drop.",
+   "rule": "A transaction bound in a function must be committed, explicitly rolled back, or returned/moved to the caller.",
+   "enforcement": "custom-lint",
+   "detect": "ast-grep/dylint: `let $TX = $DB.(unchecked_transaction|transaction|begin_transaction)()?` where the body has no `$TX.commit()`/`$TX.rollback()` and `$TX` is not returned or passed by value.",
+   "prs": [
+    5269
+   ],
+   "severity": "high",
+   "false_positive_risk": "medium - intentional read-only guard transactions need an #[allow]"
+  },
+  {
+   "id": "no-unwrap-on-external-data",
+   "title": "Deny unwrap/expect in component library code",
+   "area": "errors",
+   "problem": "An `unwrap()` inside a query_map closure (already marked XXX) panicked on bad rows during sync.",
+   "rule": "Non-test component code must propagate errors instead of unwrap()/expect(), except for documented invariants.",
+   "enforcement": "existing-clippy",
+   "detect": "`#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]` per component, ratcheted to deny with a baseline of existing #[allow]s; also grep for `unwrap()` on lines carrying XXX/TODO.",
+   "prs": [
+    6143
+   ],
+   "severity": "high",
+   "false_positive_risk": "high at first (mutex locks, invariants) - needs a baseline and ratchet"
+  },
+  {
+   "id": "panic-free-jexl-transforms",
+   "title": "Use checked arithmetic in JEXL/targeting code",
+   "area": "errors",
+   "problem": "usize::MAX + starting_bucket overflowed in an eventLastSeen transform; the panic poisoned the JEXL evaluator mutex.",
+   "rule": "Code reachable from JEXL transforms and other FFI entry points uses checked/saturating arithmetic and must not panic.",
+   "enforcement": "existing-clippy",
+   "detect": "Enable clippy::arithmetic_side_effects, clippy::panic and clippy::indexing_slicing for components/nimbus/src/stateful/{behavior,targeting}.rs; add a test that runs every transform with boundary args (0, usize::MAX, negatives).",
+   "prs": [
+    6125
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - arithmetic_side_effects is noisy outside a narrow scope"
+  },
+  {
+   "id": "no-byte-index-string-truncation",
+   "title": "Truncate strings only at char boundaries",
+   "area": "other",
+   "problem": "String::truncate at a byte limit panicked on multi-byte tab titles.",
+   "rule": "Don't call String::truncate or slice &str with arbitrary byte indexes; use a char-boundary-safe helper.",
+   "enforcement": "existing-clippy",
+   "detect": "clippy.toml `disallowed-methods = [{ path = \"alloc::string::String::truncate\", reason = \"use slice_up_to / floor_char_boundary\" }]` plus `clippy::string_slice` (restriction) in components.",
+   "prs": [
+    5411
+   ],
+   "severity": "high",
+   "false_positive_risk": "medium - ASCII-only call sites need an #[allow]"
+  },
+  {
+   "id": "deterministic-iteration",
+   "title": "Use ordered maps where iteration order is observable",
+   "area": "other",
+   "problem": "HashMap iteration made FML output nondeterministic and sync engine order random, and tests relied on serde_json Map order that only came from workspace feature unification.",
+   "rule": "Code generators, serialized manifests and ordered workflows must not iterate HashMap/HashSet; tests must not depend on map order the crate itself doesn't guarantee.",
+   "enforcement": "existing-clippy",
+   "detect": "clippy::iter_over_hash_type in nimbus-fml and sync_manager, plus `disallowed-types` HashMap/HashSet in nimbus-fml's clippy.toml; a CI job running `cargo test -p <crate>` per crate (or cargo-hack --each-package) to expose feature-unification dependence.",
+   "prs": [
+    5736,
+    5172,
+    6208
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - many hash iterations are order-insensitive and need #[allow]"
+  },
+  {
+   "id": "tests-no-wall-clock",
+   "title": "Keep tests independent of the current date",
+   "area": "tests",
+   "problem": "Event-store tests built dates from Utc::now(), so they failed across Jan 1 or passed only on Mondays.",
+   "rule": "Tests use fixed or injected timestamps instead of the wall clock when doing calendar arithmetic.",
+   "enforcement": "custom-lint",
+   "detect": "Lint #[cfg(test)] code for `Utc::now()`, `SystemTime::now()` or `Timestamp::now()` near calendar ops (Duration::days, with_month, Interval::Weeks/Months); weekly CI run under libfaketime at Dec 31 23:59 and on different weekdays.",
+   "prs": [
+    6032,
+    6033,
+    5449
+   ],
+   "severity": "low",
+   "false_positive_risk": "high for a blanket now() ban; medium when scoped to calendar math"
+  },
+  {
+   "id": "tests-serialize-global-state",
+   "title": "Serialize tests that touch global state",
+   "area": "tests",
+   "problem": "Tests sharing static mocks, the global logger/max level or named shared-cache in-memory DBs raced when cargo ran them in parallel.",
+   "rule": "Tests that use mockall static contexts, set_logger/set_max_level or other globals take a shared lock or are #[serial]; named in-memory DB URIs are unique per test.",
+   "enforcement": "custom-lint",
+   "detect": "Per test module: if any test takes a lock/#[serial], flag tests calling the same global APIs (`*_context()`, set_logger, set_max_level) without it; rg for duplicate `file:NAME?mode=memory&cache=shared` literals.",
+   "prs": [
+    6126,
+    5385,
+    5403,
+    5785
+   ],
+   "severity": "low",
+   "false_positive_risk": "medium - module-local heuristics"
+  },
+  {
+   "id": "swift-warnings-as-errors",
+   "title": "Build Swift wrappers with warnings as errors",
+   "area": "swift",
+   "problem": "Infinite recursion, unused results and deprecated APIs in Swift wrappers shipped to consumers; the compiler warned about each.",
+   "rule": "Hand-written Swift wrapper code compiles warning-free in CI.",
+   "enforcement": "ci-script",
+   "detect": "xcodebuild for MozillaTestServices with SWIFT_TREAT_WARNINGS_AS_ERRORS=YES (or swiftc -warnings-as-errors on wrapper sources), plus SwiftLint.",
+   "prs": [
+    5536,
+    5272,
+    5259
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low-medium - SDK deprecations after Xcode bumps need prompt fixes"
+  },
+  {
+   "id": "uniffi-swift-name-uniqueness",
+   "title": "Keep exported names unique across one Swift module",
+   "area": "uniffi",
+   "problem": "Components bundled into the single MozillaRustComponents Swift module exported the same top-level names (create_key, Guid), breaking firefox-ios.",
+   "rule": "Top-level functions, types and custom typedefs exported by components that share a Swift module must have unique names.",
+   "enforcement": "uniffi-checker",
+   "detect": "Generate Swift bindings for every iOS megazord component in library mode, collect top-level public declarations per component and fail on duplicates (or compile all generated files together on every PR touching UDL/exports).",
+   "prs": [
+    5293,
+    5181
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - any duplicate is a real compile error"
+  },
+  {
+   "id": "megazord-consistency",
+   "title": "Check megazord manifests, headers and uniffi.toml agree",
+   "area": "uniffi",
+   "problem": "Components missing cdylib_name=megazord, missing re-exports or FFI headers, or headers absent from module.modulemap broke Fenix, Focus iOS and firefox-ios builds.",
+   "rule": "Every UniFFI component in a megazord's dependency closure has cdylib_name = \"megazord\" (Kotlin), a `pub use` in the megazord lib.rs, an `#import` in the umbrella header, and every built header is listed in module.modulemap.",
+   "enforcement": "ci-script",
+   "detect": "Script using `cargo metadata` for megazords/full and megazords/ios-rust(/focus): parse each component's uniffi.toml, grep lib.rs and MozillaRustComponents.h; after the xcframework build, check Headers/*.h against Modules/module.modulemap.",
+   "prs": [
+    5531,
+    5858,
+    6418,
+    6422
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - set comparisons over explicit manifests"
+  },
+  {
+   "id": "compile-wrappers-and-generated-code-on-pr",
+   "title": "Compile wrappers and FML output against fresh bindings",
+   "area": "uniffi",
+   "problem": "Hand-written Swift used a renamed error field, and FML-generated Swift relied on internal Nimbus extensions; both surfaced only in consumer builds.",
+   "rule": "Every PR touching UDL/uniffi exports or FML codegen compiles the Kotlin/Swift wrappers and compiles FML-generated code as a separate consumer module.",
+   "enforcement": "test-harness",
+   "detect": "Path-filtered CI job: build the Swift wrapper sources against freshly generated bindings, and compile nimbus-fml test fixtures in a module that only `import`s Nimbus.",
+   "prs": [
+    5223,
+    4920
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - compile errors are real; the cost is macOS CI time"
+  },
+  {
+   "id": "public-api-diff",
+   "title": "Detect breaking changes in Kotlin/Swift APIs",
+   "area": "api-design",
+   "problem": "A new required init parameter on SyncUnlockInfo broke firefox-ios without being flagged.",
+   "rule": "Public API changes to Kotlin/Swift wrappers and generated bindings are diffed against the last release; breaking diffs need a CHANGELOG breaking-change entry.",
+   "enforcement": "ci-script",
+   "detect": "Kotlin binary-compatibility-validator (apiDump/apiCheck) and swift-api-digester -dump-sdk/-diagnose-sdk against the previous release tag.",
+   "prs": [
+    4975
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - intended breaks need a baseline update"
+  },
+  {
+   "id": "taskgraph-validate-all-params",
+   "title": "Validate the taskgraph for every parameter set on PRs",
+   "area": "ci-scripts",
+   "problem": "Decision-task crashes, duplicated artifacts and copy-pasted index routes only showed up in push or nightly graphs.",
+   "rule": "PRs touching taskcluster/ generate the full graph for every params file, and index routes are unique across tasks.",
+   "enforcement": "ci-script",
+   "detect": "`taskgraph full -p taskcluster/test/params/*.yml`; post-process the JSON to assert unique `index.*` routes and no file listed in both artifacts and release-artifacts.",
+   "prs": [
+    5689,
+    5695,
+    5610
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - checks run over generated graph JSON"
+  },
+  {
+   "id": "required-dependency-check",
+   "title": "Make the dependency-summary check required",
+   "area": "deps-build",
+   "problem": "Auto-merge only waited for run-tests, so PRs landed with stale DEPENDENCIES.md.",
+   "rule": "The dependency-summary/audit job is a required status for PRs changing Cargo.lock or manifests and also runs on a schedule.",
+   "enforcement": "ci-script",
+   "detect": "Branch-protection/mergify rule requiring the dependency-check job; the job runs `tools/dependency_summary.py --check`.",
+   "prs": [
+    5731
+   ],
+   "severity": "low",
+   "false_positive_risk": "low"
+  },
+  {
+   "id": "pin-lint-tool-versions",
+   "title": "Pin formatter and linter versions in CI",
+   "area": "ci-scripts",
+   "problem": "An unpinned swiftformat upgrade started failing CI on unchanged code.",
+   "rule": "CI installs swiftformat, swiftlint, ktlint and the Rust toolchain at pinned versions.",
+   "enforcement": "formatter-config",
+   "detect": "Pin via mint/Package.swift or brew version pins, plus rust-toolchain.toml; the lint job fails if `--version` differs from the pin.",
+   "prs": [
+    5783
+   ],
+   "severity": "low",
+   "false_positive_risk": "low"
+  },
+  {
+   "id": "serde-sync-payload-robustness",
+   "title": "Make sync payloads tolerate null and roundtrip",
+   "area": "serde",
+   "problem": "Explicit nulls for #[serde(default)] String fields failed deserialization, and unknown enum values deserialized but could not serialize.",
+   "rule": "Incoming sync payload fields with #[serde(default)] also accept null, and payload types roundtrip through serde, including unknown enum values.",
+   "enforcement": "test-harness",
+   "detect": "Custom lint for non-Option #[serde(default)] fields without a null-tolerant deserialize_with in sync record structs; roundtrip tests (deserialize -> serialize -> deserialize) fed nulls and unknown enum strings per payload type.",
+   "prs": [
+    5555,
+    5315
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - field-level heuristics"
+  },
+  {
+   "id": "glean-metric-expiry-guard",
+   "title": "Warn before Glean metrics expire",
+   "area": "tests",
+   "problem": "Metrics expired on a release branch and the tests exercising them started failing.",
+   "rule": "CI fails when a metric in any metrics.yaml expires within N days or by the next release version.",
+   "enforcement": "ci-script",
+   "detect": "Script parsing every metrics.yaml `expires` field (date or version) and comparing it with today+N days or the next version in version.txt.",
+   "prs": [
+    5069
+   ],
+   "severity": "low",
+   "false_positive_risk": "low"
+  },
+  {
+   "id": "android-uri-hierarchical-guard",
+   "title": "Check isHierarchical before reading URI query params",
+   "area": "kotlin",
+   "problem": "Calling query-parameter APIs on opaque URIs throws UnsupportedOperationException, which crashed Fenix.",
+   "rule": "Kotlin code calls Uri.getQueryParameter*/queryParameterNames only after checking uri.isHierarchical.",
+   "enforcement": "custom-lint",
+   "detect": "Custom detekt rule flagging those calls in functions that never reference `isHierarchical`.",
+   "prs": [
+    5733
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - guards in callers aren't visible to a function-local rule"
+  }
+ ],
+ "suspicious": []
+}

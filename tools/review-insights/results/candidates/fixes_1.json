@@ -1,0 +1,1917 @@
+{
+ "file": "fixes_1",
+ "prs": [
+  {
+   "pr": 7676,
+   "title": "feat: Ads-Client Provides fix for images_or_spocs ordering issue",
+   "is_bugfix": true,
+   "bug": "A #[serde(untagged)] enum listed Image before Spoc, and since an Image's fields are a subset of a Spoc's, every spoc deserialized as an image.",
+   "root_cause": "serde-format (untagged enum variant shadowing)",
+   "preventable_by_lint": "partially",
+   "rule": "Flag #[serde(untagged)] enums where an earlier variant's required fields are a subset of a later variant's (earlier variant shadows later) unless it uses deny_unknown_fields or carries an explicit discriminator.",
+   "detect": "syn-based custom lint/CI script: for each enum with #[serde(untagged)], resolve struct-typed variants in the crate, compute required (non-Option, non-#[serde(default)]) field sets, report i<j where fields(i) ⊆ fields(j) and variant i lacks #[serde(deny_unknown_fields)]; lower-noise variant: require every untagged enum to have a round-trip test per variant.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 7670,
+   "title": "Bug 2084252, revert 2060539 for iOS",
+   "is_bugfix": true,
+   "bug": "On iOS, leaving the FxA state machine in Connected after a failed CheckAuthorizationStatus misbehaved, so the previous AuthIssues behaviour was restored for iOS only.",
+   "root_cause": "logic-error (platform-specific state transition)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7664,
+   "title": "Bug 2053517 - Revert 4a8546f9b047 and 36f1b0ea4bcd for build breakage",
+   "is_bugfix": false,
+   "bug": "Revert of the Nimbus SharedPreferences/pref-override FML feature because it broke the downstream build; root cause not described.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7663,
+   "title": "fix: adds request_spoc_or_image_ads to fix deserialization error",
+   "is_bugfix": true,
+   "bug": "Spoc placement requests could return image ads, so strictly-typed spoc deserialization failed; a new API that accepts either type was added.",
+   "root_cause": "serde-format / API shape mismatch with server",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7658,
+   "title": "Fix breadcrumbs field in error support",
+   "is_bugfix": true,
+   "bug": "A rename made the tracing macro emit `breadcrumb_string` instead of `breadcrumbs` (field name comes from the variable name), crashing the Android error reporter that expected `breadcrumbs`.",
+   "root_cause": "cross-language contract (implicit tracing field names)",
+   "preventable_by_lint": "yes",
+   "rule": "Events sent to the `app-services-error-reporter::*` targets must use explicitly named fields from a fixed schema (error: message, type_name, breadcrumbs; breadcrumb: message, module, line, column).",
+   "detect": "CI regex/ast-grep over `tracing_support::(error|info)!(target: \"app-services-error-reporter::...\", ...)` extracting field identifiers (shorthand `x` counts as field `x`), compared to the schema; plus a unit test that captures the event with an EventSink and asserts field names (the test 7658 added).",
+   "confidence": "high"
+  },
+  {
+   "pr": 7645,
+   "title": "Bug 2061724 - Create new enumerations for search-config-v3 which handle backward compatibility and add new per-platform Firefox desktop application names",
+   "is_bugfix": false,
+   "bug": "Feature: new versioned enums for search-config-v3 and per-platform desktop application names.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7626,
+   "title": "Revert \"Bug 2011695 - Use glean-sym for Glean error ping on iOS (#7615)\"",
+   "is_bugfix": false,
+   "bug": "Revert of glean-sym error-ping reporting on iOS.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7599,
+   "title": "157 0 1 backout",
+   "is_bugfix": false,
+   "bug": "Release-branch backout of the uniffi 0.32 upgrade and related changes.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7578,
+   "title": "fix(ads-client): panic on a malformed OHTTP preflight response",
+   "is_bugfix": true,
+   "bug": "`From<PreflightResponse> for Headers` called .expect() on header inserts using server-echoed geo/UA values, so non-ASCII or CRLF values panicked the host process.",
+   "root_cause": "panic/unwrap on external input",
+   "preventable_by_lint": "yes",
+   "rule": "Deny clippy::unwrap_used / expect_used / panic_in_result_fn in non-test component code; require #[expect(..., reason = \"...\")] for proven invariants (ratchet with a baseline). Conversions from server data must be TryFrom.",
+   "detect": "[workspace.lints.clippy] unwrap_used = \"warn\", expect_used = \"warn\", panic_in_result_fn = \"warn\" (+ allow_attributes_without_reason) applied to components/*/src with tests exempted (allow-unwrap-in-tests / allow-expect-in-tests in clippy.toml); fail CI on new hits vs a stored baseline. clippy::expect_used flags the two `.expect(\"valid header\")` calls directly.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7549,
+   "title": "tabs: don't log the entire tabs payload at trace level.",
+   "is_bugfix": true,
+   "bug": "The tabs sync engine logged the full outgoing TabsRecord with {:?} at trace level, leaking tab URLs/titles (PII) and flooding desktop logs.",
+   "root_cause": "logging-privacy (Debug of user payload)",
+   "preventable_by_lint": "partially",
+   "rule": "Never Debug-format sync records/payloads or other user-data types in log macros; such types get a redacting Display/Debug.",
+   "detect": "Custom lint (dylint) or ast-grep: in trace!/debug!/info!/warn!/error! args, flag `{:?}`/`{x:?}` applied to values whose type is in a 'sensitive types' list (types in */sync/record.rs, *Record, *Payload, Login*, Tabs*) or derives Serialize+Debug in sync modules.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 7543,
+   "title": "Bug 2062772 - Fixes issues with updating the remote settings client dumps",
+   "is_bugfix": true,
+   "bug": "viaduct-hyper parsed a relative Location header with Url::parse instead of joining it to the request URL, and the dump CLI built a bundle URL with format!(\"{}/...\") producing a double slash (404).",
+   "root_cause": "url-handling (string-built URLs, relative redirects)",
+   "preventable_by_lint": "partially",
+   "rule": "Build and resolve URLs with url::Url APIs (join / path_segments_mut), not format!/string concatenation; resolve Location headers against the request URL.",
+   "detect": "ast-grep: `format!(\"{}/$$$\", $U, $$$)` / `format!(\"{$U}/...\")` where $U's identifier matches /url|base/i; and `Url::parse($X)` where $X derives from a header named location.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 7541,
+   "title": "Bug 2060539 - errors checking the account state doesn't imply a bad s…",
+   "is_bugfix": true,
+   "bug": "A failing check_authorization_status() call moved a Connected account to AuthIssues instead of leaving it Connected.",
+   "root_cause": "logic-error (state machine)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7536,
+   "title": "Bug 2056116 - Don't crash sync on an invalid login guid",
+   "is_bugfix": true,
+   "bug": "Serializing an outgoing record with a guid that fails the sync-server sanity check hit an assert!, crashing the parent process and blocking sync.",
+   "root_cause": "panic/assert in Result-returning serialization path",
+   "preventable_by_lint": "yes",
+   "rule": "Deny clippy::unwrap_used / expect_used / panic_in_result_fn in non-test component code; require #[expect(..., reason = \"...\")] for proven invariants (ratchet with a baseline).",
+   "detect": "clippy::panic_in_result_fn flags the assert! inside sync15 bso/content.rs content_with_id_to_json(), which returns Result.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7528,
+   "title": "Fix FxA state machine spelling",
+   "is_bugfix": false,
+   "bug": "Cleanup: undo deliberate 'Ath' misspellings that were only needed for old Sentry redaction rules.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7523,
+   "title": "fix(remote-settings): SYNC-5384: Do not quote timestamps with v2 API",
+   "is_bugfix": true,
+   "bug": "The remote-settings client sent the `_since` timestamp quoted, which the v2 API does not accept.",
+   "root_cause": "protocol/logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7522,
+   "title": "Fix grafana dashboard datasources",
+   "is_bugfix": true,
+   "bug": "Generated Grafana dashboard JSON stopped working on import because targets lacked a `datasource` field.",
+   "root_cause": "tooling/external schema",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7520,
+   "title": "[AC-152] Fixes moz ads telemetry UniFFI callback leak",
+   "is_bugfix": true,
+   "bug": "ads-client kept a registered UniFFI MozAdsTelemetry callback (and SQLite connection) alive at xpcom-shutdown, triggering desktop's leaked-callback error; a shutdown API that drops them was added.",
+   "root_cause": "foreign-callback lifetime at shutdown",
+   "preventable_by_lint": "partially",
+   "rule": "Every object that stores a foreign (UniFFI callback/trait) implementation must release it in its shutdown path, verified by a test.",
+   "detect": "Test-harness rule: for each #[uniffi::export(with_foreign)]/callback_interface trait, a test registers a stub wrapped in Arc, calls the owning component's shutdown/close, and asserts Weak::strong_count()==0; custom lint listing struct fields typed Arc<dyn ForeignTrait> in long-lived structs to make the inventory.",
+   "confidence": "low"
+  },
+  {
+   "pr": 7506,
+   "title": "Normalize app-services groupId for mozilla-central builds and fix mozconfig check for nested Gradle",
+   "is_bugfix": true,
+   "bug": "The mozconfig check used gradle.hasProperty, which fails when settings.gradle is included from a nested m-c build (android-components/fenix), so m-c builds took the wrong path (groupId normalization added at the same time).",
+   "root_cause": "build-config (nested Gradle root)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "low"
+  },
+  {
+   "pr": 7504,
+   "title": "Normalize app-services groupId for mozilla-central builds and fix mozconfig check for nested Gradle",
+   "is_bugfix": true,
+   "bug": "Same change as #7506 (duplicate/re-land): mozconfig check broke under nested Gradle builds in m-c.",
+   "root_cause": "build-config (nested Gradle root)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "low"
+  },
+  {
+   "pr": 7486,
+   "title": "Don't invoke the browser to login to the fxa example.",
+   "is_bugfix": false,
+   "bug": "Example CLI UX change: stop auto-opening the browser for the FxA login flow.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7478,
+   "title": "don't clone the encdec in the logins sync engine",
+   "is_bugfix": true,
+   "bug": "LoginsSyncEngine held its own Arc clone of the EncryptorDecryptor, keeping a foreign PrimaryPasswordAuthenticator callback alive after LoginDb::shutdown on desktop.",
+   "root_cause": "foreign-callback lifetime at shutdown",
+   "preventable_by_lint": "partially",
+   "rule": "Long-lived engines must not cache Arc clones of objects that wrap foreign callbacks; fetch them per use, and test that shutdown drops them.",
+   "detect": "Same test-harness check as #7520 (strong_count == 0 after shutdown); custom lint flagging struct fields holding Arc<dyn EncryptorDecryptor>/foreign-trait objects outside the owning store.",
+   "confidence": "low"
+  },
+  {
+   "pr": 7460,
+   "title": "Don't package the glean_sym files",
+   "is_bugfix": true,
+   "bug": "Swift binding generation emitted glean_sym.swift/.h, which then shipped in the iOS package and had to be removed by hand downstream.",
+   "root_cause": "build-script (unexpected generated bindings)",
+   "preventable_by_lint": "partially",
+   "rule": "The set of generated binding modules must match an explicit allowlist of megazord components.",
+   "detect": "CI script after uniffi-bindgen-library-mode: list generated *.swift/*.h (and Kotlin packages), diff against a checked-in allowlist; fail on unexpected modules.",
+   "confidence": "low"
+  },
+  {
+   "pr": 7458,
+   "title": "fxa: fix sync key invariant checks so they are only done after we've …",
+   "is_bugfix": true,
+   "bug": "The sync-key invariant was checked before merging scopes and keys, so scope upgrades produced false-positive report_error events.",
+   "root_cause": "logic-error (check ordering)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7457,
+   "title": "Bug 1868418 - Rerun ensure capabilities after logging in",
+   "is_bugfix": true,
+   "bug": "ensure_capabilities was not re-run after auth recovery on login, leaving device capabilities unset.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7445,
+   "title": "Disable glean-sym again, it's causing new crashes",
+   "is_bugfix": false,
+   "bug": "Disables the glean-sym default feature because it caused new crashes; cause not analysed in the PR.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7437,
+   "title": "Bug 2045937 - Fix no return in unenrollFromAllFirefoxLabs",
+   "is_bugfix": true,
+   "bug": "Nimbus.unenrollFromAllFirefoxLabs() lacked `return` in a block-body function returning Deferred<Unit>, which is a Kotlin compile error, so the change landed without the Kotlin module being built in PR CI.",
+   "root_cause": "missing CI coverage (Kotlin not compiled on normal PRs)",
+   "preventable_by_lint": "yes",
+   "rule": "PRs touching Kotlin/Swift sources must automatically run the platform compile/test tasks instead of relying on `[ci full]` in the title.",
+   "detect": "Taskgraph rule: if the PR diff touches components/**/android/** or *.kt, add the module-build (Gradle compile) tasks to pr-normal; if it touches *.swift or megazords/ios-rust/**, add the swift tasks. The Kotlin compiler then reports 'A return expression required in a function with a block body'.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 7424,
+   "title": "relay: ensure API types are public",
+   "is_bugfix": false,
+   "bug": "Refactor: make relay API types public for a new UniFFI parser.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7423,
+   "title": "search: ensure API types are public",
+   "is_bugfix": false,
+   "bug": "Refactor: make search API types public for a new UniFFI parser.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7397,
+   "title": "Cached profile for a user should be wiped on disconnect.",
+   "is_bugfix": true,
+   "bug": "disconnect() did not clear the cached profile, so get_profile() could return the previous user's profile after reconnecting another account.",
+   "root_cause": "logic-error (incomplete state reset)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7379,
+   "title": "Let state machine handle password changes from web channel",
+   "is_bugfix": true,
+   "bug": "Transient errors during push-message introspection propagated out of handle_push_message and were swallowed by the Kotlin layer, so password-change events never reached the FxA state machine.",
+   "root_cause": "error-propagation design",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7347,
+   "title": "test(ads-client): assert mockito expectations to prevent silent false-positives",
+   "is_bugfix": true,
+   "bug": "ads-client tests created mockito mocks with .expect(N) but never called .assert(), so expectations were not enforced and one test never exercised the cache-hit path it claimed to test.",
+   "root_cause": "test-harness (unasserted mocks)",
+   "preventable_by_lint": "yes",
+   "rule": "Every mockito mock in a test must be bound to a non-underscore name and .assert()-ed (or use a helper that asserts on drop).",
+   "detect": "ast-grep in #[test] fns: flag `let _$M = mockito::mock($$$)...create()` / `let _ = mock(...)`, and any `let $M = mock(...)` (especially with `.expect(`) without a later `$M.assert()` in the same fn.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7335,
+   "title": "Fix tracing error messages",
+   "is_bugfix": true,
+   "bug": "The error-reporter tracing event used a variable named `details` instead of `message`, and since tracing takes field names from variable names, apps stopped receiving error details.",
+   "root_cause": "cross-language contract (implicit tracing field names)",
+   "preventable_by_lint": "yes",
+   "rule": "Events sent to the `app-services-error-reporter::*` targets must use explicitly named fields from a fixed schema (error: message, type_name, breadcrumbs; breadcrumb: message, module, line, column).",
+   "detect": "CI regex/ast-grep over `tracing_support::(error|info)!(target: \"app-services-error-reporter::...\", ...)` extracting field identifiers (shorthand `x` counts as field `x`), compared to the schema; plus a unit test that captures the event with an EventSink and asserts field names (the test 7658 added).",
+   "confidence": "high"
+  },
+  {
+   "pr": 7334,
+   "title": "Fix dashboard label",
+   "is_bugfix": false,
+   "bug": "Cosmetic: dashboard legend label regex tweak.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7332,
+   "title": "Logging fixes for cli-support.",
+   "is_bugfix": true,
+   "bug": "cli-support logged via the `log` crate directly, so its messages never reached the tracing-support subscriber and were invisible.",
+   "root_cause": "wrong logging facade",
+   "preventable_by_lint": "yes",
+   "rule": "Components must log only through tracing-support / error-support macros, never `log::*!` or raw `tracing::event!`/`tracing::*!`.",
+   "detect": "clippy.toml `disallowed-macros = [\"log::trace\",\"log::debug\",\"log::info\",\"log::warn\",\"log::error\",\"tracing::event\",\"tracing::trace\",\"tracing::debug\",\"tracing::info\",\"tracing::warn\",\"tracing::error\"]` with #[allow] only inside components/support/tracing; plus a cargo-metadata check that no component/example crate depends on `log` directly. Would flag current uses in components/relay/src/{rs,lib}.rs and components/crashtest.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7331,
+   "title": "[DISCO-4084] Handle 204 as a successful empty response",
+   "is_bugfix": true,
+   "bug": "The Merino client treated HTTP 204 (no suggestions) as an error instead of an empty success.",
+   "root_cause": "logic-error (HTTP semantics)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7321,
+   "title": "monorepo tweaks to handle we are now building from third_party/applic…",
+   "is_bugfix": false,
+   "bug": "Monorepo build-path updates for the move to third_party/application-services.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7317,
+   "title": "fxa-client: Don't expose the session token directly to consumers.",
+   "is_bugfix": false,
+   "bug": "API hardening: stop exposing the FxA session token; add WebChannel-specific methods (breaking change).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7313,
+   "title": "Fix sync dashboard graphs",
+   "is_bugfix": true,
+   "bug": "The sync Grafana dashboard SQL queries were wrong, so the graphs showed incorrect data.",
+   "root_cause": "tooling (dashboard SQL)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7310,
+   "title": "Fix disconnecting an account after starting to reauth it.",
+   "is_bugfix": true,
+   "bug": "The Authenticating state machine had no arm for FxaEvent::Disconnect, so removing an account mid-reauth hit the catch-all invalid-transition path and the account stayed connected.",
+   "root_cause": "logic-error (missing state-machine transition)",
+   "preventable_by_lint": "partially",
+   "rule": "State-machine transition matches must list every (state, event) pair explicitly, with no wildcard arm.",
+   "detect": "#![warn(clippy::wildcard_enum_match_arm)] (restriction lint) scoped to fxa-client state_machine modules, so each unhandled event must be spelled out as an explicit invalid transition.",
+   "confidence": "low"
+  },
+  {
+   "pr": 7308,
+   "title": "Fix PKCS#11 struct packing on Windows to match NSS 1-byte alignment",
+   "is_bugfix": true,
+   "bug": "On Windows, NSS PKCS#11 structs use 1-byte packing, but the Rust bindings declared them as plain #[repr(C)], giving a layout mismatch.",
+   "root_cause": "ffi-abi (struct packing per platform)",
+   "preventable_by_lint": "partially",
+   "rule": "Hand-written FFI structs must have per-target layout assertions generated from the C headers.",
+   "detect": "Generate size/align/offset assertions with bindgen against pkcs11t.h for each target (including x86_64-pc-windows-msvc with #pragma pack(1)) and compile them in CI (`cargo check --target x86_64-pc-windows-msvc -p nss_sys`); flag #[repr(C)] structs in nss_sys/src/bindings with no matching layout test.",
+   "confidence": "low"
+  },
+  {
+   "pr": 7301,
+   "title": "test(ads-client): added additional unit test for staging URL to ensure runtime safety.",
+   "is_bugfix": false,
+   "bug": "Test + new url-macro crate for compile-time URL validation.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7287,
+   "title": "Bug 2025607 - Fix issue deserializing PrefValue",
+   "is_bugfix": true,
+   "bug": "The Nimbus PrefValue UniFFI custom type failed to lift raw non-JSON pref strings coming from Gecko.",
+   "root_cause": "serde-format / custom-type lifting",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7273,
+   "title": "Bug 2024298 - Fix edge case when errors occur on a multi-pref experiment in Nimbus",
+   "is_bugfix": true,
+   "bug": "enrollments.unwrap() panicked when a multi-pref experiment had already been unenrolled through another pref.",
+   "root_cause": "panic/unwrap on Option",
+   "preventable_by_lint": "yes",
+   "rule": "Deny clippy::unwrap_used / expect_used / panic_in_result_fn in non-test component code; require #[expect(..., reason = \"...\")] for proven invariants (ratchet with a baseline).",
+   "detect": "[workspace.lints.clippy] unwrap_used = \"warn\", expect_used = \"warn\", panic_in_result_fn = \"warn\" (+ allow_attributes_without_reason) applied to components/*/src with tests exempted (allow-unwrap-in-tests / allow-expect-in-tests in clippy.toml); fail CI on new hits vs a stored baseline. clippy::unwrap_used flags `enrollments.unwrap()` in nimbus_client.rs.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7258,
+   "title": "Bug 2021137 - Fix Loop in Nimbus Gecko Preferences Project",
+   "is_bugfix": true,
+   "bug": "Calling end_initialize() instead of a plain commit re-entered the foreign Gecko-pref callback, which called back into Rust in a loop on Android.",
+   "root_cause": "re-entrancy via foreign callback",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 7247,
+   "title": "monorepo import script tweaks and bindgen fix",
+   "is_bugfix": false,
+   "bug": "Monorepo import-script tweaks and a bindgen argument change for the in-tree build.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7242,
+   "title": "Patch missing NSS symbols for iOS x86_64 simulators",
+   "is_bugfix": true,
+   "bug": "NSS's gcm.gyp condition also matched iOS x86_64 simulators, so the platform GCM symbols were missing and Firefox iOS failed to link.",
+   "root_cause": "platform-config (upstream build condition)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7238,
+   "title": "Bug 2018683 - Fix up nimbus lib tests",
+   "is_bugfix": false,
+   "bug": "Test refactor: reorganize Nimbus integration-test modules/imports.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7237,
+   "title": "Bug 2018013 - Fix up more SDK use sections",
+   "is_bugfix": false,
+   "bug": "Import/use-section reorganization in Nimbus tests.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7231,
+   "title": "Revert \"bug(ios-rust): fix bad substitution in ios build script\"",
+   "is_bugfix": false,
+   "bug": "Revert of #7226 (the bash substitution fix); reason not stated (likely broke macOS bash 3.2 with set -u on empty arrays).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7230,
+   "title": "Bug 1908824 - bookmark sync should not always consider bookmarks as m…",
+   "is_bugfix": true,
+   "bug": "Reconciled incoming bookmarks got lastModified=now, so after a reset local copies always 'won' and every bookmark was re-uploaded.",
+   "root_cause": "time/logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7226,
+   "title": "bug(ios-rust): fix bad substitution in ios build script",
+   "is_bugfix": true,
+   "bug": "build-xcframework.sh used `${#GENERATE_ARGS[@]:-0}`, which bash 5 rejects as a bad substitution (the fix was reverted in #7231, so line 183 of the script still has it).",
+   "root_cause": "build-script/shell",
+   "preventable_by_lint": "partially",
+   "rule": "Run shellcheck plus `bash -n` and a no-argument smoke run under both macOS bash 3.2 and bash 5 for build scripts.",
+   "detect": "CI: shellcheck on all *.sh; regex ban of `\\$\\{#[A-Za-z_]+\\[@\\]:-` (length expansion with default = bad substitution); a smoke run of build-xcframework.sh argument parsing under bash 3.2 and 5.x. Verified locally: bash 5.2 prints 'bad substitution'.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 7217,
+   "title": "Fix uniffi revision",
+   "is_bugfix": true,
+   "bug": "The [patch.crates-io] uniffi rev pointed to the first commit of the FFI branch instead of its final commit, so the intended changes were not in effect.",
+   "root_cause": "dependency pin error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7212,
+   "title": "Update time crate to 0.3.47 to fix cargo audit failure",
+   "is_bugfix": false,
+   "bug": "Dependency bump (time 0.3.47) to satisfy cargo audit.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7209,
+   "title": "Add missing cargo publish exclude rules for android/ paths",
+   "is_bugfix": true,
+   "bug": "Several crates lacked `exclude = [\"/android\"]`, so Android sources were vendored into mozilla-firefox third_party/rust.",
+   "root_cause": "packaging (missing cargo exclude)",
+   "preventable_by_lint": "yes",
+   "rule": "Every crate with android/ or ios/ subdirectories must exclude them from the published package.",
+   "detect": "CI script over `cargo metadata`: for each workspace package dir containing android/ or ios/, assert package.exclude contains \"/android\" / \"/ios\" (or package.include is set). Would currently flag components/fxcontainers and components/support/db-crypto.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7199,
+   "title": "fix: remove cli-support from support component",
+   "is_bugfix": true,
+   "bug": "nimbus-cli depended on the examples/cli-support crate, pulling NSS linking into a support tool.",
+   "root_cause": "dependency layering",
+   "preventable_by_lint": "yes",
+   "rule": "Crates under components/ must not have (non-dev) dependencies on crates under examples/.",
+   "detect": "CI script on `cargo metadata --format-version 1`: fail if a package whose manifest_path is under components/ has a normal/build dependency resolving to a path under examples/.",
+   "confidence": "high"
+  },
+  {
+   "pr": 7164,
+   "title": "feat(ads-client): reset cache on init failure or context id rotation",
+   "is_bugfix": false,
+   "bug": "Feature: reset the ads HTTP cache on init failure or context-id rotation.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7148,
+   "title": "Fix redundant Kotlin conversion method calls in Places",
+   "is_bugfix": false,
+   "bug": "Cleanup: remove redundant Kotlin toUInt() conversions flagged by Kotlin 2.3 warnings.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7147,
+   "title": "WIP: fix logins breach alert data being updated during login update",
+   "is_bugfix": true,
+   "bug": "LoginDb.update() wrote the caller's breach-alert fields back, overwriting breach data that should only change via the dedicated APIs.",
+   "root_cause": "logic-error (SQL update overwrites fields)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7136,
+   "title": "Bug 2007419 - don't report invalid URLs if they're overwritten",
+   "is_bugfix": true,
+   "bug": "Malformed user-supplied token-server URL overrides were reported to Sentry as errors, adding noise.",
+   "root_cause": "error-reporting classification",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7121,
+   "title": "Bug 2004779 - Avoid parsing JSON for the packaged data if it's outdated, by storing the timestamp in a separate file",
+   "is_bugfix": false,
+   "bug": "Performance: store packaged RS dump timestamps separately to avoid parsing outdated JSON.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7106,
+   "title": "Viaduct dependency fixes",
+   "is_bugfix": false,
+   "bug": "Dependency cleanup: remove remaining tokio/hyper deps, with a dev-backend error-propagation improvement.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7105,
+   "title": "Bug 2002305 - Fix record parsing in Nimbus",
+   "is_bugfix": true,
+   "bug": "Moving Nimbus to RemoteSettingsService changed the record shape, and the refactor still read `fields.data`, which broke experiment fetching.",
+   "root_cause": "logic-error (refactor regression)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7098,
+   "title": "Fix detekt error",
+   "is_bugfix": false,
+   "bug": "Lint fix: comment out an unused field flagged by detekt.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7073,
+   "title": "feat(ads-client): handle different ad types",
+   "is_bugfix": false,
+   "bug": "Feature: support image/spoc/tile ad types.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 7046,
+   "title": "fix(ads-client): MARS Urls require trailing slash for URL parse",
+   "is_bugfix": true,
+   "bug": "MARS base URLs had no trailing slash, so Url::join dropped the `/v1` path segment.",
+   "root_cause": "url-handling (join on base without trailing slash)",
+   "preventable_by_lint": "partially",
+   "rule": "Base URLs used with Url::join must end in '/', or use path_segments_mut().",
+   "detect": "ast-grep: string literals passed to Url::parse/url! that are later used as the receiver of `.join(` and whose path does not end with '/'; simpler regex: hard-coded `https://...` base constants (static/const/Lazy) with a non-empty path not ending in '/'.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 7015,
+   "title": "Bug 1992756 - Fail-safe allocation of SECItem buffer in get_aes256_key",
+   "is_bugfix": true,
+   "bug": "get_aes256_key allocated a SECItem with SECITEM_AllocItem and freed it manually, which leaked on early-return paths; it now uses a Rust-owned buffer.",
+   "root_cause": "ffi-memory (manual alloc/free)",
+   "preventable_by_lint": "partially",
+   "rule": "Raw NSS allocation/free functions may only be called inside RAII wrappers; run rc_crypto tests under LeakSanitizer.",
+   "detect": "clippy.toml disallowed-methods = [\"nss_sys::SECITEM_AllocItem\", \"nss_sys::SECITEM_FreeItem\", \"nss_sys::PORT_Alloc\", ...] with #[allow] only in nss/src/util.rs wrappers; CI job `RUSTFLAGS=-Zsanitizer=leak cargo +nightly test -p nss -p rc_crypto`.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6997,
+   "title": "Ensure wrapped key is freed in `get_aes256_key`",
+   "is_bugfix": true,
+   "bug": "get_aes256_key never freed the wrapped-key SECItem, a leak caught by LeakSanitizer in mozilla-central.",
+   "root_cause": "ffi-memory leak",
+   "preventable_by_lint": "partially",
+   "rule": "Raw NSS allocation/free functions may only be called inside RAII wrappers; run rc_crypto tests under LeakSanitizer.",
+   "detect": "Same as #7015: disallowed-methods for raw NSS alloc functions + an LSan CI job in a-s (the leak was only found by m-c's LSan).",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6987,
+   "title": "Revert \"Adding OHTTP to viaduct (#6935)\"",
+   "is_bugfix": false,
+   "bug": "Revert of 'Adding OHTTP to viaduct'.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6982,
+   "title": "Bug 1794212 - Handle restarting the state machine in the auth issues …",
+   "is_bugfix": true,
+   "bug": "On init in the AuthIssues state, the FxA state machine ran EnsureDeviceCapabilities instead of moving to AuthIssues.",
+   "root_cause": "logic-error (state machine)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6975,
+   "title": "Fix HttpConfig import order",
+   "is_bugfix": false,
+   "bug": "Kotlin import-order lint fix.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6974,
+   "title": "Fix allowAndroidEmulatorLoopback",
+   "is_bugfix": true,
+   "bug": "Kotlin RustHttpConfig.allowAndroidEmulatorLoopback() shadowed the imported top-level function of the same name, so it called itself forever.",
+   "root_cause": "infinite recursion via name shadowing",
+   "preventable_by_lint": "yes",
+   "rule": "Flag functions that unconditionally call themselves (same name, same arity, no receiver), e.g. a member shadowing an imported top-level function.",
+   "detect": "Custom detekt rule: for a FunctionDeclaration whose body's sole statement is a call expression with the same simple name and argument count and no explicit receiver/qualifier, report it; or a rule forbidding member functions named like an explicitly imported top-level function.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6973,
+   "title": "Backport bug 1989840 - Don't call unwrap() in webext-storage custom types",
+   "is_bugfix": true,
+   "bug": "Backport (desktop-144): webext-storage's JsonValue custom_type try_lift used serde_json::from_str(..).unwrap(), crashing on invalid JSON from the foreign side.",
+   "root_cause": "panic/unwrap in UniFFI lift",
+   "preventable_by_lint": "yes",
+   "rule": "No panicking constructs (unwrap/expect/panic!/unreachable!/assert!) inside uniffi::custom_type! try_lift closures or conversions of foreign/server data; return Err instead.",
+   "detect": "ast-grep rule matching `uniffi::custom_type!($T, $F, { $$$ try_lift: $BODY $$$ })` where $BODY contains `.unwrap()`, `.expect(`, `panic!`, `unreachable!`; same check for `impl From<$X> for $Y` whose source type is a deserialized server response (suggest TryFrom). Today it would also flag places/src/lib.rs VisitTransitionSet try_lift `.expect(...)`.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6972,
+   "title": "Backport bug 1989840 - Don't call unwrap() in webext-storage custom types #6971",
+   "is_bugfix": true,
+   "bug": "Backport (desktop-143): webext-storage's JsonValue custom_type try_lift unwrap() crashed on invalid JSON.",
+   "root_cause": "panic/unwrap in UniFFI lift",
+   "preventable_by_lint": "yes",
+   "rule": "No panicking constructs (unwrap/expect/panic!/unreachable!/assert!) inside uniffi::custom_type! try_lift closures or conversions of foreign/server data; return Err instead.",
+   "detect": "ast-grep rule matching `uniffi::custom_type!($T, $F, { $$$ try_lift: $BODY $$$ })` where $BODY contains `.unwrap()`, `.expect(`, `panic!`, `unreachable!`; same check for `impl From<$X> for $Y` whose source type is a deserialized server response (suggest TryFrom). Today it would also flag places/src/lib.rs VisitTransitionSet try_lift `.expect(...)`.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6971,
+   "title": "Backport bug 1989840 - Don't call unwrap() in webext-storage custom types",
+   "is_bugfix": true,
+   "bug": "Backport (desktop-140 ESR): webext-storage's JsonValue custom_type try_lift unwrap() crashed on invalid JSON.",
+   "root_cause": "panic/unwrap in UniFFI lift",
+   "preventable_by_lint": "yes",
+   "rule": "No panicking constructs (unwrap/expect/panic!/unreachable!/assert!) inside uniffi::custom_type! try_lift closures or conversions of foreign/server data; return Err instead.",
+   "detect": "ast-grep rule matching `uniffi::custom_type!($T, $F, { $$$ try_lift: $BODY $$$ })` where $BODY contains `.unwrap()`, `.expect(`, `panic!`, `unreachable!`; same check for `impl From<$X> for $Y` whose source type is a deserialized server response (suggest TryFrom). Today it would also flag places/src/lib.rs VisitTransitionSet try_lift `.expect(...)`.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6967,
+   "title": "Bug 1989840 - Don't call unwrap() in webext-storage custom types",
+   "is_bugfix": true,
+   "bug": "webext-storage's JsonValue custom_type try_lift called serde_json::from_str(..).unwrap(), so invalid JSON from extensions hard-crashed Firefox instead of returning an error.",
+   "root_cause": "panic/unwrap in UniFFI lift",
+   "preventable_by_lint": "yes",
+   "rule": "No panicking constructs (unwrap/expect/panic!/unreachable!/assert!) inside uniffi::custom_type! try_lift closures or conversions of foreign/server data; return Err instead.",
+   "detect": "ast-grep rule matching `uniffi::custom_type!($T, $F, { $$$ try_lift: $BODY $$$ })` where $BODY contains `.unwrap()`, `.expect(`, `panic!`, `unreachable!`; same check for `impl From<$X> for $Y` whose source type is a deserialized server response (suggest TryFrom). Today it would also flag places/src/lib.rs VisitTransitionSet try_lift `.expect(...)`.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6959,
+   "title": "Fix remote settings last_modified comparison (#6948)",
+   "is_bugfix": true,
+   "bug": "Backport of #6948: inverted last_modified comparison in RemoteSettingsService.sync skipped changed collections and synced unchanged ones.",
+   "root_cause": "logic-error (inverted comparison)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6957,
+   "title": "Revert \"Revert cf4f4a8de65569f9d507964ec6b513b558041c1a (#6954)\"",
+   "is_bugfix": false,
+   "bug": "Re-land (revert of revert) of separate experiment/rollout participation.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6954,
+   "title": "Revert cf4f4a8de65569f9d507964ec6b513b558041c1a",
+   "is_bugfix": false,
+   "bug": "Revert of the experiment/rollout participation change.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6953,
+   "title": "Ensure the CLI data dir exists",
+   "is_bugfix": true,
+   "bug": "CLI tools failed on first run because the .cli-data directory was not created.",
+   "root_cause": "tooling logic (missing dir creation)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6948,
+   "title": "Fix remote settings last_modified comparison",
+   "is_bugfix": true,
+   "bug": "RemoteSettingsService.sync used != instead of ==, so up-to-date collections were re-synced and changed ones skipped, breaking the iOS search engine selector.",
+   "root_cause": "logic-error (inverted comparison)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6942,
+   "title": "Add missing headers to generated xcframework",
+   "is_bugfix": true,
+   "bug": "The generated xcframework was missing headers (umbrella header and RustViaductFFI.h) needed by the generated Swift.",
+   "root_cause": "build-script (packaging)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "low"
+  },
+  {
+   "pr": 6927,
+   "title": "Bug 1985115 - Hotfix: Remove marking functions and variables as deprecated",
+   "is_bugfix": true,
+   "bug": "New @Deprecated annotations on Nimbus Kotlin APIs broke Fenix, which compiles with -Werror.",
+   "root_cause": "api-compat (deprecation breaks -Werror consumers)",
+   "preventable_by_lint": "partially",
+   "rule": "Treat newly added @Deprecated (Kotlin/Swift) and DEPRECATED UDL docs on public API as breaking changes that need coordinated consumer patches.",
+   "detect": "CI diff check: added lines matching `@Deprecated(` under components/*/android/src/main or `@available(*, deprecated` in Swift fail unless the PR carries a breaking-change label/CHANGELOG 'Breaking' entry.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6918,
+   "title": "Revert \"EXP-5700: Change from global rollout opt-out to experiments a…",
+   "is_bugfix": false,
+   "bug": "Revert of EXP-5700 (experiment/rollout opt-out split) because it caused CI failures in mozilla-firefox.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6916,
+   "title": "Fix the clang-19 symlink",
+   "is_bugfix": true,
+   "bug": "The cross-compile toolchain's clang symlink was absolute and pointed to the wrong location after extraction.",
+   "root_cause": "build-script (toolchain symlink)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6910,
+   "title": "Fix dependencies task now that bincode has moved away from github",
+   "is_bugfix": false,
+   "bug": "Dependency-license fixup after bincode moved off GitHub.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6903,
+   "title": "Ensure find_places_db() is XDG aware.",
+   "is_bugfix": true,
+   "bug": "find-places-db hard-coded ~/.mozilla instead of honoring XDG config dirs, failing mozilla-central's dot-mozilla-reference lint.",
+   "root_cause": "platform-config (XDG paths) / m-c lint violation",
+   "preventable_by_lint": "yes",
+   "rule": "Run mozilla-central's lints (dot-mozilla-reference, license, file-whitespace) in a-s CI.",
+   "detect": "Port m-c's tools/lint/dot-mozilla-reference.yml regex (references to \".mozilla\" outside an allowlist of XDG-aware files) as a CI grep step.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6891,
+   "title": "Bug 1982929 - Revert Update to jexl-eval 0.4.0",
+   "is_bugfix": false,
+   "bug": "Revert of jexl-eval 0.4.0 update.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6890,
+   "title": "`start-bindings` fix for Rust crates with hyphens.",
+   "is_bugfix": true,
+   "bug": "start-bindings generated invalid Gradle/Kotlin names and `pub use` lines for crates whose names contain hyphens.",
+   "root_cause": "tooling naming (hyphen vs underscore)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6889,
+   "title": "OAuth related fixes",
+   "is_bugfix": true,
+   "bug": "Sending BeginOAuthFlow while already Authenticating was an invalid transition and failed instead of restarting the flow.",
+   "root_cause": "logic-error (missing state-machine transition)",
+   "preventable_by_lint": "partially",
+   "rule": "State-machine transition matches must list every (state, event) pair explicitly, with no wildcard arm.",
+   "detect": "#![warn(clippy::wildcard_enum_match_arm)] scoped to state-machine modules, forcing an explicit decision for BeginOAuthFlow/BeginPairingFlow in Authenticating.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6880,
+   "title": "More dependency fixes to avoid moz-central duplicate dependencies",
+   "is_bugfix": false,
+   "bug": "Dependency dedupe for mozilla-central (mockall, clap features, prettytable, etc.).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6876,
+   "title": "Fix NSS bindings for key management",
+   "is_bugfix": true,
+   "bug": "CKM_AES_KEY_GEN / CKM_AES_KEY_WRAP_KWP were declared u64 instead of CK_ULONG (c_ulong, 32-bit on Windows), breaking the Windows build.",
+   "root_cause": "ffi-abi (fixed-width type instead of C alias)",
+   "preventable_by_lint": "yes",
+   "rule": "PKCS#11/NSS constants and fields must use the C type aliases (CK_ULONG, c_ulong, ...), and nss_sys must be type-checked for a Windows target in CI.",
+   "detect": "Regex over nss_sys/src/bindings: `pub const CK[A-Z]*_\\w+\\s*:\\s*u64` -> require CK_ULONG/CK_MECHANISM_TYPE; plus `cargo check --target x86_64-pc-windows-msvc -p nss_sys -p nss` (or -gnu) in CI, which reproduces the type error.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6870,
+   "title": "Bug 1980205 - Avoid env-filter feature",
+   "is_bugfix": false,
+   "bug": "Dependency change: avoid tracing-subscriber env-filter feature to prevent duplicate crates in m-c.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6868,
+   "title": "Back out \"Upgrade rusqlite to 0.37.\"",
+   "is_bugfix": false,
+   "bug": "Backout of the rusqlite 0.37 upgrade.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6865,
+   "title": "Error support tracing fix",
+   "is_bugfix": true,
+   "bug": "error-support emitted error/breadcrumb events with raw tracing::event!, which the tracing_support event sink does not handle.",
+   "root_cause": "wrong logging facade",
+   "preventable_by_lint": "yes",
+   "rule": "Components must log only through tracing-support / error-support macros, never `log::*!` or raw `tracing::event!`/`tracing::*!`.",
+   "detect": "clippy.toml `disallowed-macros = [\"log::trace\",\"log::debug\",\"log::info\",\"log::warn\",\"log::error\",\"tracing::event\",\"tracing::trace\",\"tracing::debug\",\"tracing::info\",\"tracing::warn\",\"tracing::error\"]` with #[allow] only inside components/support/tracing; plus a cargo-metadata check that no component/example crate depends on `log` directly. Would flag current uses in components/relay/src/{rs,lib}.rs and components/crashtest.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6861,
+   "title": "Fix new swiftlint failures (backport #6831)",
+   "is_bugfix": false,
+   "bug": "Backport of #6831: fix warnings from a newer swiftlint version picked up by CI (tool-version drift).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6849,
+   "title": "Fix sed usage in import-app-services-to-central.sh",
+   "is_bugfix": true,
+   "bug": "import-app-services-to-central.sh used BSD-only `sed -i ''`, which breaks with GNU sed.",
+   "root_cause": "build-script/shell portability",
+   "preventable_by_lint": "yes",
+   "rule": "No in-place `sed -i` in cross-platform scripts (use a temp file or perl -pi); shellcheck all scripts.",
+   "detect": "CI grep over *.sh/*.py/workflow files: `sed\\s+-i` outside scripts annotated macOS-only (e.g. libs/build-nss-ios.sh); plus shellcheck.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6831,
+   "title": "Fix new swiftlint failures",
+   "is_bugfix": false,
+   "bug": "Fix warnings from a newer swiftlint version picked up by CI (tool-version drift).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6828,
+   "title": "Fixed a deadlock in delete_undecryptable_records_for_remote_replacement",
+   "is_bugfix": true,
+   "bug": "delete_undecryptable_records_for_remote_replacement held the LoginDb lock and then created a LoginsSyncEngine, which locks the DB again (non-reentrant), causing a deadlock.",
+   "root_cause": "lock/concurrency (re-entrant lock)",
+   "preventable_by_lint": "partially",
+   "rule": "Don't call a function that acquires lock_db() while a lock_db() guard is alive; smoke-test every public store method.",
+   "detect": "Custom lint (dylint/rust-analyzer script): build an intra-crate call graph of fns calling `.lock_db()`/`.db.lock()`; flag calls to such fns while a guard binding from the same lock is in scope. Runtime alternative: parking_lot deadlock_detection or try_lock_for(timeout)+panic in test builds.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6819,
+   "title": "bug 1896144 - Throw an error on network request failure",
+   "is_bugfix": true,
+   "bug": "nimbus-fml's FileLoader did not check the HTTP status before caching a fetched file, so error pages were used and cached as manifests.",
+   "root_cause": "http-status-ignored",
+   "preventable_by_lint": "partially",
+   "rule": "Check the HTTP status (error_for_status / is_success) before consuming a response body.",
+   "detect": "ast-grep: `$C.send()?` (reqwest/viaduct) whose result flows into `.text()`/`.json()`/`.bytes()` with no `error_for_status()`, `.status`, `require_success()` or `is_success()` in between in the same function.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6796,
+   "title": "Fix `tracing_subscriber::Filter` handling",
+   "is_bugfix": true,
+   "bug": "tracing_support's Filter::enabled() always returned true, although tracing may call enabled() even after callsite_enabled() returned Interest::never.",
+   "root_cause": "API-contract misuse (tracing-subscriber)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6785,
+   "title": "Bug 1971640 - fetch_geoname_alternates is broken when two different admin divisions at the same level have the same code",
+   "is_bugfix": true,
+   "bug": "fetch_geoname_alternates matched admin divisions by code alone, mixing up divisions with the same code in different countries.",
+   "root_cause": "logic-error (SQL missing country constraint)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6780,
+   "title": "Fix filter_adult dependencies to help with vendoring into firefox main",
+   "is_bugfix": false,
+   "bug": "Dependency reorg: make clap optional in filter_adult for vendoring into firefox-main.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6777,
+   "title": "Bug 1970568 - Handle integer-like text values in FeatureVariables.kt",
+   "is_bugfix": true,
+   "bug": "Integer-like text values in Nimbus FeatureVariables were treated as Android resource IDs, so asText() threw NotFoundException.",
+   "root_cause": "platform-API quirk / logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6756,
+   "title": "Bug 1966719 - Search Engine Selector should order by name rather than identifier.",
+   "is_bugfix": true,
+   "bug": "The search engine selector broke order-hint ties by identifier instead of display name.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6732,
+   "title": "Fix remote settings IO errors",
+   "is_bugfix": true,
+   "bug": "A blanket `#[from] std::io::Error` labeled every IO error as an attachment-write error, hiding the real source; storage-dir creation also raced (AlreadyExists).",
+   "root_cause": "error-classification (blanket From) + TOCTOU",
+   "preventable_by_lint": "partially",
+   "rule": "Don't derive blanket From<std::io::Error> into component error enums; map IO errors to context-specific variants, and prefer create_dir_all over exists()+create_dir.",
+   "detect": "ast-grep: `#[from] std::io::Error` / `#[from] io::Error` in components/*/src/error.rs (ratchet; 9 existing uses); pattern `if !$FS::exists($D)$$$ { $FS::create_dir($D) }` -> suggest create_dir_all.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6731,
+   "title": "Fix remote settings error type string",
+   "is_bugfix": true,
+   "bug": "remote_settings reported unexpected errors under the copy-pasted label \"logins-unexpected\".",
+   "root_cause": "copy-paste (wrong error-report label)",
+   "preventable_by_lint": "yes",
+   "rule": "report_error labels must start with the owning component's prefix.",
+   "detect": "CI script: for each crate dir, grep `report_error!(\"LABEL\"` and `.report_error(\"LABEL\")`, check LABEL against a per-crate prefix allowlist (remote_settings -> remote-settings-, fxa-client -> fxa-client-|fxaclient-|fxa-state-machine-, ...).",
+   "confidence": "high"
+  },
+  {
+   "pr": 6730,
+   "title": "Fix more nss initialization issues in tests",
+   "is_bugfix": true,
+   "bug": "Tests calling crypto code did not call nss::ensure_initialized(), causing intermittent failures depending on test ordering/threads.",
+   "root_cause": "test-harness (missing global init)",
+   "preventable_by_lint": "partially",
+   "rule": "Tests in crates that depend on nss/rc_crypto must initialize NSS via a shared helper (or initialization is automatic in test builds).",
+   "detect": "Test-harness: a #[ctor]-style or test-wrapper macro that initializes NSS in cfg(test) for crates depending on nss; or a CI script flagging #[test] fns in such crates that call crypto APIs without ensure_initialized (noisy).",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6729,
+   "title": "Bug 1957309: Handle location signs as one of Yelp modifier (again)",
+   "is_bugfix": false,
+   "bug": "Re-land of 'Handle location signs as Yelp modifier' with a new schema version (37) and DROP TABLE IF EXISTS migration.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6728,
+   "title": "Test fixes",
+   "is_bugfix": true,
+   "bug": "Several fxa-client/sync15 tests did not call nss::ensure_initialized(), causing failures.",
+   "root_cause": "test-harness (missing global init)",
+   "preventable_by_lint": "partially",
+   "rule": "Tests in crates that depend on nss/rc_crypto must initialize NSS via a shared helper (or initialization is automatic in test builds).",
+   "detect": "Same as #6730.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6712,
+   "title": "Revert \"Bug 1953667: Make location sign skippable\"",
+   "is_bugfix": false,
+   "bug": "Revert of 'Make location sign skippable'.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6711,
+   "title": "Revert \"Bug 1953666: Add prefix matching for Yelp modifiers\"",
+   "is_bugfix": false,
+   "bug": "Revert of 'Add prefix matching for Yelp modifiers'.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6710,
+   "title": "Revert \"Bug 1957309: Handle location signs as one of Yelp modifier\"",
+   "is_bugfix": false,
+   "bug": "Revert of 'Handle location signs as Yelp modifier' (also decrements the Suggest schema VERSION 36 -> 35).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6705,
+   "title": "Fix regression in #6647 in how concept-fetch is used",
+   "is_bugfix": true,
+   "bug": "remote_settings declared concept-fetch as an `api` dependency instead of testImplementation, which probably broke a-s nightly builds in m-c.",
+   "root_cause": "build-config (Gradle dependency scope)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6703,
+   "title": "Revert \"More gradle tweaks so our gradle files work unchanged in mozilla-central.\"",
+   "is_bugfix": false,
+   "bug": "Revert of Gradle tweaks for mozilla-central.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6701,
+   "title": "Remote settings storage directory handling fixes",
+   "is_bugfix": true,
+   "bug": "The remote-settings storage code created the DB path itself (not its parent) and only when it already existed, so the data directory was never created properly.",
+   "root_cause": "logic-error (inverted condition, wrong path)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6694,
+   "title": "Bug 1955390 - Fix downloading and reading of attachments from remote settings dumps, and add search-config-icons dumps",
+   "is_bugfix": true,
+   "bug": "The dump downloader and the attachment reader derived on-disk attachment filenames from different record fields, so packaged attachments couldn't be read.",
+   "root_cause": "logic-error (inconsistent naming)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6678,
+   "title": "Bug 1957309: Handle location signs as one of Yelp modifier",
+   "is_bugfix": false,
+   "bug": "Feature: handle Yelp location signs as a modifier (later reverted).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6674,
+   "title": "Backout the UniFFI/Glean updates",
+   "is_bugfix": false,
+   "bug": "Backout of UniFFI/Glean updates due to m-c landing issues.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6669,
+   "title": "Revert \"[DISCO-3212] Switch Relevancy to new remote settings API\"",
+   "is_bugfix": false,
+   "bug": "Revert of switching Relevancy to the new RS API (its SQLite connection was not closed before shutdown, causing LateWriteObserver failures).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6665,
+   "title": "Revert backouts",
+   "is_bugfix": false,
+   "bug": "Re-land of backed-out changes (NSS init in tests, etc.).",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6659,
+   "title": "Fix start-bindings android",
+   "is_bugfix": true,
+   "bug": "start-bindings did not add the `pub use` for a new crate to the Android megazord lib.rs, so generated bindings didn't work.",
+   "root_cause": "tooling (incomplete scaffolding)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "medium"
+  },
+  {
+   "pr": 6657,
+   "title": "fix multithreaded NSS initialization",
+   "is_bugfix": true,
+   "bug": "NSS initialization was not safe when called from multiple threads at once.",
+   "root_cause": "lock/concurrency (init race)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "low"
+  },
+  {
+   "pr": 6646,
+   "title": "Bug 1953945 - Add a Suggest migration to fix uniqueness constraint errors due to new RS collections",
+   "is_bugfix": true,
+   "bug": "Replacing the quicksuggest RS collection with new ones caused uniqueness-constraint errors from stale records; a migration now clears the DB.",
+   "root_cause": "sql-migration (data change)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6645,
+   "title": "Handle GUID collisions for users with orphaned bookmarks",
+   "is_bugfix": true,
+   "bug": "Bookmark sync hit UNIQUE(guid) violations for users with orphaned bookmarks; an ON CONFLICT(guid) upsert was added.",
+   "root_cause": "sql logic / data corruption handling",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6635,
+   "title": "Attempt #2 to fix rustup in GitHub workflows",
+   "is_bugfix": true,
+   "bug": "GitHub workflows still used the system Rust because ~/.cargo/bin wasn't first on PATH (second attempt at the rustup fix).",
+   "root_cause": "ci-config (ad-hoc toolchain setup)",
+   "preventable_by_lint": "partially",
+   "rule": "All workflows install Rust through one shared setup step that honours rust-toolchain.toml and PATH.",
+   "detect": "CI lint over .github/workflows: ban inline `curl ... sh.rustup.rs` in favour of a shared composite action (or a pinned setup-rust action); actionlint.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6634,
+   "title": "fix: upgrade to v4 of download and upload artifact (backport #6630)",
+   "is_bugfix": true,
+   "bug": "Backport of #6630: workflows used the deprecated actions/upload-artifact@v3 / download-artifact@v3, which now fail.",
+   "root_cause": "ci-config (deprecated action versions)",
+   "preventable_by_lint": "yes",
+   "rule": "Keep GitHub Actions on supported versions automatically.",
+   "detect": "Dependabot `package-ecosystem: github-actions` + a CI grep failing on `uses: actions/(upload|download)-artifact@v[1-3]` (or zizmor/actionlint checks).",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6633,
+   "title": "Fix rustup for github workflows (backport #6632)",
+   "is_bugfix": true,
+   "bug": "Backport of #6632: workflows didn't run `rustup toolchain install`, so the rust-toolchain.toml version was missing.",
+   "root_cause": "ci-config (ad-hoc toolchain setup)",
+   "preventable_by_lint": "partially",
+   "rule": "All workflows install Rust through one shared setup step that honours rust-toolchain.toml and PATH.",
+   "detect": "Same as #6635.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6632,
+   "title": "Fix rustup for github workflows",
+   "is_bugfix": true,
+   "bug": "GitHub workflows installed rustup but never ran `rustup toolchain install`, so builds lacked the pinned toolchain.",
+   "root_cause": "ci-config (ad-hoc toolchain setup)",
+   "preventable_by_lint": "partially",
+   "rule": "All workflows install Rust through one shared setup step that honours rust-toolchain.toml and PATH.",
+   "detect": "Same as #6635.",
+   "confidence": "low"
+  },
+  {
+   "pr": 6630,
+   "title": "fix: upgrade to v4 of download and upload artifact",
+   "is_bugfix": true,
+   "bug": "Workflows used the deprecated actions/upload-artifact@v3 / download-artifact@v3, which now fail.",
+   "root_cause": "ci-config (deprecated action versions)",
+   "preventable_by_lint": "yes",
+   "rule": "Keep GitHub Actions on supported versions automatically.",
+   "detect": "Dependabot `package-ecosystem: github-actions` + a CI grep failing on `uses: actions/(upload|download)-artifact@v[1-3]`.",
+   "confidence": "medium"
+  },
+  {
+   "pr": 6626,
+   "title": "fix trailing newlines start-bindings generated files",
+   "is_bugfix": true,
+   "bug": "start-bindings wrote generated files without a trailing newline, which mozilla-central's whitespace linter rejects.",
+   "root_cause": "m-c lint violation (EOF newline)",
+   "preventable_by_lint": "yes",
+   "rule": "Run mozilla-central's file-whitespace linter (or an equivalent) in a-s CI.",
+   "detect": "CI: editorconfig-checker or a script enforcing final newline / no trailing whitespace / LF endings on tracked text files.",
+   "confidence": "high"
+  },
+  {
+   "pr": 6623,
+   "title": "Add missing license headers to a few Rust files.",
+   "is_bugfix": true,
+   "bug": "Several Rust files lacked the MPL license header, flagged by mozilla-central's license linter.",
+   "root_cause": "m-c lint violation (license header)",
+   "preventable_by_lint": "yes",
+   "rule": "Every source file must start with the MPL-2.0 header.",
+   "detect": "CI script: check the first lines of *.rs/*.kt/*.swift/*.py/*.sh against the MPL header template (port m-c's license linter).",
+   "confidence": "high"
+  },
+  {
+   "pr": 6612,
+   "title": "Fixing `start-bindings` documentation",
+   "is_bugfix": false,
+   "bug": "Docs: fix start-bindings command names.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6582,
+   "title": "Cargo audit fixes",
+   "is_bugfix": false,
+   "bug": "Dependency bumps for cargo audit.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6581,
+   "title": "Back out \"Increase bookmark sync log levels to try and narrow down bu…",
+   "is_bugfix": false,
+   "bug": "Backout of temporarily raised bookmark-sync log levels.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6527,
+   "title": "Bug 1936456 - Don't consider unvisited-but-bookmarked pages to be visited.",
+   "is_bugfix": true,
+   "bug": "get_visited treated bookmarked-but-never-visited pages (present in moz_places) as visited.",
+   "root_cause": "logic-error (SQL predicate)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6526,
+   "title": "Bug 1936053: RemoteSettingsClient.sync() should merge records",
+   "is_bugfix": true,
+   "bug": "RemoteSettingsClient.sync() replaced stored records with an incremental changeset instead of merging it.",
+   "root_cause": "logic-error",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6520,
+   "title": "Revert Glean v63.0.0 update",
+   "is_bugfix": false,
+   "bug": "Revert of Glean v63 update.",
+   "root_cause": "n/a (not a bugfix)",
+   "preventable_by_lint": "no",
+   "rule": null,
+   "detect": null,
+   "confidence": "high"
+  },
+  {
+   "pr": 6515,
+   "title": "Fix issues with trailing whitespace/windows line endings/empty lines at ends of files",
+   "is_bugfix": true,
+   "bug": "Trailing whitespace, CRLF line endings and extra blank lines at EOF across many files were flagged by mozilla-central's file-whitespace linter.",
+   "root_cause": "m-c lint violation (whitespace)",
+   "preventable_by_lint": "yes",
+   "rule": "Run mozilla-central's file-whitespace linter (or an equivalent) in a-s CI.",
+   "detect": "CI: editorconfig-checker / git diff --check / script enforcing no trailing whitespace, LF only, single final newline on tracked text files.",
+   "confidence": "high"
+  }
+ ],
+ "rules": [
+  {
+   "id": "uniffi-lift-no-panic",
+   "title": "Never panic in UniFFI lifts or conversions of foreign/server data",
+   "area": "uniffi",
+   "problem": "unwrap()/expect() inside uniffi::custom_type! try_lift (and in From impls over server responses) turns bad input from Kotlin/Swift/JS or the server into a hard crash of the host app.",
+   "rule": "No panicking constructs (unwrap/expect/panic!/unreachable!/assert!) inside uniffi::custom_type! try_lift closures or conversions of foreign/server data; return Err instead.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep rule matching `uniffi::custom_type!($T, $F, { $$$ try_lift: $BODY $$$ })` where $BODY contains `.unwrap()`, `.expect(`, `panic!`, `unreachable!`; same check for `impl From<$X> for $Y` whose source type is a deserialized server response (suggest TryFrom). Today it would also flag places/src/lib.rs VisitTransitionSet try_lift `.expect(...)`.",
+   "prs": [
+    6967,
+    6971,
+    6972,
+    6973,
+    7578
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - try_lift already returns Result, so any panic there is almost certainly wrong."
+  },
+  {
+   "id": "clippy-no-unwrap-in-component-code",
+   "title": "Deny unwrap/expect/assert in non-test component code",
+   "area": "errors",
+   "problem": "Panics in FFI-reachable Rust (unwrap on Option, expect on fallible header inserts, assert! in serializers) crash Firefox processes instead of returning errors.",
+   "rule": "Deny clippy::unwrap_used / expect_used / panic_in_result_fn in non-test component code; require #[expect(..., reason = \"...\")] for proven invariants (ratchet with a baseline).",
+   "enforcement": "existing-clippy",
+   "detect": "[workspace.lints.clippy] unwrap_used = \"warn\", expect_used = \"warn\", panic_in_result_fn = \"warn\" (+ allow_attributes_without_reason) applied to components/*/src with tests exempted (allow-unwrap-in-tests / allow-expect-in-tests in clippy.toml); fail CI on new hits vs a stored baseline.",
+   "prs": [
+    7578,
+    7273,
+    7536,
+    6967,
+    6971,
+    6972,
+    6973
+   ],
+   "severity": "high",
+   "false_positive_risk": "medium - many existing invariant unwraps; needs a baseline/ratchet and #[expect(clippy::expect_used, reason=...)] for proven invariants."
+  },
+  {
+   "id": "tracing-support-only-logging",
+   "title": "Log only through tracing-support macros",
+   "area": "logging-privacy",
+   "problem": "Calls to log::*! or raw tracing::event! bypass the tracing_support event sink, so logs and error reports silently disappear.",
+   "rule": "Components must log only through tracing-support / error-support macros, never `log::*!` or raw `tracing::event!`/`tracing::*!`.",
+   "enforcement": "existing-clippy",
+   "detect": "clippy.toml `disallowed-macros = [\"log::trace\",\"log::debug\",\"log::info\",\"log::warn\",\"log::error\",\"tracing::event\",\"tracing::trace\",\"tracing::debug\",\"tracing::info\",\"tracing::warn\",\"tracing::error\"]` with #[allow] only inside components/support/tracing; plus a cargo-metadata check that no component/example crate depends on `log` directly. Would flag current uses in components/relay/src/{rs,lib}.rs and components/crashtest.",
+   "prs": [
+    7332,
+    6865
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - one allowlisted crate (components/support/tracing); examples can opt out explicitly."
+  },
+  {
+   "id": "error-reporter-event-schema",
+   "title": "Validate error-reporter tracing event fields against a schema",
+   "area": "errors",
+   "problem": "tracing takes field names from variable names, so renaming a local silently changes the cross-language contract with the Android/iOS error reporters (lost details, crashes).",
+   "rule": "Events sent to the `app-services-error-reporter::*` targets must use explicitly named fields from a fixed schema (error: message, type_name, breadcrumbs; breadcrumb: message, module, line, column).",
+   "enforcement": "test-harness",
+   "detect": "CI regex/ast-grep over `tracing_support::(error|info)!(target: \"app-services-error-reporter::...\", ...)` extracting field identifiers (shorthand `x` counts as field `x`), compared to the schema; plus a unit test that captures the event with an EventSink and asserts field names (the test 7658 added).",
+   "prs": [
+    7658,
+    7335
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - only a handful of call sites target app-services-error-reporter."
+  },
+  {
+   "id": "report-error-label-prefix",
+   "title": "Prefix report_error labels with the owning component",
+   "area": "errors",
+   "problem": "Copy-pasted report_error labels attribute errors to the wrong component in dashboards.",
+   "rule": "report_error!/ErrorHandling::report_error labels must start with a prefix registered for the crate they are in.",
+   "enforcement": "ci-script",
+   "detect": "Grep `report_error!(\"X` and `.report_error(\"X` per crate directory, compare against a per-crate prefix allowlist (remote_settings: remote-settings-; fxa-client: fxa-client-, fxaclient-, fxa-state-machine-; sync15: incoming-, invalid-incoming-, ...).",
+   "prs": [
+    6731
+   ],
+   "severity": "low",
+   "false_positive_risk": "medium - existing labels use inconsistent prefixes (fxaclient- vs fxa-client-, incoming-), so an allowlist is needed."
+  },
+  {
+   "id": "mockito-mocks-asserted",
+   "title": "Assert every mockito mock in tests",
+   "area": "tests",
+   "problem": "mockito 0.31 does not enforce .expect(N) unless .assert() is called; `let _m = mock(...)` tests pass while the code under test does the wrong thing.",
+   "rule": "Bind each mock to a non-underscore name and call .assert() before the test ends (or wrap mocks in a helper that asserts on Drop).",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep in #[test] fns: `let _$M = $$$mock($$$)$$$.create()` or a `let $M = mock(...)` with no subsequent `$M.assert()`.",
+   "prs": [
+    7347
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - deliberate 'any number of calls' mocks can use `.expect_at_least(0)` plus assert or an allow comment."
+  },
+  {
+   "id": "crate-excludes-platform-dirs",
+   "title": "Exclude android/ and ios/ from published crates",
+   "area": "deps-build",
+   "problem": "Crates without `exclude = [\"/android\", \"/ios\"]` vendor Kotlin/Swift sources into mozilla-firefox third_party/rust.",
+   "rule": "Every workspace crate with android/ or ios/ subdirectories must exclude them in [package].",
+   "enforcement": "ci-script",
+   "detect": "cargo metadata + filesystem check: package dir has android/ or ios/ => package.exclude contains \"/android\"/\"/ios\" or package.include is set. Currently flags components/fxcontainers and components/support/db-crypto.",
+   "prs": [
+    7209
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - purely structural check."
+  },
+  {
+   "id": "no-component-depends-on-examples",
+   "title": "Forbid component dependencies on examples/ crates",
+   "area": "deps-build",
+   "problem": "A support tool depending on examples/cli-support pulled NSS linking and heavy deps into the wrong place.",
+   "rule": "Crates under components/ may not have normal/build dependencies on crates under examples/ (dev-dependencies allowed).",
+   "enforcement": "ci-script",
+   "detect": "Script over `cargo metadata --format-version 1`: map package ids to manifest paths; fail if a components/** package depends (kind != dev) on an examples/** package.",
+   "prs": [
+    7199
+   ],
+   "severity": "low",
+   "false_positive_risk": "low - structural."
+  },
+  {
+   "id": "port-mozilla-central-linters",
+   "title": "Run mozilla-central's whitespace, license and XDG linters in a-s CI",
+   "area": "ci-scripts",
+   "problem": "Violations are only found when a-s is imported into mozilla-central (trailing whitespace/CRLF/EOF newline, missing MPL headers, hard-coded ~/.mozilla paths), costing follow-up PRs.",
+   "rule": "a-s CI runs equivalents of m-c's file-whitespace, license and dot-mozilla-reference linters on changed files.",
+   "enforcement": "ci-script",
+   "detect": "editorconfig-checker or `git diff --check` style script (no trailing whitespace, LF only, single final newline); MPL header check on *.rs/*.kt/*.swift/*.py/*.sh; grep for '\\.mozilla' outside an allowlist of XDG-aware files.",
+   "prs": [
+    6515,
+    6623,
+    6626,
+    6903
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - same rules m-c already enforces; fixtures/binary files need excludes."
+  },
+  {
+   "id": "shell-script-portability",
+   "title": "Shellcheck and portability-check build scripts",
+   "area": "ci-scripts",
+   "problem": "Build/import scripts break on the other platform's shell or sed (BSD `sed -i ''`, bash-5 'bad substitution', bash-3.2 empty arrays under set -u).",
+   "rule": "Run shellcheck on all scripts, ban `sed -i` in cross-platform scripts and `${#arr[@]:-...}`, and smoke-run argument parsing under bash 3.2 and bash 5.",
+   "enforcement": "ci-script",
+   "detect": "shellcheck -x on **/*.sh; regexes `sed\\s+-i` (outside annotated macOS-only scripts like libs/build-nss-ios.sh) and `\\$\\{#\\w+\\[@\\]:-`; bash -n plus a no-arg dry run. megazords/ios-rust/build-xcframework.sh:183 still contains `${#GENERATE_ARGS[@]:-0}` (bad substitution in bash 5.2).",
+   "prs": [
+    6849,
+    7226
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - few scripts; macOS-only scripts get an explicit annotation."
+  },
+  {
+   "id": "path-triggered-platform-ci",
+   "title": "Build Kotlin/Swift automatically when platform code changes",
+   "area": "ci-scripts",
+   "problem": "Normal PR CI skips module-build and swift tasks unless the title contains [ci full], so Kotlin compile errors and iOS script breakage land on main.",
+   "rule": "If a PR touches components/**/android/**, *.kt, *.swift, megazords/ios-rust/** or build-xcframework.sh, the corresponding platform build/test tasks run automatically.",
+   "enforcement": "ci-script",
+   "detect": "In taskcluster/app_services_taskgraph (get_decision_parameters/target_tasks), compute changed files and include run-on-pr-type=full-ci tasks for the matching platform.",
+   "prs": [
+    7437,
+    7226
+   ],
+   "severity": "high",
+   "false_positive_risk": "low - costs CI time only, no false alarms."
+  },
+  {
+   "id": "nss-ffi-abi-checks",
+   "title": "Use C ABI type aliases and check nss_sys for Windows",
+   "area": "other",
+   "problem": "Hand-written NSS/PKCS#11 bindings used fixed-width u64 for CK_ULONG constants and #[repr(C)] where Windows needs 1-byte packing, breaking the Windows build/ABI.",
+   "rule": "Constants and struct fields mirroring C `unsigned long` use CK_ULONG/c_ulong; every #[repr(C)] binding struct has per-target layout assertions; nss_sys is type-checked for a Windows target in CI.",
+   "enforcement": "ci-script",
+   "detect": "Regex `pub const CK[A-Z]*_\\w+\\s*:\\s*u64` in nss_sys/src/bindings; `cargo check --target x86_64-pc-windows-msvc -p nss_sys -p nss`; bindgen-generated layout tests (size/align/offset) per target compared with the hand-written structs.",
+   "prs": [
+    6876,
+    7308
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - narrow scope (nss_sys bindings)."
+  },
+  {
+   "id": "nss-raw-alloc-raii-and-lsan",
+   "title": "Wrap raw NSS allocations in RAII and run LeakSanitizer",
+   "area": "other",
+   "problem": "Manual SECITEM_AllocItem/SECITEM_FreeItem pairs leak on early returns; leaks were only caught by mozilla-central's LSan.",
+   "rule": "Raw NSS alloc/free functions are only callable from RAII wrapper types; rc_crypto/nss tests run under LeakSanitizer in a-s CI.",
+   "enforcement": "existing-clippy",
+   "detect": "clippy.toml disallowed-methods for nss_sys::SECITEM_AllocItem, SECITEM_FreeItem, PORT_Alloc*, PK11_Free* etc. with #[allow] only in nss/src/util.rs wrappers; CI job `RUSTFLAGS=-Zsanitizer=leak cargo +nightly test -p nss -p rc_crypto`.",
+   "prs": [
+    6997,
+    7015
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - wrappers get an explicit allow."
+  },
+  {
+   "id": "serde-untagged-shadowing",
+   "title": "Flag shadowing variants in #[serde(untagged)] enums",
+   "area": "serde",
+   "problem": "With untagged enums serde picks the first variant that deserializes; a variant whose fields are a subset of a later one swallows the later variant's data.",
+   "rule": "For untagged enums, no earlier variant may have a required-field set that is a subset of a later variant's unless it uses deny_unknown_fields; otherwise use an explicit tag/discriminator.",
+   "enforcement": "custom-lint",
+   "detect": "syn-based script: parse enums with #[serde(untagged)], resolve variant struct types in the crate, compute required field sets (skip Option/#[serde(default)]), report i<j with fields(i) ⊆ fields(j).",
+   "prs": [
+    7676
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - needs type resolution across modules; foreign types can't be analysed."
+  },
+  {
+   "id": "no-debug-logging-of-user-payloads",
+   "title": "Don't Debug-log sync records or other user data",
+   "area": "logging-privacy",
+   "problem": "`trace!(\"{:?}\", record)` dumps URLs/titles/PII into logs that end up in desktop logs and bug reports.",
+   "rule": "Types carrying user data (sync records/payloads, logins, tabs) must not be formatted with {:?} in log macros; give them a redacting Display/Debug.",
+   "enforcement": "custom-lint",
+   "detect": "dylint or ast-grep: log-macro args formatted with `:?` whose type is in a sensitive-type list (or defined in */sync/record.rs, *Record/*Payload); alternatively forbid #[derive(Debug)] on those types and require a manual redacting impl.",
+   "prs": [
+    7549
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - requires maintaining the sensitive-type list; syntactic matching on names is noisy."
+  },
+  {
+   "id": "url-construction-hygiene",
+   "title": "Build URLs with url::Url APIs, and end base URLs with '/'",
+   "area": "other",
+   "problem": "Base URLs without a trailing slash lose their last path segment under Url::join; format!-built URLs produce double slashes; relative Location headers fail Url::parse.",
+   "rule": "Hard-coded base URLs used with join() end in '/', paths are appended with join()/path_segments_mut(), not format!, and redirects are resolved with base.join(location).",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: const/static/Lazy URL literals with a non-empty path not ending in '/'; `format!(\"{}/...\", $U)` where $U is named *url*/*base*; `Url::parse($LOC)` where $LOC comes from a `location` header.",
+   "prs": [
+    7046,
+    7543
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - some literals are full endpoints never used as join bases."
+  },
+  {
+   "id": "check-http-status-before-body",
+   "title": "Check HTTP status before using a response body",
+   "area": "errors",
+   "problem": "Fetching without a status check treats 4xx/5xx error pages as valid content (and caches them).",
+   "rule": "After send(), call error_for_status()/require_success() or branch on status before reading the body.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: in a function, `let $R = $C.send()?` (or chained) followed by `$R.text()`/`.json()`/`.bytes()` with no `error_for_status`, `require_success`, `is_success` or `.status` use in between.",
+   "prs": [
+    6819
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - status may be checked in a helper the pattern can't see."
+  },
+  {
+   "id": "no-blanket-from-io-error",
+   "title": "Avoid blanket #[from] std::io::Error in component errors",
+   "area": "errors",
+   "problem": "A single From<io::Error> variant makes every IO failure look like the same operation (e.g. 'error writing attachment'), hiding the real cause in error reports.",
+   "rule": "Component error enums use context-specific IO variants built with map_err, not #[from] io::Error; create directories with create_dir_all instead of exists()+create_dir.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: `#[from] std::io::Error` / `#[from] io::Error` inside #[derive(thiserror::Error)] enums under components/; pattern `if !$X::exists($D)$$$ { $$$create_dir($D)$$$ }`.",
+   "prs": [
+    6732
+   ],
+   "severity": "low",
+   "false_positive_risk": "high - 9 existing uses (logins, places, nimbus, autofill, ...); only workable as a ratchet on new code."
+  },
+  {
+   "id": "foreign-callback-released-on-shutdown",
+   "title": "Release foreign callbacks on shutdown and test it",
+   "area": "uniffi",
+   "problem": "Rust objects that cache Arc<dyn ForeignTrait> keep UniFFI callbacks registered past xpcom-shutdown, triggering desktop leak checks.",
+   "rule": "Every component holding a foreign callback exposes a shutdown path that drops it, and has a test asserting the callback's strong count reaches 0; engines don't cache their own clones.",
+   "enforcement": "test-harness",
+   "detect": "Inventory foreign traits (#[uniffi::export(with_foreign)], callback_interface in UDL); for each, require a test that registers an Arc stub, calls shutdown/close, and asserts Weak::strong_count()==0; a custom lint listing struct fields of type Arc<dyn ForeignTrait>.",
+   "prs": [
+    7520,
+    7478
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - inventory is easy, but proving that every holder is reachable from shutdown needs manual review."
+  },
+  {
+   "id": "exhaustive-state-machine-matches",
+   "title": "No wildcard arms in state-machine transition matches",
+   "area": "api-design",
+   "problem": "A catch-all `_ => invalid_transition` arm hides (state, event) pairs nobody considered, e.g. Disconnect or BeginOAuthFlow while Authenticating.",
+   "rule": "Enable clippy::wildcard_enum_match_arm in state-machine modules so every event is handled explicitly per state.",
+   "enforcement": "existing-clippy",
+   "detect": "#![warn(clippy::wildcard_enum_match_arm)] at the top of fxa-client state_machine modules (and other FSMs).",
+   "prs": [
+    7310,
+    6889
+   ],
+   "severity": "low",
+   "false_positive_risk": "low within the scoped modules, but it only forces a decision; it can't pick the right transition."
+  },
+  {
+   "id": "no-reentrant-db-lock",
+   "title": "Detect re-acquiring a held DB mutex",
+   "area": "concurrency",
+   "problem": "Calling a constructor that locks the DB while a lock_db() guard is alive deadlocks the non-reentrant mutex.",
+   "rule": "Don't call functions that acquire lock_db() while holding a lock_db() guard; smoke-test every public store method.",
+   "enforcement": "custom-lint",
+   "detect": "Intra-crate call-graph script (rust-analyzer/syn): mark fns whose bodies call `.lock_db()`/`db.lock()`; flag calls to marked fns in a scope where a guard from the same lock is live. Runtime alternative: parking_lot deadlock_detection or try_lock_for(timeout) in test builds.",
+   "prs": [
+    6828
+   ],
+   "severity": "medium",
+   "false_positive_risk": "medium - guard liveness and indirect calls are approximated."
+  },
+  {
+   "id": "nss-init-in-tests",
+   "title": "Initialize NSS automatically in tests",
+   "area": "tests",
+   "problem": "Tests that touch crypto without nss::ensure_initialized() fail intermittently depending on test order and threads.",
+   "rule": "Crates depending on nss/rc_crypto initialize NSS through a shared test helper/ctor so individual tests can't forget it.",
+   "enforcement": "test-harness",
+   "detect": "cfg(test) #[ctor] (or a test-wrapper macro) in each crate depending on nss; CI script listing such crates whose tests call crypto APIs with no initializer.",
+   "prs": [
+    6730,
+    6728
+   ],
+   "severity": "low",
+   "false_positive_risk": "medium - static detection of 'calls crypto' is approximate; the ctor approach has none."
+  },
+  {
+   "id": "github-actions-hygiene",
+   "title": "Keep GitHub Actions current and use a shared Rust setup",
+   "area": "ci-scripts",
+   "problem": "Deprecated action versions (upload/download-artifact@v3) and ad-hoc rustup installs (wrong PATH, missing toolchain install) broke workflows repeatedly.",
+   "rule": "Dependabot updates github-actions; workflows use one shared Rust setup step; actionlint runs on workflow changes.",
+   "enforcement": "ci-script",
+   "detect": "dependabot.yml github-actions ecosystem; grep failing on `uses: actions/(upload|download)-artifact@v[1-3]` and on inline `sh.rustup.rs` in .github/workflows; actionlint.",
+   "prs": [
+    6630,
+    6634,
+    6632,
+    6633,
+    6635
+   ],
+   "severity": "low",
+   "false_positive_risk": "low."
+  },
+  {
+   "id": "deprecation-is-breaking",
+   "title": "Treat new @Deprecated on public Kotlin/Swift API as breaking",
+   "area": "kotlin",
+   "problem": "Consumers like Fenix compile with -Werror, so adding @Deprecated breaks their build just like an API removal.",
+   "rule": "Adding @Deprecated / @available(*, deprecated) to public binding APIs requires the breaking-change process (consumer patches ready).",
+   "enforcement": "ci-script",
+   "detect": "Diff check on PRs: added lines matching `@Deprecated(` under components/*/android/src/main or `@available(*, deprecated` in Swift sources fail unless the PR has a breaking-change label / CHANGELOG breaking entry.",
+   "prs": [
+    6927
+   ],
+   "severity": "low",
+   "false_positive_risk": "medium - some deprecations are intentionally coordinated; a label override is needed."
+  },
+  {
+   "id": "generated-bindings-allowlist",
+   "title": "Allowlist the generated binding modules that get packaged",
+   "area": "uniffi",
+   "problem": "Library-mode bindgen generates bindings for every UniFFI crate linked in (e.g. glean_sym), which then ship in the iOS package.",
+   "rule": "Generated Swift/Kotlin binding files must match a checked-in allowlist per megazord.",
+   "enforcement": "ci-script",
+   "detect": "After uniffi-bindgen-library-mode, list generated *.swift/*.h/Kotlin packages and diff against megazords/*/bindings-allowlist.txt.",
+   "prs": [
+    7460
+   ],
+   "severity": "low",
+   "false_positive_risk": "low - the allowlist changes only when components are added."
+  },
+  {
+   "id": "kotlin-unconditional-recursion",
+   "title": "Detect unconditional self-recursion in Kotlin wrappers",
+   "area": "kotlin",
+   "problem": "A Kotlin member named like the imported Rust binding function calls itself instead of the binding, recursing forever.",
+   "rule": "Flag Kotlin functions whose body unconditionally calls a function with the same name and arity without a receiver.",
+   "enforcement": "custom-lint",
+   "detect": "Custom detekt rule on KtNamedFunction: sole statement/expression body is a KtCallExpression with the same callee name and argument count and no qualifier; or forbid member functions that share a name with an explicitly imported top-level function.",
+   "prs": [
+    6974
+   ],
+   "severity": "medium",
+   "false_positive_risk": "low - legitimate unconditional self-recursion is very rare."
+  }
+ ],
+ "suspicious": []
+}

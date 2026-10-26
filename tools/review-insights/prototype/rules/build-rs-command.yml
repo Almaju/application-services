@@ -1,0 +1,9 @@
+id: build-rs-shells-out
+language: rust
+severity: warning
+message: "build.rs shells out; prefer pure-Rust generation writing to OUT_DIR."
+files: ["**/build.rs"]
+rule:
+  any:
+    - pattern: Command::new($$$)
+    - pattern: std::process::Command::new($$$)

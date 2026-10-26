@@ -1,0 +1,2150 @@
+{
+ "chunk": "chunk_7",
+ "period": "2025-11-20 to 2026-10-26",
+ "threads_read": 616,
+ "rules": [
+  {
+   "id": "uniffi-breaking-change-needs-changelog-and-consumer-prs",
+   "title": "Flag UniFFI API breaks and require a Breaking Changes entry plus consumer PRs",
+   "area": "uniffi",
+   "problem": "Removing/renaming exported functions or types, adding required fields/args to Records, enum variants or FxaEvent-style variants, moving types between crates, or changing error types silently breaks Kotlin/Swift/JS consumers. Reviewers repeatedly had to point out that a change was breaking, that a Rust type alias does not protect bindings, and that firefox-ios / mozilla-central patches must be ready before merging.",
+   "rule": "Any diff that changes the generated public binding surface in a non-additive way (removed/renamed item, new non-defaulted field or argument, changed throws type, item moved to another crate/namespace) must (a) add a `### <Component>` entry under `## ⚠️ Breaking Changes ⚠️` of the in-progress CHANGELOG section and (b) link consumer PRs per docs/howtos/breaking-changes.md.",
+   "enforcement": "uniffi-checker",
+   "detect": "CI job: build the megazord cdylib for base and head, run `uniffi-bindgen` in library mode to dump the ComponentInterface metadata (or generate Kotlin+Swift) for every component, and diff: removed/renamed functions/methods/objects/records/enums/variants/fields, record fields or variant fields added without default, argument lists that grew without defaults, changed `Throws`, crate/module_path change of a type. If the diff is non-empty and the CHANGELOG in-progress section has no Breaking Changes entry naming that component -> fail with the list. Note Rust-only `pub type Alias = ...` does not create a binding alias, so renames are always breaking. Also fail if the PR body lacks firefox-ios / phabricator links when breaking.",
+   "autofix": false,
+   "count": 15,
+   "severity": "high",
+   "false_positive_risk": "medium - additive changes with defaults are fine, and items exported only to Rust consumers are not binding breaks; needs a per-component allowlist for intentionally unused APIs",
+   "evidence": [
+    {
+     "ref": "review 3724654984 PR#7191",
+     "quote": "Since this is technically a breaking change you should add an entry to the change log. I was going to suggest checking that these changes don't break things by using the local auto publish flow but"
+    },
+    {
+     "ref": "inline 2800662298 PR#7186",
+     "quote": "Is anyone using this? It seems like this could only affect Rust consumers since it's not exported via UniFFI, but those are all getting updated by this PR right?"
+    },
+    {
+     "ref": "inline 3124352863 PR#7306",
+     "quote": "This is a breaking change since the clients are going to need to send us the new field. I'm fine with that, but let's call it out in the changelog."
+    },
+    {
+     "ref": "review 4951651328 PR#7542",
+     "quote": "this represents a breaking change for Android and Swift users, since error handling has changed and the moved import. Therefore, accompanying pull requests for mobile applications would be necessary"
+    },
+    {
+     "ref": "inline 3825251879 PR#7554",
+     "quote": "> Adding a field to the `Amp` variant is source-breaking for consumers that destructure it positionally (Firefox iOS); consumers that access fields by name (Firefox Android, Firefox Desktop) are"
+    },
+    {
+     "ref": "review 4987241868 PR#7554",
+     "quote": "This change looks pretty good to me. The next step is getting the changes for ios/android/desktop. https://github.com/mozilla/application-services/blob/main/docs/howtos/breaking-changes.md has"
+    }
+   ]
+  },
+  {
+   "id": "uniffi-record-defaults-match-rust-default",
+   "title": "Give new exported Record fields a UniFFI default, and keep it identical to the Rust Default",
+   "area": "uniffi",
+   "problem": "New fields added to exported Records/variants without a default force every foreign constructor (including tests in Fenix/iOS/Desktop) to change, and where both `impl Default` and `#[uniffi(default=...)]`/UDL defaults exist they drifted (viaduct ClientSettings timeout), a footgun where Rust and foreign callers get different behaviour.",
+   "rule": "For `#[derive(uniffi::Record)]` structs and UDL dictionaries: (1) a newly added field must carry `#[uniffi(default)]`/`#[uniffi(default = ...)]` (UDL `= value`) or be reported as breaking; (2) if the type implements `Default`, every field default declared for UniFFI must equal the Rust Default value; (3) use the short `#[uniffi(default)]` form instead of `#[uniffi(default = None)]`.",
+   "enforcement": "uniffi-checker",
+   "detect": "syn-based checker: collect Records (derive or UDL dictionary). For each field compare base vs head; new field without uniffi default -> warn 'breaking for foreign constructors'. If `impl Default for T` exists (derive or manual), evaluate simple literal expressions in it and compare with `#[uniffi(default = X)]` / UDL defaults; mismatch -> error. Regex autofix: `#\\[uniffi\\(default = None\\)\\]` -> `#[uniffi(default)]`. Also flag `Default` impls on Records with no UniFFI defaults at all (foreign callers must pass every value).",
+   "autofix": true,
+   "count": 5,
+   "severity": "medium",
+   "false_positive_risk": "low - pure metadata comparison; Default impls with non-literal expressions must be skipped",
+   "evidence": [
+    {
+     "ref": "inline 3231062693 PR#7343",
+     "quote": "Do you also want a default in the udl? Foreign code passing an empty value created on the foreign side will need to specify this value. No big deal today, but if that grows more values it will make"
+    },
+    {
+     "ref": "inline 3479522626 PR#7450",
+     "quote": "it looks like `ClientSettings::default()` will use a timeout of 60000, so these overrides don't seem necessary. (It also looks like uniffi will supply different defaults, which seems a little like a"
+    },
+    {
+     "ref": "inline 2956549876 PR#7274",
+     "quote": "fyi, I think you should be able to omit the ` = None` part on these defaults. Again, this is just a refactor, and when this was written you could *not* omit ` = None` part, but again, leaving it"
+    },
+    {
+     "ref": "inline 3422493393 PR#7413",
+     "quote": "complaining in Fenix testing as a heads up for a companion patch or default value!"
+    },
+    {
+     "ref": "inline 3825251879 PR#7554",
+     "quote": "This would be a breaking change for any application that constructs a `Suggestion.Amp` value, since they would now have to supply a new field. I think that might mean test breakage for Android and"
+    }
+   ]
+  },
+  {
+   "id": "no-serde-derive-on-exported-records",
+   "title": "Don't derive serde and uniffi::Record on the same network-response type",
+   "area": "uniffi",
+   "problem": "Deriving both `uniffi::Record` and `Serialize`/`Deserialize` on a server response type couples the wire protocol to the mobile API: any non-optional field addition or removal on the server becomes a breaking binding change, and server naming leaks into Swift/Kotlin.",
+   "rule": "Types that model HTTP/remote-settings payloads (modules like `http`, `response`, `mars`, `rs`, `models`) must not also be `uniffi::Record`/`uniffi::Enum`/UDL dictionaries; use a separate wire struct and a `From` conversion. Persisted types (e.g. Nimbus enrollment state) are exempt but need bw-compat tests.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep rule over components/**/src: item has attribute `#[derive($$$)]` containing both `uniffi::Record|uniffi::Enum` and `Deserialize|Serialize`, and file path matches `/(http|response|request|mars|models|rs)\\b/` -> warn. For UDL-based crates, cross-reference dictionary names with structs deriving serde.",
+   "autofix": false,
+   "count": 1,
+   "severity": "medium",
+   "false_positive_risk": "high - the pattern is common and sometimes intentional (nimbus persisted types); restrict by path and allowlist",
+   "evidence": [
+    {
+     "ref": "inline 2956765849 PR#7274",
+     "quote": "It's worth being careful deriving both `uniffi::Record` and serde traits on the same object. The issue is that you are making it such that a change in the \"wire\" protocol must end up being a breaking"
+    }
+   ]
+  },
+  {
+   "id": "udl-external-typedefs-correct-and-minimal",
+   "title": "Keep UDL `[External]` typedefs minimal and of the right kind; no duplicate definitions",
+   "area": "uniffi",
+   "problem": "When types moved to a new crate (db-crypto), UDL files kept unnecessary `[External=...] typedef` lines, used the wrong kind (`trait` vs `trait_with_foreign`) and still declared functions now defined in the new crate, which produced duplicate Swift definitions and broke iOS.",
+   "rule": "Every `[External=\"crate\"] typedef <kind> Name;` must (a) be referenced elsewhere in that UDL, (b) use the kind that matches the defining crate (`trait_with_foreign` for `[Trait, WithForeign]`/`#[uniffi::export(with_foreign)]`, `interface` for objects, `dictionary`, `enum`), and (c) no namespace function or type name may be defined by two crates that are linked into the same megazord.",
+   "enforcement": "uniffi-checker",
+   "detect": "Parse all components/**/*.udl with weedle (uniffi_udl) + scan proc-macro items (`#[uniffi::export]`, derives). Build a global map name->(crate, kind). Error if: external typedef unused in its UDL; typedef kind != defining kind; same exported fn/type name defined in >1 crate of megazords/full or megazords/ios-rust (Swift module is shared `MozillaRustComponents`).",
+   "autofix": true,
+   "count": 6,
+   "severity": "medium",
+   "false_positive_risk": "low - mechanical metadata comparison",
+   "evidence": [
+    {
+     "ref": "inline 3796573216 PR#7542",
+     "quote": "I think these can go"
+    },
+    {
+     "ref": "inline 3796575282 PR#7542",
+     "quote": "can go, too afaik, ..."
+    },
+    {
+     "ref": "inline 3796589749 PR#7542",
+     "quote": "I am not sure but this might be ``` typedef trait_with_foreign EncryptorDecryptor; ```"
+    },
+    {
+     "ref": "inline 3796605803 PR#7542",
+     "quote": "and this ``` typedef trait_with_foreign KeyManager; ```"
+    },
+    {
+     "ref": "review 5094486193 PR#7542",
+     "quote": "We need to remove `create_key`, `check_canary`, and `create_canary` from `logins.udl` to avoid duplicate method definitions. With that change, it builds on iOS and login operations work as expected."
+    }
+   ]
+  },
+  {
+   "id": "prefer-proc-macros-over-udl",
+   "title": "Use UniFFI proc-macros instead of UDL for new crates and new exported items",
+   "area": "uniffi",
+   "problem": "The team is migrating away from UDL; new UDL files (or growing old ones) add work later and UDL has limitations (e.g. awkward variant/struct shapes, `[ByRef]`).",
+   "rule": "New `*.udl` files are not allowed; new interfaces/dictionaries should be declared with `#[uniffi::export]`/`#[derive(uniffi::Record)]` etc. Growth of an existing UDL is a warning.",
+   "enforcement": "ci-script",
+   "detect": "CI: `git diff --diff-filter=A --name-only base...head -- '*.udl'` non-empty -> fail (allowlist for emergencies). For modified UDL files, count added `interface|dictionary|enum|callback interface` declarations -> warn suggesting proc-macros.",
+   "autofix": false,
+   "count": 2,
+   "severity": "low",
+   "false_positive_risk": "low - only flags additions",
+   "evidence": [
+    {
+     "ref": "inline 4053182124 PR#7542",
+     "quote": "fyi, we are kinda moving away from UDL, so this is fine. But optionally here or in followup it can die and use `uniffi` macros."
+    },
+    {
+     "ref": "review 5434324424 PR#7637",
+     "quote": "Nothing surprising here and we're moving towards proc-macros in general. I'm happy to merge this."
+    }
+   ]
+  },
+  {
+   "id": "new-component-scaffolding-matches-template",
+   "title": "New components must match the template: uniffi.toml keys, megazord registration, gradle, Cargo metadata",
+   "area": "deps-build",
+   "problem": "When adding a crate (db-crypto/encryption) reviewers had to spot missing megazord registration (ios-rust lib.rs / stub), missing `[bindings.swift] ffi_module_name`/`omit_checksums`, a build.gradle out of sync with tools/start-bindings/templates, edition 2024 vs 2021 and a missing `license`. Missing registration silently drops symbols from a megazord.",
+   "rule": "For every crate with a uniffi.toml: `[bindings.kotlin] package_name` and `omit_checksums = true`, `[bindings.swift] ffi_module_name = \"MozillaRustComponents\"` and `ffi_module_filename`; every UniFFI crate re-exported in megazords/full/src/lib.rs must also be re-exported in megazords/ios-rust/src/lib.rs (or be in an explicit allowlist); android/build.gradle must follow tools/start-bindings/templates/build.gradle (apply-from lines, `configurePublish(...)` args); Cargo.toml must set `license = \"MPL-2.0\"` and the workspace edition.",
+   "enforcement": "ci-script",
+   "detect": "Python CI script: glob components/**/uniffi.toml -> parse with tomllib and assert keys; parse `pub use (\\w+);` from megazords/full/src/lib.rs and megazords/ios-rust/src/lib.rs and diff the sets against an allowlist (e.g. fxcontainers desktop-only); diff each components/*/android/build.gradle against the template after normalizing component names; check Cargo.toml `[package]` has license and edition == most common edition in workspace (or `edition.workspace = true`). Consider replacing the hand-maintained UNIFFI_META symbol references with a generated list.",
+   "autofix": true,
+   "count": 8,
+   "severity": "medium",
+   "false_positive_risk": "low - structural checks with an allowlist",
+   "evidence": [
+    {
+     "ref": "inline 3796440443 PR#7542",
+     "quote": "I could be wrong but I guess we need a corresponding `ffi_encryption_uniffi_contract_version()` here: https://github.com/mozilla/application-services/blob/main/megazords/fenix-dylib/megazord_stub.c"
+    },
+    {
+     "ref": "inline 3796458509 PR#7542",
+     "quote": "guess we need ``` [bindings.swift] ffi_module_name = \"MozillaRustComponents\" ``` and the other modules all have ``` omit_checksums = true ```"
+    },
+    {
+     "ref": "inline 3796491547 PR#7542",
+     "quote": "... and then ``` configurePublish(appServicesGroupId, project.name, project.ext.description ``` See [the template](https://github.com/mozilla/application-services/blob/main/tools/start-bindings/templa"
+    },
+    {
+     "ref": "inline 3796556681 PR#7542",
+     "quote": "other crates have 2021, donno if we want to align this?"
+    },
+    {
+     "ref": "inline 3796560135 PR#7542",
+     "quote": "other crates have ``` license = \"MPL-2.0\" ```"
+    },
+    {
+     "ref": "review 4783659269 PR#7498",
+     "quote": "what I hate about this version is that it looks like every public api change is going to need an entry here which is going to regularly shoot people's toes off."
+    }
+   ]
+  },
+  {
+   "id": "ffi-layer-stays-thin",
+   "title": "Keep business logic out of the FFI layer; core modules must not depend on FFI types",
+   "area": "api-design",
+   "problem": "In ads-client the uniffi Object started owning workers/telemetry and core modules (worker, command) imported FFI types (`MozAds*`, `AdsClientApiResult`, `#[handle_error]`), creating cycles and making other bindings impossible.",
+   "rule": "In components that split `ffi`/`lib.rs` (UniFFI surface) from core modules, non-FFI modules must not import from `crate::ffi`, mention `MozAds*`/`*ApiResult` types, or use `#[handle_error]`/`#[uniffi::*]`; FFI objects should only translate types and hold the core client.",
+   "enforcement": "ast-grep/regex",
+   "detect": "Per-component config (e.g. ads-client: ffi = [src/lib.rs, src/ffi.rs, src/ffi/**]). ast-grep over other files: `use crate::ffi::$$$`, identifiers matching `^MozAds[A-Z]\\w*$`, `AdsClientApiResult`, attributes `#[handle_error($_)]`, `#[uniffi::$_]`, `#[derive($$$uniffi::$_$$$)]` -> error. Also flag `#[derive(uniffi::Object)]` structs whose fields include JoinHandle/worker/telemetry types (warn).",
+   "autofix": false,
+   "count": 5,
+   "severity": "medium",
+   "false_positive_risk": "low once the per-component ffi path list is configured",
+   "evidence": [
+    {
+     "ref": "inline 3798611843 PR#7531",
+     "quote": "I think `worker` shouldn't be owned by the FFI object here. My understanding is FFI's job should stay limited to uniffi/Arc/Mutex plumbing and breaking-change protection, not orchestrating a"
+    },
+    {
+     "ref": "inline 3993617900 PR#7597",
+     "quote": "I really don't like that we start adding business logic to the FFI object. It should be minimal and only be responsible of FFI concerns, not owning anything -> that's the role of the core"
+    },
+    {
+     "ref": "inline 3993606174 PR#7597",
+     "quote": "Hmmm, this is coupling. I don't think the background thread should know about `MozAdsClient` stuff. It should be solely responsible for managing the background thread. The client should be"
+    },
+    {
+     "ref": "inline 4124547029 PR#7597",
+     "quote": "`BackgroundWorker` shouldn't depend on the FFI layer (`MozAdsClientInner`, `AdsClientApiResult`, `#[handle_error]`). It can take `Arc<Mutex<AdsClient<T>>>` and return core errors instead, and let FFI"
+    },
+    {
+     "ref": "inline 4263176056 PR#7653",
+     "quote": "Is there a reason we've moved the telemetry being held within the AdsClient to the FFI/uniffi layer? I'm not opposed to it, but my understanding (esp. given recent lock changes) are we want to remove"
+    }
+   ]
+  },
+  {
+   "id": "foreign-callbacks-no-lock-and-clean-shutdown",
+   "title": "Never call or drop foreign callbacks while holding a lock; make shutdown complete and idempotent",
+   "area": "concurrency",
+   "problem": "UniFFI callback objects call into JS/Kotlin/Swift; swapping/dropping them under a Mutex risks deadlock if foreign code re-enters, and leaked callbacks crash Desktop at quit. Shutdown methods used `?` so later cleanup steps were skipped on the first error, and calling methods after shutdown could panic.",
+   "rule": "Calls on (and drops of) `Arc<dyn Trait>` where Trait is a UniFFI callback/foreign trait must happen after the guard is released (`let cb = guard.take(); drop(guard);`). `shutdown`/`close` methods must run every cleanup step even if one fails (collect errors), be idempotent, and later calls must return an error rather than panic. Document threading expectations (main thread/JS) on callback interfaces.",
+   "enforcement": "custom-lint",
+   "detect": "dylint: find traits annotated `#[uniffi::export(callback_interface)]`/`#[uniffi::export(with_foreign)]` or UDL `callback interface`/`[Trait, WithForeign]`; inside fns, if a `MutexGuard`/`RwLock*Guard` local is live and (a) a method of such a trait object is called, or (b) the guarded value of that type is overwritten/`take()`n and dropped in the same scope -> warn. ast-grep for fns named `shutdown|close|teardown|shutdown_*`: a `?` operator on a statement that is followed by further statements -> warn 'later cleanup skipped'.",
+   "autofix": false,
+   "count": 6,
+   "severity": "high",
+   "false_positive_risk": "medium - lock-liveness analysis needs MIR; ast-level version will over-report",
+   "evidence": [
+    {
+     "ref": "inline 3725537429 PR#7520",
+     "quote": "this is dropping the old inner, which is a uniffi call and quite possibly a call into JS - another option would be to use, say, an Option - eg, `Arc<RwLock<Option<Arc<dyn MozAdsTelemetry>>>>` (which"
+    },
+    {
+     "ref": "inline 3935109001 PR#7577",
+     "quote": "I always wonder about JS threading issues with these kinds of interfaces, especially since I don't really understand how IO works in JS. However, I think this design should be okay. The JS"
+    },
+    {
+     "ref": "review 4832833717 PR#7520",
+     "quote": "A risk that I anticipate is we can \"shutdown\" the client and then we get panic when we try to call it back whereas if we could just drop it there would be less risk of making a mistake. In theory"
+    },
+    {
+     "ref": "inline 3731376663 PR#7520",
+     "quote": "If that first call fail, the second one will never run. ```rs let db_result = self.client.shutdown_db(); self.telemetry.shutdown(); db_result ```"
+    },
+    {
+     "ref": "inline 3731393012 PR#7520",
+     "quote": "What happens in term of idempotency if you were to call that method twice? Would the second one fail?"
+    },
+    {
+     "ref": "inline 3693925736 PR#7520",
+     "quote": "nit: this feels similar to https://doc.rust-lang.org/std/ops/trait.Drop.html Maybe we could have some Shutdown trait, that could make things clearer?"
+    }
+   ]
+  },
+  {
+   "id": "handle-error-on-exported-apiresult-fns",
+   "title": "Exported functions returning ApiResult must use #[handle_error]; new components use error_support",
+   "area": "errors",
+   "problem": "Exported fns returning `ApiResult` without `#[handle_error(Error)]` bypass error conversion/reporting, and new components hand-rolled `uniffi::Error` enums instead of error_support, losing Glean error-ping reporting and dashboards.",
+   "rule": "Every exported function/method (in `#[uniffi::export]` impls/fns or listed in a UDL namespace/interface) whose return type is `ApiResult<..>`/`*ApiResult<..>` must have `#[handle_error(<InternalError>)]`. A crate exposing a `#[derive(uniffi::Error)]` enum must implement `error_support::GetErrorHandling` for its internal error.",
+   "enforcement": "uniffi-checker",
+   "detect": "syn visitor per crate: resolve type aliases named `*ApiResult`; for each `pub fn` inside `#[uniffi::export]` blocks or matching a UDL-declared name with such a return type, require attribute path ending in `handle_error`. Per crate: if any `uniffi::Error` derive / UDL `[Error]` exists and no `impl GetErrorHandling for` -> warn.",
+   "autofix": true,
+   "count": 2,
+   "severity": "high",
+   "false_positive_risk": "low - signature-based",
+   "evidence": [
+    {
+     "ref": "inline 3812432064 PR#7542",
+     "quote": "`#[handle_error(Error)]` here?"
+    },
+    {
+     "ref": "inline 3934849292 PR#7577",
+     "quote": "You might want to use the `error_support` crate for your errors. The main benefit is that you can report certain errors via the Glean error ping and get them plotted to a Grafana dashboard. This"
+    }
+   ]
+  },
+  {
+   "id": "no-from-impls-into-public-api-errors",
+   "title": "Don't add From<X> conversions into public *ApiError types",
+   "area": "errors",
+   "problem": "`impl From<DbCryptoApiError> for LoginsApiError` / `From<anyhow::Error> for ...ApiError` let errors reach the app without passing through `get_error_handling`, so error reporting and PII filtering are skipped.",
+   "rule": "Public `*ApiError` types may only be produced by `GetErrorHandling` (via `#[handle_error]`); the only allowed `From` into them is `uniffi::UnexpectedUniFFICallbackError`.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: `impl From<$X> for $E { $$$ }` where `$E` matches regex `ApiError$` and `$X` is not `uniffi::UnexpectedUniFFICallbackError` -> error. Also `impl From<anyhow::Error> for $E` anywhere in components/ -> warn.",
+   "autofix": false,
+   "count": 2,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 4039195467 PR#7542",
+     "quote": "Do we need this conversion? I'd rather if everything always went through the `get_error_handling` method above. That way we can be sure that the error reporting code kicks in."
+    },
+    {
+     "ref": "inline 4039274899 PR#7542",
+     "quote": "Is this one still needed after the refactor?"
+    }
+   ]
+  },
+  {
+   "id": "precise-error-enums",
+   "title": "Keep error enums precise: exhaustive get_error_handling, distinct messages, no one-off variants",
+   "area": "errors",
+   "problem": "Reviewers asked for specific error variants instead of a catch-all (`NoCachedToken` reused for impossible/server cases), argued that `get_error_handling` should not use `_ =>` so new variants force a decision, flagged two variants with identical `#[error(\"CryptoError({0})\")]` messages, and removed variants used in a single benchmark path.",
+   "rule": "In `fn get_error_handling` match every internal variant explicitly (no wildcard arm); every `#[error(\"...\")]` string within one enum must be unique; impossible branches use `unreachable!()` with a comment rather than a generic error variant.",
+   "enforcement": "custom-lint",
+   "detect": "Apply clippy `wildcard_enum_match_arm` (restriction) only inside `impl GetErrorHandling` blocks (dylint wrapper or `#[deny(clippy::wildcard_enum_match_arm)]` on the fn, enforced by an ast-grep check that the attribute is present). Regex per thiserror enum: collect `#[error(\"...\")]` literals, report duplicates.",
+   "autofix": false,
+   "count": 4,
+   "severity": "low",
+   "false_positive_risk": "medium - wildcard arms are sometimes deliberately kept; reviewers disagreed in one thread",
+   "evidence": [
+    {
+     "ref": "inline 2956431057 PR#7274",
+     "quote": "Hmm. Previously we were using `_` as a universal trap for any unhandled error state. While this change now explicitly handles the two, previously unhandled states, it essentially doesn't raise a"
+    },
+    {
+     "ref": "inline 4039176537 PR#7542",
+     "quote": "Maybe this could message could be `JwCryptoError` so that we can distinguish the two better. I don't have strong feelings either way though."
+    },
+    {
+     "ref": "review 4113827058 PR#7320",
+     "quote": "My only suggestion is maybe we could get rid of `NoCachedToken` entirely and replace it with more specific errors. Looking through the code I see 2 remaining uses: - [We don't have a refresh token"
+    },
+    {
+     "ref": "inline 2800676901 PR#7186",
+     "quote": "If this is the only place where we're returning `MissingRecords`, then I don't think we need a new variant for it. I think it's safe to just call `unwrap()`, since `get_records` should always return"
+    }
+   ]
+  },
+  {
+   "id": "dont-swallow-errors",
+   "title": "Don't silently discard errors (`let _ =`, `.ok()` in filter_map, parse fallbacks)",
+   "area": "errors",
+   "problem": "Errors were repeatedly dropped: `let _ = cmd.output()`, `filter_map(|v| serde_json::from_value(v).ok())` omitting rows with no telemetry, `serde_json::from_str(..).unwrap_or(fallback)`, mapping every failure to one opaque error, returning `Ok(0)`/`Ok(())` when required input/data is missing. This hides real bugs and data problems.",
+   "rule": "In non-test code a `Result` must be propagated with `?`, mapped with context, or explicitly reported (`report_error!`/telemetry/`warn!`) with a comment explaining why it is ignored. Disallow `let _ = <Result>`, `.ok()` inside `filter_map` on deserialization, `unwrap_or*` directly on a parse result, and `map_err(|_| ...)` that discards the source.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `let_underscore_must_use = \"warn\"`, `map_err_ignore = \"warn\"`, `let_underscore_untyped = \"warn\"`. Plus ast-grep rules (non-test files): `$I.filter_map(|$V| $E.ok())`, `serde_json::from_$F($$$).ok()`, `serde_json::from_$F($$$).unwrap_or($$$)`, `serde_json::from_$F($$$).unwrap_or_default()`, `let _ = $E.output()`; allow when preceded by a `// ignore:` comment.",
+   "autofix": false,
+   "count": 9,
+   "severity": "high",
+   "false_positive_risk": "medium - some ignores are intentional (best-effort cleanup); require a justification comment rather than banning outright",
+   "evidence": [
+    {
+     "ref": "inline 2713377350 PR#7173",
+     "quote": "If this returns an Error we should still propagate it. ```suggestion self.exe()?.args([\"logcat\", \"-c\"]).output()?; ```"
+    },
+    {
+     "ref": "inline 4077116869 PR#7618",
+     "quote": "I'm not opposed to the `ok()` and `filter_map` handling around here, but it can hide errors. I think we probably want to return an error here if `serde_json::from_value(v)` returns an error rather"
+    },
+    {
+     "ref": "inline 4077153200 PR#7618",
+     "quote": "See here vis-a-vis earlier comment: if any internal row gets caught and skipped with `filter_map`, the error telemetry should still be sent for it IMO."
+    },
+    {
+     "ref": "inline 4103960593 PR#7576",
+     "quote": "This masks all errors, maybe you could align with logins and propagate the underlying error?"
+    },
+    {
+     "ref": "inline 4103875892 PR#7576",
+     "quote": "I'm not sure about the fallback here, logins throw if the json is not parseable. And we don't reuse the old `cc_number_enc` value, so there's no need for this fallback, isn't it?"
+    },
+    {
+     "ref": "inline 3076197574 PR#7317",
+     "quote": "Is there ever a scenario where we wouldn't get the sessionToken? I see `NoSessionToken` below for pw change but here we still return success even if no `sessionToken`?"
+    }
+   ]
+  },
+  {
+   "id": "no-panics-reachable-from-ffi",
+   "title": "No panics reachable from the FFI: fallible constructors return ApiResult, trait defaults don't panic",
+   "area": "errors",
+   "problem": "Store factories returned `Arc<Store>` and would panic on init failure, the sync15 `set_local_encryption_key` default implementation panics so removing an override crashes, a GUID sanity assertion panicked the uploader, and a shut-down client could panic on later calls. Panics across UniFFI crash the host app.",
+   "rule": "Exported constructors/factory functions that can fail must return `ApiResult<..>` (UDL `[Throws=...]`); default methods of shared traits (SyncEngine etc.) must not `panic!/unimplemented!/todo!`; sanity checks on data coming from storage/server use errors or `debug_assert!`, not `assert!`/`expect`; no `unwrap()`/`expect()` in non-test code without a `// SAFETY/INVARIANT:` comment.",
+   "enforcement": "existing-clippy",
+   "detect": "clippy.toml: `allow-unwrap-in-tests = true`, `allow-expect-in-tests = true`, `allow-panic-in-tests = true`; `[workspace.lints.clippy]`: `unwrap_used`, `expect_used`, `panic`, `unimplemented`, `todo` = \"warn\" (ratchet with a baseline). Custom uniffi-checker: `#[uniffi::constructor]` or UDL constructor/namespace fn returning non-Result whose body contains `unwrap`/`expect`/`?`-less fallible calls -> error. ast-grep: trait method default bodies containing `panic!($$$)|unimplemented!($$$)` in components/sync15 -> error.",
+   "autofix": false,
+   "count": 4,
+   "severity": "high",
+   "false_positive_risk": "medium - baseline needed for existing unwraps; invariant unwraps need annotation",
+   "evidence": [
+    {
+     "ref": "inline 4103722799 PR#7573",
+     "quote": "I know this is what logins does, but `ApiResult<Arc<Store>>` might be better to not panic on initialization."
+    },
+    {
+     "ref": "inline 4103699936 PR#7573",
+     "quote": "The [default implementation panics](https://github.com/mozilla/application-services/blob/e3d63fcb445b47af0aeacd433a8e970a8cf09171/components/sync15/src/engine/sync_engine.rs#L162) - I think we had"
+    },
+    {
+     "ref": "inline 3626846682 PR#7491",
+     "quote": "sorry you are hitting this. I'm not sure of the entire context here, but this assertion was really more a sanity check for our code - ie, the server *will* accept anything as a GUID. This means that"
+    },
+    {
+     "ref": "review 4832833717 PR#7520",
+     "quote": "Just curious but what would happen if we drop the client in HNT? Like if we do something like `delete AdsClient.instance` in JS code. Would that call `Drop` trait? A risk that I anticipate is we can"
+    }
+   ]
+  },
+  {
+   "id": "checked-arithmetic-on-timestamps-and-config-values",
+   "title": "Use checked/saturating arithmetic for timestamps and divisors",
+   "area": "time",
+   "problem": "A TTL check computed `inserted_at - now` on u64 seconds, which panics on underflow in debug builds (and wraps in release); a dashboard generator divided by a config value that could be 0.",
+   "rule": "Subtraction on integer timestamps/sizes must use `saturating_sub`/`checked_sub` or typed `Instant::elapsed()`/`Duration` APIs; division by values not proven non-zero must be guarded.",
+   "enforcement": "existing-clippy",
+   "detect": "Enable clippy `arithmetic_side_effects` (restriction) and `integer_division` for components/*/src with `arithmetic-side-effects-allowed` tuned in clippy.toml, plus `unchecked_duration_subtraction`/`unchecked_time_subtraction`. Cheaper ast-grep heuristic: binary `$A - $B` where an operand identifier matches `/(time|timestamp|_at$|_ms$|_secs?$|now|age)/i` -> warn suggesting `saturating_sub`/`Instant::elapsed`.",
+   "autofix": true,
+   "count": 2,
+   "severity": "high",
+   "false_positive_risk": "high for arithmetic_side_effects workspace-wide; scope it to cache/ttl/rate-limit modules or use the heuristic",
+   "evidence": [
+    {
+     "ref": "inline 3798677745 PR#7531",
+     "quote": "I think this is backwards: - `t=1000`: we cache an image ad for placement `\"a\"` → stored as `(\"a\", (1000, ad))`. - `t=1100`: we prefetch an image ad for placement `\"b\"` → `cache_ads` is called with"
+    },
+    {
+     "ref": "inline 2636448672 PR#7123",
+     "quote": "Are there scenarios where amount could be 0 here? Is there a way to avoid a divide-by-0?"
+    }
+   ]
+  },
+  {
+   "id": "deliberate-clock-handling",
+   "title": "Choose clock sources deliberately and handle clock skew / pre-epoch errors explicitly",
+   "area": "time",
+   "problem": "Rate limiting and recheck timers used wall-clock `SystemTime`, with unexplained fall-through on `duration_since(UNIX_EPOCH)` errors; locally generated timestamps were stored and synced with absurd values; reviewers asked for server time or validation/clamping.",
+   "rule": "Intervals, TTLs and rate limits use `Instant`/monotonic time or an injectable clock; any `SystemTime::now().duration_since(UNIX_EPOCH)` error branch must be handled with a comment; timestamps persisted or synced (logins/autofill) must pass through the shared validation/clamp helper.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: `SystemTime::now()` inside fns/types named `*rate*|*limit*|*ttl*|*expire*|*recheck*|*interval*` -> warn; `if let Ok($_) = $X.duration_since($Y) { $$$ }` without else, or `Err(_) => {}` arms -> warn 'document skew handling'; in components/logins|autofill, writes to `time_*`/`*_time` columns not via the clamp helper -> warn.",
+   "autofix": false,
+   "count": 4,
+   "severity": "medium",
+   "false_positive_risk": "medium - heuristic naming match",
+   "evidence": [
+    {
+     "ref": "inline 2672883442 PR#7139",
+     "quote": "@bendk This is really in the weeds but out of (morbid) curiousity are we expecting the time since the last report was checked to be wall clock time more often than not?"
+    },
+    {
+     "ref": "inline 3925916622 PR#7564",
+     "quote": "b) IIUC, `duration_since` will only error if `now()` is before the epoch. The current code will skip the recheck which seems fine, but can you add a comment explaining that?"
+    },
+    {
+     "ref": "review 5069574295 PR#7568",
+     "quote": "I'd rather use the server time if we could, since local clocks can have all kinds of weird behavior. I think that could be done during sync, probably [right"
+    },
+    {
+     "ref": "review 5130690098 PR#7585",
+     "quote": "That's slick! At this point let's introduce timestamp validation, similar to https://github.com/mozilla/application-services/blob/c0877e1f5293602d80379cff9be860c0ad236e61/components/logins/src/db.rs#L"
+    }
+   ]
+  },
+  {
+   "id": "typed-units-for-durations-and-sizes",
+   "title": "Represent durations and sizes with Duration/ByteSize, or make the unit explicit in the name",
+   "area": "time",
+   "problem": "Fields like `dismissed_at: i64`, `batch_interval_ms: Option<u64>`, a channel `buffer_size = 10000` and date strings left consumers guessing the unit; reviewers asked for `Duration`, the `ByteSize` struct or unit-bearing names (`time_` prefix convention), but not redundant names like `batch_interval_duration: Duration`.",
+   "rule": "Durations are `std::time::Duration` (supported by UniFFI), byte sizes `ByteSize`; when a raw integer is unavoidable in an exported Record (timestamps), use the repo convention (`time_*` millis since epoch) and document the unit; don't repeat the type in the name.",
+   "enforcement": "custom-lint",
+   "detect": "syn checker: struct fields/fn params of integer type whose name matches `/_(ms|millis|secs|seconds|ns|interval|ttl|timeout)$/` -> suggest Duration; `/_(size|bytes|max_size)$/` -> suggest ByteSize; exported Record integer fields named `*_at`/`*date*` without `time_` prefix -> warn; field of type `Duration` named `*_duration` -> nit.",
+   "autofix": false,
+   "count": 5,
+   "severity": "low",
+   "false_positive_risk": "medium - DB column mirrors and serde wire structs legitimately use integers; skip structs deriving Deserialize from server payloads",
+   "evidence": [
+    {
+     "ref": "inline 3110869225 PR#7312",
+     "quote": "Nit: Could be useful to indicate a unit here, e.g. ```suggestion pub dismissed_at_unixtime: i64, ``` (Because I just passed in a `Date.now()` on the JS side, but I wasn't actually confident that"
+    },
+    {
+     "ref": "inline 3993593579 PR#7597",
+     "quote": "I need to dig that, I am not sure how buffer size work but I would maybe explain in the comment why we think \"10000\" is a good idea. Also, if it's in bytes, we could maybe use the `Byte` struct"
+    },
+    {
+     "ref": "inline 4274059949 PR#7597",
+     "quote": "Could be a Duration directly. Also not sure if this needs to be an Option. The default to 100ms could happen in the AdsClient part directly, also it would be easier to track. So basically"
+    },
+    {
+     "ref": "inline 3173422386 PR#7345",
+     "quote": "non blocking but lets update these dates to use something like Duration::from_secs"
+    },
+    {
+     "ref": "inline 4379370428 PR#7597",
+     "quote": "nit: I don't see why we need to repeat `duration` in the variable name if it's already in the type"
+    }
+   ]
+  },
+  {
+   "id": "sql-upgrades-use-frozen-schema",
+   "title": "Schema upgrade functions must not execute the live CREATE_SHARED_SCHEMA_SQL",
+   "area": "sql",
+   "problem": "places upgrade functions executed the current `CREATE_SHARED_SCHEMA_SQL`, so later schema edits silently change what old migrations do and required defensive 'already applied?' checks. Reviewer asked to freeze the SQL each upgrade runs (sql/legacy/create_shared_schema_v20.sql).",
+   "rule": "Code inside `upgrade_from*`/`migrate*` functions may only run SQL frozen for that version (inline literals or `sql/legacy/*_vN.sql`), never the live schema constant, unless that SQL is purely idempotent `CREATE ... IF NOT EXISTS` and the call is marked as such.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep over components/*/src/**/schema.rs: within `fn $F($$$)` where `$F` matches `/^(upgrade|migrate)/`, flag references to identifiers matching `/CREATE_.*SCHEMA.*_SQL/`, calls `create_shared_schema(`, `create(` of the initializer, or `include_str!(\"$P\")` where `$P` does not contain `legacy`/`migrations`/`v\\d+`. Allow with `// idempotent-schema` comment.",
+   "autofix": false,
+   "count": 2,
+   "severity": "high",
+   "false_positive_risk": "medium - some components (autofill) intentionally re-run idempotent CREATE IF NOT EXISTS; reviewers suggested that in another thread",
+   "evidence": [
+    {
+     "ref": "inline 3707390937 PR#7521",
+     "quote": "IIUC, this check is required because previous schema upgrades execute `CREATE_SHARED_SCHEMA_SQL` which means they might have already ran this upgrade. This seems dangerous to me, since it means"
+    },
+    {
+     "ref": "review 4848208675 PR#7521",
+     "quote": "The new code looks great to me. My only concern is that it continues to handle `CREATE_SHARED_SCHEMA_SQL` like previous upgrades did. Maybe now is a good time to break the pattern."
+    }
+   ]
+  },
+  {
+   "id": "sql-schema-bump-needs-upgrade-test-and-backfill",
+   "title": "Schema version bumps need an upgrade test and an explicit backfill decision",
+   "area": "sql",
+   "problem": "Logins/places/nimbus schema changes landed without an upgrade test from an older schema, a new table was created without populating it from existing flagged rows (broken invariant), a separate migration SQL file risked drifting from the create SQL, and an off-by-one (`>= 2` vs `> 2`) slipped into a migration condition.",
+   "rule": "When `VERSION`/`DB_VERSION` changes or an `upgrade_from_vN` is added: the same PR must add/extend an upgrade test that opens a DB created with an older schema (e.g. suggest's `test_all_upgrades`/schema-compare pattern), and any new table/column derivable from existing data must be backfilled or carry a comment explaining why not.",
+   "enforcement": "ci-script",
+   "detect": "CI: if the diff touches `const (DB_)?VERSION` or adds `fn upgrade_from_v\\d+`/`=> ` arm in an upgrade match in components/<c>/src/**/schema.rs (or nimbus persistence.rs), require the diff to also modify a test in the same component matching `/upgrade|migrat/`; else fail. Heuristic warn: upgrade arm containing `CREATE TABLE`/`ADD COLUMN` but no `INSERT INTO`/`UPDATE` and no `// no backfill:` comment. Encourage a shared `sql_support::open_database::test_utils::MigratedDatabaseFile` + schema-equality test for every component.",
+   "autofix": false,
+   "count": 5,
+   "severity": "high",
+   "false_positive_risk": "low for the test requirement, medium for the backfill heuristic",
+   "evidence": [
+    {
+     "ref": "inline 2636389015 PR#7127",
+     "quote": "Now's probably a good time to add a schema upgrade test like the one suggest has: https://github.com/mozilla/application-services/blob/eea8d807a5d4c19bacf8682986f03b661c704115/components/suggest/src/s"
+    },
+    {
+     "ref": "inline 2728419052 PR#7155",
+     "quote": "I would expect this to populate the `breachesL` table. Maybe you can skip it since the feature hasn't been used in the wild? If so, please add a comment explaining that."
+    },
+    {
+     "ref": "review 3707397885 PR#7155",
+     "quote": "I'm going to re-flag this as requested changes based on the issues raised in my last comment."
+    },
+    {
+     "ref": "inline 2855567766 PR#7245",
+     "quote": "wait, why are we resetting when version == 2?"
+    },
+    {
+     "ref": "inline 3456242527 PR#7440",
+     "quote": "Do we need this migration, or can we just re-execute create_shared_schema? That would avoid needing the test for them drifting too. I'm not sure why the others weren't done that way, but that's the"
+    }
+   ]
+  },
+  {
+   "id": "persisted-type-change-needs-bw-compat-test",
+   "title": "Changes to types persisted in the Nimbus DB need a bw-compat test (and maybe a migration); never edit frozen fixtures",
+   "area": "serde",
+   "problem": "Nimbus enrollment types are stored as JSON in rkv; changing their shape without a backward-compat test/migration corrupts or discards enrollments. A PR edited the JSON of an existing bw-compat test marked 'Do not change', and warning comments pointed at a test module that does not exist.",
+   "rule": "Diffs that modify a type carrying the `⚠️ Attention : Changes to this type should be accompanied by a new test` marker (or any Serialize+Deserialize type stored via rkv/sqlite) must add a new test in src/tests/test_enrollment_bw_compat.rs; existing fixture JSON after `⚠️ Warning : Do not change the JSON data used by this test. ⚠️` must not change; module/file paths referenced in those warnings must exist.",
+   "enforcement": "ci-script",
+   "detect": "CI diff script: find hunks inside items preceded by the Attention marker -> require added (not modified) `#[test]` fns in components/nimbus/src/tests/test_enrollment_bw_compat.rs. Fail on any modified/removed line inside a fixture block following the 'Do not change the JSON data' marker. Grep marker comments for backticked paths/`mod name` and verify they resolve.",
+   "autofix": false,
+   "count": 4,
+   "severity": "high",
+   "false_positive_risk": "low - marker-based",
+   "evidence": [
+    {
+     "ref": "review 4338812604 PR#7367",
+     "quote": "All changes to types that are serialized to the database require tests and (in this case) a migration"
+    },
+    {
+     "ref": "inline 3282813440 PR#7367",
+     "quote": "There is a line above this that says: ```rs // ⚠️ Warning : Do not change the JSON data used by this test. ⚠️ ``` This test as written is not very useful. It should instead be re-written (with the"
+    },
+    {
+     "ref": "inline 2603370436 PR#7122",
+     "quote": "There is no mod test_schema_bw_compat in this file. I assume you cargo-culted this from `enrollment.rs` which also does not have that mod statement. The actual tests are in"
+    },
+    {
+     "ref": "inline 2635971824 PR#7122",
+     "quote": "This comment should also be on PreviousState"
+    }
+   ]
+  },
+  {
+   "id": "migration-tests-use-version-constants",
+   "title": "Migration tests should assert DB_VERSION, not hardcoded version numbers",
+   "area": "tests",
+   "problem": "Bumping the Nimbus DB to v4 required editing a dozen tests that hardcoded `Some(3)`/`migrated_version: Some(3)` and names like `test_migrate_db_v2_to_v3_*`; the reviewer asked for constants and version-neutral names so the next bump only touches the new migration test.",
+   "rule": "In tests, compare the post-migration version against `DB_VERSION`/`VERSION` and name tests `test_migrate_db_from_vN_*`.",
+   "enforcement": "ast-grep/regex",
+   "detect": "Regex over components/**/tests/**/*.rs and `#[cfg(test)]` modules: `DB_KEY_DB_VERSION\\)\\?,\\s*Some\\(\\d+u?\\d*\\)`, `migrated_version:\\s*Some\\(\\d+\\)`, `get::<u16, _>\\(&reader, DB_KEY_DB_VERSION\\)\\?,\\s*Some\\(\\d+\\)`, `fn test_migrate_db_v\\d+_to_v\\d+`, `user_version.*Some\\(\\d+\\)`. Autofix: replace the literal with `DB_VERSION` when it equals the current constant.",
+   "autofix": true,
+   "count": 13,
+   "severity": "low",
+   "false_positive_risk": "low - only literal equal to current DB_VERSION is flagged",
+   "evidence": [
+    {
+     "ref": "inline 3375576943 PR#7367",
+     "quote": "```suggestion // Check the database was upgraded to latest version assert_eq!(db.get(StoreId::Meta, DB_KEY_DB_VERSION)?, Some(DB_VERSION)); ```"
+    },
+    {
+     "ref": "inline 3375577581 PR#7367",
+     "quote": "```suggestion migrated_version: Some(DB_VERSION), ```"
+    },
+    {
+     "ref": "inline 3375578449 PR#7367",
+     "quote": "```suggestion fn test_migrate_db_from_v2_user_opted_out() -> Result<()> { ``` Lets change the wording and use constants so that we don't have to update everything (except the new migration event) for"
+    },
+    {
+     "ref": "inline 3375584188 PR#7367",
+     "quote": "Same here. ```suggestion fn test_migrate_db_from_v2_user_opted_in() -> Result<()> { ```"
+    },
+    {
+     "ref": "inline 3375590900 PR#7367",
+     "quote": "```suggestion assert_eq!(meta.get::<u16, _>(&reader, DB_KEY_DB_VERSION)?, Some(DB_VERSION)); ```"
+    },
+    {
+     "ref": "inline 3375594188 PR#7367",
+     "quote": "```suggestion migrated_version: Some(DB_VERSION), ```"
+    }
+   ]
+  },
+  {
+   "id": "sqlite-pragma-changes-need-review",
+   "title": "Flag new/changed PRAGMA and VACUUM calls for locking/startup impact",
+   "area": "sql",
+   "problem": "Changing `wal_checkpoint(PASSIVE)` to `TRUNCATE` (blocks other connections) and running `PRAGMA auto_vacuum` + `VACUUM` in a function named init_new_database needed careful review; skipping unneeded schema-version writes avoided a startup checkpoint.",
+   "rule": "Any added/changed `PRAGMA` or `VACUUM` statement in components/support/sql or component DB code requires a comment stating its locking/IO cost and a reviewer from sql-support owners; blocking checkpoint modes (TRUNCATE/RESTART/FULL) need explicit justification.",
+   "enforcement": "ci-script",
+   "detect": "CI: `git diff -U0` lines matching `/PRAGMA\\s+\\w+|\\bVACUUM\\b/i` in *.rs/*.sql -> request sql-support CODEOWNERS review and post a checklist comment; regex `wal_checkpoint\\((TRUNCATE|RESTART|FULL)\\)` -> warn.",
+   "autofix": false,
+   "count": 3,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 3864297325 PR#7561",
+     "quote": "I'm a little nervous about making this change since `TRUNCATE` may block other connections. But on the other hand, this is for credit cards so most users will only have a handful of those records. Is"
+    },
+    {
+     "ref": "inline 3954803419 PR#7583",
+     "quote": "this does seem a little odd - a fn called `init_new_database()` that then talks about \"*if* the db is empty\". Maybe rename the function something like `init_for_[future_?]maintenance` or similar?"
+    },
+    {
+     "ref": "review 3639953081 PR#7149",
+     "quote": "Now that this small write transaction is saved if the DB schema is already up to date, do we still need to manually checkpoint the WAL after large write transactions on Android?"
+    }
+   ]
+  },
+  {
+   "id": "no-data-deletion-in-read-paths",
+   "title": "Don't delete user data from read/decrypt paths; gate destructive recovery explicitly",
+   "area": "sql",
+   "problem": "Wiping individual logins inside `decrypt_fields` gave a read method a persistent side effect, could leave the DB half-repaired if the key is globally unavailable, forced a full resync, and the autofill scrub would delete everything when a user merely cancels a primary-password prompt.",
+   "rule": "Functions on read/decrypt paths (`decrypt*`, `get*`, `list*`, `count*`, `find*`) must not call wipe/delete/scrub helpers or execute DELETE; destructive recovery must live in an explicitly named maintenance API, behind a documented feature flag, with a comment describing which failures are treated as permanent.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep over components/{logins,autofill,places,tabs}/src: fn name matches `/^(decrypt|get|list|count|find|fetch)/` and body contains call `$X.(wipe|delete|scrub)$_($$$)` or string literal matching `/^\\s*DELETE\\s+FROM/i` -> error. CI: any new `DELETE FROM`/`scrub_` call site in logins/autofill requires a `data-loss-reviewed` label.",
+   "autofix": false,
+   "count": 5,
+   "severity": "high",
+   "false_positive_risk": "low - read-path naming is consistent in these crates",
+   "evidence": [
+    {
+     "ref": "review 4241276846 PR#7343",
+     "quote": "I'm still not entirely convinced wiping is the right thing to do here - I recall we started a discussion but don't remember it concluding - I think we agreed to rope in the credentials management"
+    },
+    {
+     "ref": "inline 3217495261 PR#7343",
+     "quote": "I'm not sure if deleting individual entries during `decrypt_fields` is the right place to do this. If the decryption error is caused by a corrupted or unavailable key, I would expect this to affect"
+    },
+    {
+     "ref": "review 4261911974 PR#7343",
+     "quote": "`decrypt_fields` now has a permanent side effect. This makes the function harder to understand, since it no longer just decrypts fields and reports errors, but also modifies local storage and affects"
+    },
+    {
+     "ref": "inline 4103665151 PR#7573",
+     "quote": "This is kinda dangerous - together with the NSSKeyManager this would scrub everything also when the user cancels a PrP prompt. This is not used on desktop and with the NSSKeyManager, but worth adding"
+    },
+    {
+     "ref": "inline 3217414652 PR#7343",
+     "quote": "Does this mean we re-sync all logins after a wipe of a single login?"
+    }
+   ]
+  },
+  {
+   "id": "remote-data-new-fields-tolerate-absence",
+   "title": "Fields added to types deserialized from server/sync/remote-settings data must tolerate absence",
+   "area": "serde",
+   "problem": "Adding `private: bool` to a send-tab payload without `#[serde(default)]` would reject commands from older devices; a new required `suggestion_id` in remote-settings records risks deserialization failures that are silently swallowed; a missing meta/global `declined` was read as 'nothing declined' (enabling everything); empty-string sentinels were used instead of Option.",
+   "rule": "In Deserialize types fed by other clients/servers (sync payloads, RS records, HTTP responses, persisted state), newly added fields must be `Option<_>` or `#[serde(default)]`; when 'missing' and 'empty' mean different things use `Option` (not a defaulted Vec/String); prefer `Option<String>` + `skip_serializing_if = \"Option::is_none\"` over `String` + `String::is_empty`.",
+   "enforcement": "custom-lint",
+   "detect": "CI diff + syn: for structs deriving `Deserialize` under paths matching `/(sync|payload|rs\\.rs|records?|response|mars|state_persistence|incoming)/`, any field added in this PR whose type is not `Option<..>` and lacks `#[serde(default...)]` -> error. ast-grep: `#[serde(skip_serializing_if = \"String::is_empty\")]` / `\"Vec::is_empty\"` -> suggest Option.",
+   "autofix": false,
+   "count": 5,
+   "severity": "high",
+   "false_positive_risk": "medium - some fields are guaranteed by a versioned server contract (reviewers accepted required suggestion_id after discussion)",
+   "evidence": [
+    {
+     "ref": "inline 2652108196 PR#7133",
+     "quote": "We don't need a `#[serde(default)]` here right? It looks like we'll just modify the public APIs to default to false but include it"
+    },
+    {
+     "ref": "inline 3817009169 PR#7554",
+     "quote": "Are we already forwarding this to all users? If not this will probably need to be an Option to avoid a deserialization error if a client doesn't receive a `suggestion_id`"
+    },
+    {
+     "ref": "inline 3817015066 PR#7554",
+     "quote": "Same comment as above as to whether we think this should be an Option or not"
+    },
+    {
+     "ref": "inline 4253690222 PR#7651",
+     "quote": "Should we potentially make this an `Option<Vec<String>>` so that we don't read a missing entry as `nothing declined` and enable everything in the future? I think desktop won't have this issue cause"
+    },
+    {
+     "ref": "inline 4253583225 PR#7647",
+     "quote": "It would be ideal if we swapped this to a `Option<String>` and the the skip condition is `Option::is_none`"
+    }
+   ]
+  },
+  {
+   "id": "remote-enums-need-safe-unknown-variant",
+   "title": "Enums deserialized from remote config need an explicit Unknown catch-all that matches nothing",
+   "area": "serde",
+   "problem": "search-config enums had no `#[serde(other)]` fallback, so adding a new value would break already-shipped clients; a later fix mapped `#[serde(other)]` onto a real variant (`FirefoxWin`), which would ship engines meant for a new application to Windows users.",
+   "rule": "Every enum deriving Deserialize from remote-settings/search/suggest/nimbus configuration must have a dedicated `Unknown` (or `Other(String)`) variant with `#[serde(other)]`; that variant must not be `#[default]` for a real value and matching/filtering logic must treat it as no-match (with a test).",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep over components/{search,remote_settings,suggest,nimbus}/src: `#[derive($$$Deserialize$$$)] enum $E { $$$ }` with no variant carrying `#[serde(other)]` -> error (allowlist closed enums); variant carrying `#[serde(other)]` whose name is not `/^(Unknown|Other|Unrecognized)/` or that also has `#[default]` -> error.",
+   "autofix": false,
+   "count": 5,
+   "severity": "high",
+   "false_positive_risk": "medium - some enums are intentionally strict (reviewers sometimes prefer strictness)",
+   "evidence": [
+    {
+     "ref": "review 4610583463 PR#7451",
+     "quote": "As discussed elsewhere, the fix here is correct, however due to our lack of fallback (`#[serde(other)]`), this won't work for existing clients that have already been shipped. I think we should delay"
+    },
+    {
+     "ref": "inline 4246400950 PR#7645",
+     "quote": "**Question:** Could you clarify the `#[serde(other)]` fallback? For example, if a future config update has \"applications\": [\"firefox-new\"], would older clients parse that as firefox-win? And would"
+    },
+    {
+     "ref": "review 5488751903 PR#7645",
+     "quote": "it looks like unknown config values would fall back to a known value, which could cause engines to be shown to the wrong users? Happy to approve once this is clarified. The rest of my comments are"
+    },
+    {
+     "ref": "review 5508691810 PR#7645",
+     "quote": "Thanks for fixing the unknown application issue! I'm wondering if `SearchDeviceTypeV3` and `SearchUpdateChannelV3` might have the same issue, since they also fall back to `None` and `Default`. Would"
+    },
+    {
+     "ref": "inline 3046230785 PR#7268",
+     "quote": "For the enums here and `MozAdsReportReason`, how likely or if it is possible for MARS to add additional report reasons down the road? I'm curious if adding an `Other(String)` to accommodate such"
+    }
+   ]
+  },
+  {
+   "id": "no-pii-in-errors-logs-and-reports",
+   "title": "Never put URLs, origins or user data in error messages, logs or error reports",
+   "area": "logging-privacy",
+   "problem": "Error messages for invalid logins were extended and had to be checked for URL/origin content (PII); reporting large viaduct downloads via error reporting risked leaking URLs that may contain PII; code needed explicit 'don't log the input string' care.",
+   "rule": "`#[error(...)]` formats, `log`/`tracing` macros, `report_error!` and breadcrumbs must not interpolate values named/typed as url, origin, host, username, password, email, query or form fields; use error kinds (`url::ParseError` is fine) or redacted forms.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: macro calls `(trace|debug|info|warn|error|report_error|breadcrumb)!($$$ARGS)` where ARGS contain identifiers/fields matching `/(url|uri|origin|host|username|password|email|query|form_action)/i` or format strings with `{url}`-style inline captures -> warn; thiserror `#[error(\"...{0}...\")]` on variants whose field type is `Url`/`String` named like the above -> warn; `Error::$V($X.to_string())` where `$X: Url` -> warn.",
+   "autofix": false,
+   "count": 2,
+   "severity": "high",
+   "false_positive_risk": "medium - some fields named url are non-PII constants (endpoints); allowlist",
+   "evidence": [
+    {
+     "ref": "inline 2577339687 PR#7110",
+     "quote": "This is good as long as the new messages contain strings like this and won't contain the URL or the origin. The latter is PII, which requires more scrutiny. I took a quick look through"
+    },
+    {
+     "ref": "review 5273231807 PR#7610",
+     "quote": "this seems slightly worrying if we later use viaduct for urls that may have pii, and it also seems like we are kinda abusing error reporting to record what it really just telemetry, but maybe we can"
+    }
+   ]
+  },
+  {
+   "id": "one-lock-acquisition-per-operation",
+   "title": "Do related reads/writes under a single lock acquisition; don't lock inside loops",
+   "area": "concurrency",
+   "problem": "RemoteSettingsService read the config under one lock and registered the client under another, so `update_config()` could interleave and leave a client with stale config (race found in two review rounds); error_tracing took the global lock in pieces; nimbus re-opened a DB writer per loop iteration.",
+   "rule": "Within one function, the same Mutex/RwLock must not be acquired more than once for a logically atomic operation (group state into one struct behind one short-lived lock); do not take a lock or DB write transaction inside a loop body when it can be hoisted.",
+   "enforcement": "custom-lint",
+   "detect": "dylint/ast-grep: in a fn body, two or more `$R.lock()`/`$R.read()`/`$R.write()` calls on the same receiver expression (e.g. `self.state`) or calls to two different `&self` helper methods that each lock the same field -> warn 'check-then-act race'; `.lock()`/`db.write()`/`unchecked_transaction()` inside `for|while|loop` -> warn.",
+   "autofix": false,
+   "count": 5,
+   "severity": "high",
+   "false_positive_risk": "medium - sequential independent locks are sometimes fine",
+   "evidence": [
+    {
+     "ref": "inline 3587318758 PR#7474",
+     "quote": "Could `make_client()` race with `update_config()` here? `clone_config()` releases the config lock before this client is added to clients. If `update_config()` runs between these calls,"
+    },
+    {
+     "ref": "review 4704162456 PR#7474",
+     "quote": "I think we have to(please double check) combine creating the config and registering the client into one operation not to get out of sync. We can keep `sync_client` separate not to be blocking."
+    },
+    {
+     "ref": "review 4723694299 PR#7474",
+     "quote": "I am not 100% sure if that's the case, but I think the race technically still exists? The `update_config()` still acquires the lock twice? Could we have a helper function like ```rust fn"
+    },
+    {
+     "ref": "inline 2670362665 PR#7139",
+     "quote": "nit: Maybe we should do all the lock work together? Something like: ```rust let breadcrumbs = { let mut globals = GLOBALS.lock(); if !globals.rate_limiter.should_send_report(&type_name,"
+    },
+    {
+     "ref": "inline 2604170691 PR#7122",
+     "quote": "We're locking and unlocking the db in a hot loop here. We should avoid that because it willmean that the entire function takes longer with the locking overhead. ```suggestion pub fn"
+    }
+   ]
+  },
+  {
+   "id": "needless-mut-and-smart-pointers",
+   "title": "Avoid needless `mut`, `&mut self`, Arc and Mutex wrappers",
+   "area": "concurrency",
+   "problem": "Reviewers repeatedly removed `&mut self` on methods whose state is already behind a Mutex, `mut` bindings that are only shadowed, `Arc<..>` where no thread boundary is crossed, and `Option<Arc<Mutex<..>>>` stacks in core (non-FFI) code.",
+   "rule": "No `&mut self`/`mut` binding unless mutated; no `Arc`/`Mutex` wrapping in core code unless shared across threads (UniFFI objects excepted); prefer internal mutability encapsulated in the type.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `needless_pass_by_ref_mut = \"warn\"` (nursery), `redundant_allocation`, `rc_buffer`, `arc_with_non_send_sync` (default); rustc `unused_mut` already denied in CI via `-D warnings`. ast-grep: field types `Option<Arc<Mutex<$T>>>` outside ffi modules -> info.",
+   "autofix": true,
+   "count": 5,
+   "severity": "low",
+   "false_positive_risk": "medium - needless_pass_by_ref_mut is nursery and can misfire with trait impls",
+   "evidence": [
+    {
+     "ref": "inline 3463210537 PR#7442",
+     "quote": "I don't think we need `mut` if we are cloning the url anyway? You could remove the mut and do something like: ```rs let impression_url = if let Some((_, _cap_key)) { ... // clone here then mut } else"
+    },
+    {
+     "ref": "inline 4065713053 PR#7597",
+     "quote": "I just realized we might not need the mut as `ads_store` is behing a `Mutex` already so we never actually use self as a mutable ref."
+    },
+    {
+     "ref": "inline 4222309661 PR#7597",
+     "quote": "not sure why this has Mutex has it's never using `mut`"
+    },
+    {
+     "ref": "inline 4222280611 PR#7597",
+     "quote": "Not sure about that. 1. Option -> why would this be None? I feel like we should always have a queue available (that can be empty) 2. Arc -> I guess we need it because we will push to the queue"
+    },
+    {
+     "ref": "inline 2714446963 PR#7157",
+     "quote": "Additionally I'm pretty sure we don't need the actual Arc<> here because we're not going to be crossing a thread boundary. ```suggestion gecko_pref_store: Option<&GeckoPrefStore>, ```"
+    }
+   ]
+  },
+  {
+   "id": "borrowed-parameter-types",
+   "title": "Take slices/&str instead of Vec/&String/&Vec in internal APIs",
+   "area": "api-design",
+   "problem": "Functions took `Vec<T>` (forcing a move/allocation) or `&String` where `&[T]`/`&str` work; reviewers noted the UniFFI caveat that exported fns receive an owned Vec anyway and `&[T]` needs `[ByRef]` in UDL with no FFI benefit.",
+   "rule": "Internal (non-exported) functions take `&[T]`/`&str`/`&Path` for read-only inputs; exported UniFFI functions are exempt.",
+   "enforcement": "existing-clippy",
+   "detect": "`ptr_arg` (style, already default; ensure not allowed) and `needless_pass_by_value = \"warn\"` (pedantic) in `[workspace.lints.clippy]`; suppress for `#[uniffi::export]` items and UDL-backed impls via a dylint wrapper or `#[allow]` on those impl blocks.",
+   "autofix": true,
+   "count": 5,
+   "severity": "low",
+   "false_positive_risk": "medium - needless_pass_by_value is noisy for FFI and builder methods",
+   "evidence": [
+    {
+     "ref": "inline 2603469871 PR#7122",
+     "quote": "We should accept a slice here. If we accept Vec<GeckoPrefState> then we *need* a Vec. If we accept a slice, then we can take the backing data of a vec or an array. Additionally, if we take `Vec<T>`"
+    },
+    {
+     "ref": "inline 2603788326 PR#7122",
+     "quote": "```suggestion gecko_pref_states: &[GeckoPrefState], ```"
+    },
+    {
+     "ref": "inline 4246420054 PR#7645",
+     "quote": "**Nit:** Could we use `user_locale: &str` instead of `&String` here? I think `&str` and we could just pass `\"fi\"` directly in the tests instead of `&\"fi\".to_string()`. I tried this locally and it"
+    },
+    {
+     "ref": "inline 2714487449 PR#7157",
+     "quote": "I think this can be a `&[T]` but I'm not sure. cc @mhammond ```suggestion fn set_gecko_prefs_original_values(&self, original_gecko_prefs: &[OriginalGeckoPref]); ```"
+    },
+    {
+     "ref": "inline 2728396711 PR#7155",
+     "quote": "I think you could eliminate the mapping by having the method input `&[String]`. I'm not sure if it's worth it or not, just wanted to point that out."
+    }
+   ]
+  },
+  {
+   "id": "option-ref-not-ref-option",
+   "title": "Use Option<&T> (via as_deref/as_ref) instead of &Option<T> parameters",
+   "area": "api-design",
+   "problem": "Nimbus code passed `&Option<Arc<GeckoPrefStore>>` through several layers; reviewers asked for `Option<&GeckoPrefStore>` and `self.gecko_prefs.as_deref()`.",
+   "rule": "Parameters/returns must not be `&Option<T>`; use `Option<&T>`.",
+   "enforcement": "existing-clippy",
+   "detect": "`ref_option = \"warn\"` (pedantic, clippy >= 1.83) and `ref_option_ref` in `[workspace.lints.clippy]`.",
+   "autofix": true,
+   "count": 3,
+   "severity": "low",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2714446963 PR#7157",
+     "quote": "Most of the time when you have a `&Option<T>` you really want an `Option<&T>`. Additionally I'm pretty sure we don't need the actual Arc<> here because we're not going to be crossing a thread"
+    },
+    {
+     "ref": "inline 2714480360 PR#7157",
+     "quote": "See my previous comments for reasoning. ```suggestion gecko_pref_store: Option<&eckoPrefStore>, ```"
+    },
+    {
+     "ref": "inline 2714488093 PR#7157",
+     "quote": "If this function is updated to take an `Option<&T>` then we can use [`Option::as_deref()`](https://doc.rust-lang.org/stable/std/option/enum.Option.html#method.as_deref), which is equivalent to"
+    }
+   ]
+  },
+  {
+   "id": "idiomatic-control-flow",
+   "title": "Prefer let-else, Option combinators and match over nested if-let/Ok wrapping",
+   "area": "other",
+   "problem": "Many review rounds rewrote `match x { Pat => v, _ => return }` into let-else, nested `match`+`Ok(None)` into `opt.and_then(..)` with the fallible call hoisted, and boolean `if` chains into `match`.",
+   "rule": "Use `let ... else` for early return destructuring; hoist the single fallible call and use `Option` combinators; prefer `match` on Option over if/else on `is_some()`.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `manual_let_else`, `single_match_else`, `option_if_let_else` (nursery, opt-in), `manual_map`/`question_mark`/`bind_instead_of_map` (default). Run `cargo clippy --fix` for autofixable ones.",
+   "autofix": true,
+   "count": 6,
+   "severity": "low",
+   "false_positive_risk": "medium - option_if_let_else is noisy; enable only manual_let_else by default",
+   "evidence": [
+    {
+     "ref": "inline 2714527513 PR#7157",
+     "quote": "```suggestion let EnrollmentStatus::Enrolled { prev_gecko_pref_states: Some(prev_gecko_pref_states), branch: original_branch_slug, } = &self.status else { // Can't change if it isn't a pref"
+    },
+    {
+     "ref": "inline 2714530141 PR#7157",
+     "quote": "```suggestion let EnrollmentStatus::Enrolled { branch: updated_branch_slug, .. } = &updated_enrollment.status else { // If we are no longer going to be enrolled, then a change happened return true; }"
+    },
+    {
+     "ref": "inline 2714537979 PR#7157",
+     "quote": "```suggestion let Some(updated_feature) = updated_features .iter() .find(|config| config.feature_id == original_state.feature_id) else { // If original feature isn't present, then something changed"
+    },
+    {
+     "ref": "inline 2603824315 PR#7122",
+     "quote": "If we have an Option<T> and we have `fn: impl Fn(T) -> Option<U>` we can use `opt.and_then(fn)` [docs](https://doc.rust-lang.org/stable/std/option/enum.Option.html#method.and_then) Additionally, the"
+    },
+    {
+     "ref": "inline 2604108541 PR#7122",
+     "quote": "See my other comment on get_previous_state_for_experiment wrt how we can rewrite this ```suggestion Ok( db .get_store(StoreId::Enrollments) .get::<ExperimentEnrollment, _>(reader, experiment_slug)?"
+    },
+    {
+     "ref": "inline 4379404560 PR#7597",
+     "quote": "```rs let worker = match client_config.store_config { Some(duration) => ... None => ... } ``` would feel more rustish to me"
+    }
+   ]
+  },
+  {
+   "id": "hashmap-entry-api",
+   "title": "Use the HashMap entry API instead of contains_key + get_mut/insert",
+   "area": "perf",
+   "problem": "Double hash lookups (`contains_key` then `get_mut`/`insert`) and extra clones around them were flagged; `entry().and_modify().or_insert_with()` with conversions inside the closures avoids both.",
+   "rule": "No `contains_key`/`get` followed by `insert`/`get_mut` on the same key.",
+   "enforcement": "existing-clippy",
+   "detect": "`map_entry` (perf, default) catches contains_key+insert; add ast-grep for `if $M.contains_key($K) { $$$ $M.get_mut($K) $$$ } else { $$$ $M.insert($K, $$$) $$$ }`.",
+   "autofix": true,
+   "count": 2,
+   "severity": "low",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2603521800 PR#7122",
+     "quote": "In the first branch we're doing a `constains_key` and a `get_mut`, which means we're doing the hash lookup twice. Rust has a thing for this called the [entry"
+    },
+    {
+     "ref": "inline 2635589796 PR#7122",
+     "quote": "If we end up in the the and_modify and or_insert_with cases are mutually exclusive, but unfortunately the compiler doesn't know that, otherwise we could get away without the clone. However, we can"
+    }
+   ]
+  },
+  {
+   "id": "avoid-needless-clones",
+   "title": "Avoid needless clones and allocations",
+   "area": "perf",
+   "problem": "Reviewers removed `self.status.clone()` in a match, clones in both branches, `to_string()` on `&String`, clone-before-move into closures, and Vec<(String,String)> allocations for constant pairs.",
+   "rule": "Don't clone when borrowing/moving works; use `.clone()` (not `to_string()/to_owned()`) for `&String`; avoid allocating containers for fixed small data.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `redundant_clone` (nursery), `implicit_clone` (pedantic), `string_to_string`/`str_to_string` (restriction), `clone_on_ref_ptr` optional, `unnecessary_to_owned` (default).",
+   "autofix": true,
+   "count": 6,
+   "severity": "low",
+   "false_positive_risk": "medium - redundant_clone has had false positives (nursery)",
+   "evidence": [
+    {
+     "ref": "inline 2604201702 PR#7122",
+     "quote": "You don't need to clone here. Are you working around lifetime issues in the match branches? ```suggestion match self.status { ```"
+    },
+    {
+     "ref": "inline 2604222431 PR#7122",
+     "quote": "You're cloning in both branches ```suggestion let mut next = self.clone(); if let EnrollmentStatus::Enrolled { reason, branch, .. } = self.status { next.status = EnrollmentStatus::Enrolled {"
+    },
+    {
+     "ref": "inline 2603786910 PR#7122",
+     "quote": "I think we can use .clone() here becuase slug is a `&String`."
+    },
+    {
+     "ref": "inline 3285283149 PR#7379",
+     "quote": "seems like this clone shouldn't be necessary?"
+    },
+    {
+     "ref": "inline 3463184997 PR#7442",
+     "quote": "I think you can do `fn impression_enriching_params(&self) -> [(&str, &str); 1]` to have zero allocation (no Vec, no String)"
+    },
+    {
+     "ref": "inline 3375632678 PR#7367",
+     "quote": "```suggestion conflict_slug.into() ``` I prefer into() for &str -> String. (Technically conflict_slug is &String, but calling methods on a type will automatically deref-coerce into &str which then"
+    }
+   ]
+  },
+  {
+   "id": "minimal-visibility",
+   "title": "Use pub(crate) or private visibility unless an item is part of the crate API",
+   "area": "api-design",
+   "problem": "Helper functions, type aliases and builders were declared `pub` without any external user; reviewers asked for `pub(crate)` or private.",
+   "rule": "Items not reachable from the crate's public API (lib.rs re-exports, UniFFI exports) must not be `pub`.",
+   "enforcement": "existing-clippy",
+   "detect": "Enable rustc `unreachable_pub = \"warn\"` in `[workspace.lints.rust]` (machine-applicable fix to `pub(crate)`); for builders/types inside private modules use clippy `redundant_pub_crate` consistency. Exclude items used by UniFFI derives if they must stay pub.",
+   "autofix": true,
+   "count": 3,
+   "severity": "low",
+   "false_positive_risk": "medium - UniFFI-exported types in private modules re-exported via lib.rs are fine; types only used by generated scaffolding may need allows",
+   "evidence": [
+    {
+     "ref": "inline 2604186674 PR#7122",
+     "quote": "This should be pub(crate) at most, we don't really need access to this outside of the crate. It should probably also be a static fn next to the `NimbusClient::register_previous_state` method"
+    },
+    {
+     "ref": "inline 2669994601 PR#7122",
+     "quote": "does this need to be pub? It should probably be pub(crate) at the most."
+    },
+    {
+     "ref": "inline 3181582440 PR#7345",
+     "quote": "Nit: Doesn't need to be `pub`"
+    }
+   ]
+  },
+  {
+   "id": "rustfmt-import-grouping",
+   "title": "Enforce import grouping (std / external / crate) and module-level granularity with rustfmt",
+   "area": "other",
+   "problem": "Reviewers asked for imports in three groups (std, third-party, this crate) without blank lines inside a group, and no nested `use a::{b::{..}, c::{..}}` trees.",
+   "rule": "Imports are grouped StdExternalCrate and use Module granularity.",
+   "enforcement": "formatter-config",
+   "detect": "rustfmt.toml: `group_imports = \"StdExternalCrate\"`, `imports_granularity = \"Module\"` (unstable: run `cargo +nightly fmt --check -- --config group_imports=StdExternalCrate,imports_granularity=Module` in CI, or adopt workspace-wide once stable).",
+   "autofix": true,
+   "count": 3,
+   "severity": "low",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 3390579212 PR#7367",
+     "quote": "Do not use nested imports. ```suggestion use crate::stateful::enrollment::v3; use crate::stateful::persistence::{Database, SingleStore, StoreId, DB_KEY_DB_VERSION, DatabaseMigrationReason}; ```"
+    },
+    {
+     "ref": "inline 3390636717 PR#7367",
+     "quote": "There should be no line between the rkv import and the serde_json import We organize our imports into three groups: 1. standard library (std::, core::) 2. third party crates 3. this crate"
+    },
+    {
+     "ref": "inline 3390581628 PR#7367",
+     "quote": "This should go above the rkv import, or..."
+    }
+   ]
+  },
+  {
+   "id": "no-glob-local-or-fully-qualified-imports",
+   "title": "No glob imports, function-local `use`, or long fully-qualified paths in code",
+   "area": "other",
+   "problem": "Reviewers objected to `use crate::enrollment::*` ('don't import the world'), `use std::time::SystemTime` inside function bodies, and repeated `crate::enrollment::NotEnrolledReason::...`/`parking_lot::Mutex` qualified paths instead of a `use` at the top.",
+   "rule": "Imports live at the top of the module; no `*` imports except `use super::*` in tests and prelude modules; type paths with 3+ segments are imported rather than spelled inline.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `wildcard_imports = \"warn\"` (pedantic; clippy.toml `warn-on-all-wildcard-imports = false` keeps `use super::*` in tests allowed), `absolute_paths = \"warn\"` with clippy.toml `absolute-paths-max-segments = 3`, `items_after_statements` (pedantic). ast-grep: `use $$$;` statements nested inside a fn body block -> warn.",
+   "autofix": true,
+   "count": 4,
+   "severity": "low",
+   "false_positive_risk": "medium - absolute_paths needs tuning for std::...::Ordering-style uses",
+   "evidence": [
+    {
+     "ref": "inline 3390545299 PR#7367",
+     "quote": "Let's not import the world. This pollutes our namespace with a lot of stuff. Please only import what we're using. (sidenote, the `map_enrollments` is redundant since it falls into the `*` bucket)"
+    },
+    {
+     "ref": "inline 3375617514 PR#7367",
+     "quote": "Let's `use crate::enrollment::NotEnrolledReason` at the top of the file so we can do: ```suggestion NotEnrolledReason::FeatureConflict { conflict_slug } => { ```"
+    },
+    {
+     "ref": "inline 3626900876 PR#7490",
+     "quote": "fwiw, many of our crates use `parking_lot::Mutex` and typically just `use` it directly rather than fully qualifying it in each use. I'm not against doing it this way, but fyi"
+    },
+    {
+     "ref": "inline 3925881723 PR#7564",
+     "quote": "Nit: move the imports to the top unless there's a reason not to."
+    }
+   ]
+  },
+  {
+   "id": "source-item-ordering",
+   "title": "Keep items in a predictable order: consts first, tests last, optional alphabetical fields/variants",
+   "area": "other",
+   "problem": "Reviewers asked to move the test helper `mod` to the end of lib.rs and a const from mid-file to the top, and ads-client owners repeatedly asked for alphabetical ordering of enum variants and struct fields.",
+   "rule": "`#[cfg(test)]` modules are the last items in a file; consts/statics precede fns; crates that opt in (ads-client) keep enum variants and struct fields alphabetically sorted.",
+   "enforcement": "existing-clippy",
+   "detect": "clippy `arbitrary_source_item_ordering` (restriction) enabled per opting crate with clippy.toml `module-item-order-groupings` / `source-item-ordering = [\"enum\", \"struct\"]`; lightweight ast-grep for all crates: `#[cfg(test)] mod $M` followed by any non-test item -> warn; `const`/`static` item appearing after the first `fn` -> warn.",
+   "autofix": true,
+   "count": 5,
+   "severity": "low",
+   "false_positive_risk": "high if alphabetical ordering is enforced workspace-wide; keep it per-crate",
+   "evidence": [
+    {
+     "ref": "inline 3798351444 PR#7531",
+     "quote": "Nit: could we keep the variants alphabetically ordered here? `BackgroundWorker` would go first, ahead of the `Record*`/`Report*`/`RequestAds` variants. Same applies to `BackgroundWorkerError` below"
+    },
+    {
+     "ref": "inline 3898761674 PR#7567",
+     "quote": "nit: we could keep alphabetical order here, I have written an article about alphabetical sorting if you are curious why I think it's important"
+    },
+    {
+     "ref": "inline 3907512369 PR#7571",
+     "quote": "nit: can we keep alphabetical ordering? I wrote a short article to explain why I think it's important https://almaju.github.io/blog/docs/fundamentals/style/sorting"
+    },
+    {
+     "ref": "inline 2677049089 PR#7126",
+     "quote": "I would suggest putting this at the end of the file since it is test related."
+    },
+    {
+     "ref": "inline 4351484719 PR#7680",
+     "quote": "nit: Do we want the constant to be midway through the file?"
+    }
+   ]
+  },
+  {
+   "id": "named-constants-for-magic-values",
+   "title": "Hoist magic numbers, limits and URLs into documented constants",
+   "area": "other",
+   "problem": "Retry counts, Glean's 255-char string limit, channel buffer sizes (1000/10000), base URLs/icon hosts and a hardcoded `Firefox-iOS-FxA/24` UA were inline literals without explanation; reviewers asked for `const` items with a comment on why the value was chosen, shared with tests.",
+   "rule": "Numeric literals other than 0/1/2 and URL string literals in non-test code must be named `const`s declared at module top with a doc comment explaining the value; immutable `let` bindings initialised with a literal and never changed should be consts.",
+   "enforcement": "custom-lint",
+   "detect": "ast-grep (non-test files): `let $N = $LIT;` where `$LIT` is an integer literal > 2 and `$N` is never reassigned -> suggest const; integer literals >= 10 passed to `Duration::from_*`, `truncate*`, `sync_channel`, `with_capacity` outside const items -> warn; string literals matching `^https?://` outside `const`/`static` items -> warn; `const` items without a preceding `///`/`//` comment -> info.",
+   "autofix": false,
+   "count": 7,
+   "severity": "low",
+   "false_positive_risk": "high - many literal uses are self-explanatory; run as advisory",
+   "evidence": [
+    {
+     "ref": "inline 2713371441 PR#7173",
+     "quote": "this should be a `const MAX_RETRIES: u32 = 3;` since its actually a constant."
+    },
+    {
+     "ref": "inline 3016637843 PR#7300",
+     "quote": "nit: Create a `const` for the Glean string `chars` and `breadcrumbs` limits below."
+    },
+    {
+     "ref": "inline 3181483101 PR#7345",
+     "quote": "We could add the base url as a const (in addition to the `DEFAULT_BASE_HOST`? Or just do `DEFAULT_BASE_URL`? And then we can use this in the tests too (import it there) instead of having another"
+    },
+    {
+     "ref": "inline 3798658922 PR#7531",
+     "quote": "Is there a reason behind `1000`? Seems like a reasonable starting point, but a short comment on how we landed on it would help future readers. Separately: since `dispatch` uses `try_send`, hitting"
+    },
+    {
+     "ref": "inline 3993593579 PR#7597",
+     "quote": "I need to dig that, I am not sure how buffer size work but I would maybe explain in the comment why we think \"10000\" is a good idea. Also, if it's in bytes, we could maybe use the `Byte` struct"
+    },
+    {
+     "ref": "inline 2695041179 PR#7162",
+     "quote": "Why is this hardcoded to `24`?"
+    }
+   ]
+  },
+  {
+   "id": "no-leftover-debug-and-untracked-todos",
+   "title": "No leftover print/dbg statements; TODOs must reference a Bugzilla bug",
+   "area": "other",
+   "problem": "A leftover print statement shipped in a test, TODOs referenced Jira keys instead of Bugzilla, a copied TODO comment lingered, and temporary APIs/workarounds lacked a tracking ticket for removal.",
+   "rule": "Library code has no `println!/eprintln!/dbg!`; every `TODO`/`FIXME`/`XXX` includes a Bugzilla reference (`bug NNNNNNN` or bugzilla URL); temporary workarounds name the bug that removes them.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `print_stdout`, `print_stderr`, `dbg_macro` = \"warn\" for components/* (allow in examples/, tools/, CLIs). Regex CI over the diff: `(TODO|FIXME|XXX)(?![^\\n]*(bug[ -]?\\d{6,}|bugzilla\\.mozilla\\.org))` -> fail; also warn on `[A-Z]{2,5}-\\d+` tracker keys in TODOs.",
+   "autofix": true,
+   "count": 5,
+   "severity": "low",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 4223896062 PR#7633",
+     "quote": "Left over print statement, should be deleted."
+    },
+    {
+     "ref": "inline 4103048122 PR#7573",
+     "quote": "Please refer to Bugzilla instead."
+    },
+    {
+     "ref": "inline 3076230018 PR#7278",
+     "quote": "I wonder if we should also have a ticket to track the removal so this don't become a legacy code!"
+    },
+    {
+     "ref": "inline 2692452586 PR#7140",
+     "quote": "Nit: leftover comment."
+    },
+    {
+     "ref": "inline 3786719393 PR#7540",
+     "quote": "As long as we don't forgot about this in someway since mobile will have \"fast\" sync times lol"
+    }
+   ]
+  },
+  {
+   "id": "no-dead-code-or-blanket-allows",
+   "title": "Remove unused code instead of silencing lints; no unneeded trait impls",
+   "area": "dead-code",
+   "problem": "Reviewers found a method unused outside tests and not in the UDL, `#[allow(unused_imports)]` on re-exports that were actually unused, and `Display` impls nobody needed.",
+   "rule": "No `#[allow(dead_code)]`/`#[allow(unused_imports)]`/`#[allow(unused)]` in non-test code without a reason (`#[expect(..., reason = ...)]`); `pub` functions only referenced from tests and not exported are removed or made `#[cfg(test)]`.",
+   "enforcement": "existing-clippy",
+   "detect": "`[workspace.lints.clippy]`: `allow_attributes = \"warn\"`, `allow_attributes_without_reason = \"warn\"` (restriction; forces `#[expect(lint, reason=...)]`, which errors once the lint no longer fires). CI script: for new `pub fn` in components/*/src, grep for call sites outside `#[cfg(test)]`/tests dirs and absence from UDL/`#[uniffi::export]` -> warn.",
+   "autofix": false,
+   "count": 4,
+   "severity": "low",
+   "false_positive_risk": "medium - pub fns used by other workspace crates must be searched workspace-wide",
+   "evidence": [
+    {
+     "ref": "inline 2635970933 PR#7122",
+     "quote": "This seems unused outside tests and its not available in the UDL. We can get rid of this."
+    },
+    {
+     "ref": "inline 2957021628 PR#7274",
+     "quote": "why do you re-export these if they are unused? `models` isn't public, so the only possible use for these re-exports is in `curated_recommendations`, and if this clippy annotation is accurate, they"
+    },
+    {
+     "ref": "inline 2603373124 PR#7122",
+     "quote": "Do we need an impl Display?"
+    },
+    {
+     "ref": "inline 2603538131 PR#7122",
+     "quote": "do we need this Display impl?"
+    }
+   ]
+  },
+  {
+   "id": "no-unused-dependencies",
+   "title": "Fail CI on unused Cargo/Gradle dependencies and stale audit ignores",
+   "area": "deps-build",
+   "problem": "A new crate shipped with unused `lazy_static`, `serde`, `serde_derive`; an Android build.gradle kept an unnecessary `testImplementation project(\":httpconfig\")`; protobuf remained in build.gradle after its removal; a `cargo audit --ignore` stayed after the advisory no longer applied.",
+   "rule": "Every declared dependency must be used; ignore lists in dependency checks must reference advisories that still match the lockfile.",
+   "enforcement": "ci-script",
+   "detect": "CI: `cargo machete --with-metadata` (or `cargo +nightly udeps --workspace --all-targets`) with an ignore list for macro-only deps; rustc lint `unused_crate_dependencies` is too noisy for tests, so prefer machete. For Gradle: grep `project(\":X\")`/catalog aliases in components/*/android/build.gradle and verify the module is imported in sources. For cargo audit: run `cargo audit --json` and fail if any `--ignore` id is not present in `warnings`/`vulnerabilities` for the current Cargo.lock.",
+   "autofix": true,
+   "count": 6,
+   "severity": "low",
+   "false_positive_risk": "low - machete has occasional false positives for macro/feature deps, handled by metadata ignore",
+   "evidence": [
+    {
+     "ref": "inline 3796564941 PR#7542",
+     "quote": "unused"
+    },
+    {
+     "ref": "inline 3796565955 PR#7542",
+     "quote": "unused"
+    },
+    {
+     "ref": "inline 3796566655 PR#7542",
+     "quote": "unused"
+    },
+    {
+     "ref": "inline 2721256191 PR#7175",
+     "quote": "I'm kind of curious why you even need `testImplementation` here. I can't see any for this component."
+    },
+    {
+     "ref": "review 4581502719 PR#7452",
+     "quote": "Looks like you missed a spot: https://github.com/mozilla/application-services/blob/main/build.gradle#L13-L15"
+    },
+    {
+     "ref": "inline 4200755316 PR#7596",
+     "quote": "don't you want to remove the line above too? (ie, the `--ignore` cmdline)"
+    }
+   ]
+  },
+  {
+   "id": "new-dependency-needs-vetting",
+   "title": "New or bumped third-party crates need vendoring/cargo-vet sign-off; internal deps use default-features = false",
+   "area": "deps-build",
+   "problem": "pretty_assertions was re-added although deliberately removed earlier; crate bumps need cargo vet audits when vendored into mozilla-central (`./mach vendor rust`, `./mach cargo vet`); internal path dependencies pulled default features unintentionally.",
+   "rule": "Adding a new third-party crate or bumping a version in Cargo.lock requires an explicit approval label and a note on m-c vendoring/cargo-vet status; path dependencies on workspace crates with default features should specify `default-features = false` and opt into what is needed.",
+   "enforcement": "ci-script",
+   "detect": "CI: diff Cargo.lock package sets between base/head; new package names or major/minor version changes -> post checklist comment + require `deps-approved` label; maintain a denylist of previously removed crates (pretty_assertions) that fails immediately. taplo/toml check: dependency tables with `path = \"../...\"` to crates that define `[features] default` and no `default-features` key -> warn.",
+   "autofix": false,
+   "count": 4,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2682731022 PR#7141",
+     "quote": "We did originally use pretty_assertions, but it was removed in #6864. I suggest discussing with the application-services-monorepo team about what the options might be. This could be something that we"
+    },
+    {
+     "ref": "review 5615821921 PR#7683",
+     "quote": "moz-central is on 2.4.2, so I think this will require an audit on the next vendor. I'm not totally sure since this is \"just\" a CLI crate, but I think it will. I think there's a google audit for"
+    },
+    {
+     "ref": "inline 3687447970 PR#7487",
+     "quote": "Should probably include \"./mach vendor rust\" and \"./mach cargo vet\" - only necessary if there have been dependency changes, but that would block (or at least slow) landing."
+    },
+    {
+     "ref": "inline 4103116638 PR#7573",
+     "quote": "IMO we should set `default-features = false` here"
+    }
+   ]
+  },
+  {
+   "id": "cargo-feature-naming-and-docs",
+   "title": "Cargo features use snake_case names that describe behaviour and carry a comment",
+   "area": "deps-build",
+   "problem": "A logins feature was named `wipe-on-decryption-error` while siblings use snake_case; a feature name/comment claimed validation was skipped when it was actually run with errors ignored; platform-only deps were modelled as features instead of `[target.'cfg(...)'.dependencies]`.",
+   "rule": "Feature names in components/*/Cargo.toml match `^[a-z0-9_]+$` (repo convention), each feature has a preceding `#` comment describing behaviour and which consumer sets it; platform-specific deps use target cfg tables rather than features.",
+   "enforcement": "ci-script",
+   "detect": "Python/tomllib or taplo-based CI check over components/**/Cargo.toml `[features]`: key regex, and the raw text line before each feature key must be a comment. Warn when a feature only enables a single optional dependency used under `cfg(target_os)` code.",
+   "autofix": false,
+   "count": 3,
+   "severity": "low",
+   "false_positive_risk": "low - naming convention check only; existing hyphenated features need an allowlist",
+   "evidence": [
+    {
+     "ref": "inline 3217402953 PR#7343",
+     "quote": "Small nit: we’ve been using underscores for feature flags (`allow_empty_passwords`, `perform_additional_origin_fixups`). What do you think about renaming this to `wipe_on_decryption_error` for"
+    },
+    {
+     "ref": "inline 3051491374 PR#7311",
+     "quote": "I do think this comment should be updated to reflect the fact that we're running the validation, but ignoring errors."
+    },
+    {
+     "ref": "inline 3051482279 PR#7311",
+     "quote": "It seems like in this case we did do the validation, we just ignored the error. Maybe the feature could be renamed to reflect that (I'm thinking something like"
+    }
+   ]
+  },
+  {
+   "id": "glean-metrics-yaml-hygiene",
+   "title": "Validate metrics.yaml metadata: bugs, data reviews, emails, sensitivity, quoting",
+   "area": "other",
+   "problem": "New ads-client metrics copied `bugs`/`data_reviews` links and notification emails from another component, quoted `expires`, and arguably mislabelled data_sensitivity; new metrics need data review while adding values to an already-reviewed metric does not.",
+   "rule": "Every changed metrics.yaml passes `glean_parser check`; new metrics must have `bugs`/`data_reviews` URLs not reused from a different component's metrics, `notification_emails` from the owning team's allowlist, unquoted `expires`, and a `data-review` label on the PR.",
+   "enforcement": "ci-script",
+   "detect": "CI: `glean_parser check < metrics.yaml` for every changed file; yamllint with `quoted-strings: {required: only-when-needed}`; custom script: build map url -> metrics files across repo, flag new metric entries whose `bugs`/`data_reviews` URLs already appear only in other components; check `notification_emails` against CODEOWNERS-derived team aliases; if a new metric key is added (not just new labels/values), require the `data-review` label.",
+   "autofix": true,
+   "count": 8,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2611868432 PR#7111",
+     "quote": "Can we update this with our new ticket? https://bugzilla.mozilla.org/show_bug.cgi?id=2005599"
+    },
+    {
+     "ref": "inline 2611870458 PR#7111",
+     "quote": "Can we update this with this active PR?"
+    },
+    {
+     "ref": "inline 2615235255 PR#7111",
+     "quote": "These emails should be updated to be our emails @Almaju"
+    },
+    {
+     "ref": "inline 2615248117 PR#7111",
+     "quote": "Apparently these also don't need to have quotes. So we might as well remove it to just read `expires: never`"
+    },
+    {
+     "ref": "inline 2615252664 PR#7111",
+     "quote": "it's not a huge deal but this seems like interaction data to me, since it's generated based on user interaction with the system"
+    },
+    {
+     "ref": "review 4037414115 PR#7288",
+     "quote": "The code looks good to me, but a couple notes: * If this is a new metric, then it'll need data review. * Jan-Erik is working on a system for reporting Glean metrics directly from Rust. The ETA is"
+    }
+   ]
+  },
+  {
+   "id": "no-vacuous-test-assertions",
+   "title": "Tests must actually assert: no bare matches!, mockito expect() needs assert()",
+   "area": "tests",
+   "problem": "Integration tests used `matches!(o1.cache_outcome, CacheOutcome::MissStored);` as a statement, so mismatches passed silently; once wrapped in `assert!` they exposed a real caching bug. mockito `.expect(1)` without `_m.assert()` checks nothing, and a test claiming to verify caching could not distinguish a cached value.",
+   "rule": "`matches!` must be used inside `assert!`/`if`/`let` or returned, never as a bare statement; every mockito mock configured with `.expect*()` must have `.assert()` called; mock implementations used in tests must record calls rather than be empty.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep rule: expression statement whose expression is macro `matches!($$$)` (kind: expression_statement > macro_invocation name=matches) -> error, autofix `assert!(matches!($$$));`. For mockito: let-bound mocks (`let $M = $S.mock($$$)$$$.expect($$$)$$$.create()`) with no later `$M.assert()` in the same fn -> error; names starting with `_` are a strong signal.",
+   "autofix": true,
+   "count": 6,
+   "severity": "high",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2982692402 PR#7275",
+     "quote": "Does this matches throw in cases the two values mismatch? Should we assert the returned bool? Similar issue with below `match!` uses. ```rust assert!(matches!(o1.cache_outcome,"
+    },
+    {
+     "ref": "inline 2984011916 PR#7275",
+     "quote": "Seems like we are already catching an error here!"
+    },
+    {
+     "ref": "inline 2984022467 PR#7275",
+     "quote": "Similar here! Both `o1` and `o3`'s cache_outcome was Hit instead of MissStored."
+    },
+    {
+     "ref": "review 4002483138 PR#7275",
+     "quote": "I see that there are lingering `matches!` without assertions that could be remove or modified in a later commit, pending your decision; I would say that the three assertions helped us catch a bug!"
+    },
+    {
+     "ref": "inline 3089177452 PR#7318",
+     "quote": "_m.assert is required for .expect to work properly!"
+    },
+    {
+     "ref": "inline 3800687828 PR#7535",
+     "quote": "Wondering how is this test actually checking it came from the cache?"
+    }
+   ]
+  },
+  {
+   "id": "tests-assert-payload-values",
+   "title": "Assert specific payload values in tests, not `{ .. }` or is_some()",
+   "area": "tests",
+   "problem": "When `FeatureConflict` gained a `conflict_slug`, tests kept matching `FeatureConflict { .. }` or `conflict_slug.is_some()`; the reviewer asked five times to assert the expected slug. Another PR dropped `spoc.len() == count` checks.",
+   "rule": "When a test inspects an enum variant with data, it must bind and compare the data; existing assertions must not be removed without justification.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep in test code: `matches!($E, $P)` where `$P` contains a struct pattern with `{ .. }` for a variant known to have fields -> info; `assert!($X.is_some())` -> suggest `assert_eq!($X, Some(..))`. CI diff: for each modified `#[test]` fn, count `assert*!` invocations before/after; decrease -> warn.",
+   "autofix": false,
+   "count": 6,
+   "severity": "medium",
+   "false_positive_risk": "high - `{ .. }` is legitimate when the payload is irrelevant; advisory only",
+   "evidence": [
+    {
+     "ref": "inline 3375602141 PR#7367",
+     "quote": "Let's assert on the conflict_slug ``` matches!( e.status, EnrollmentStatus::NotEnrolled { reason: NotEnrolledReason::FeatureConflict { conflict_slug } } if conflict_slug == \"...\" ) ```"
+    },
+    {
+     "ref": "inline 3375611627 PR#7367",
+     "quote": "As above, lets assert on conflict_slug"
+    },
+    {
+     "ref": "inline 3375613450 PR#7367",
+     "quote": "And here"
+    },
+    {
+     "ref": "inline 3390607649 PR#7367",
+     "quote": "let's assert on the expected conflict_slug ```suggestion assert!(matches!( enrollments[0].status, EnrollmentStatus::NotEnrolled { reason: NotEnrolledReason::FeatureConflict { conflict_slug: None },"
+    },
+    {
+     "ref": "inline 3390623704 PR#7367",
+     "quote": "We can deconstruct conflict_slug in the match into a `conflict_slug: Some(conflict_slug)` and instead of `conflict_slug.is_some()`, we can do `conflict_slug == \"expected-slug\"`"
+    },
+    {
+     "ref": "review 4000452203 PR#7275",
+     "quote": "Stopped checking the `spoc.len() == count`, is this intentional? - Similarly, it seems that instead of testing 3 counts, we are only testing 1 in the new version. - We stopped testing if the"
+    }
+   ]
+  },
+  {
+   "id": "test-fixtures-no-production-endpoints",
+   "title": "Tests and fixtures must not hit production services or use realistic-looking data",
+   "area": "tests",
+   "problem": "ads-client integration tests (run by a GitHub workflow on every push) targeted the production MARS host instead of staging, and copied realistic fixture data made it hard to recognise test values if they ever leaked.",
+   "rule": "Test code and CI workflows use staging/mock hosts (`*.allizom.org`, mockito, `example.com`) and obviously fake identifiers; production hosts in tests require an allowlist entry.",
+   "enforcement": "ast-grep/regex",
+   "detect": "Regex over `**/tests/**`, `**/integration-tests/**`, `#[cfg(test)]` modules and .github/workflows: `https://(ads\\.mozilla\\.org|merino\\.services\\.mozilla\\.com|firefox\\.settings\\.services\\.mozilla\\.com|api\\.accounts\\.firefox\\.com|[\\w.-]*\\.prod\\.[\\w.-]+)` -> warn.",
+   "autofix": false,
+   "count": 2,
+   "severity": "medium",
+   "false_positive_risk": "medium - some tests only parse prod URLs without network access",
+   "evidence": [
+    {
+     "ref": "inline 2982711867 PR#7275",
+     "quote": "It seems that we are testing against the production server here, should we be targeting stage instead? Or to target different envs based on the `MozAdsEnvironment`? ```rust let url ="
+    },
+    {
+     "ref": "inline 2956458091 PR#7274",
+     "quote": "I know that these values are copied over from the source, but a note of caution: It would be good to have these values indicate that they are test values. This can be useful to identify them quickly"
+    }
+   ]
+  },
+  {
+   "id": "all-test-crates-compile-in-ci",
+   "title": "CI must compile every test target, including ignored integration tests",
+   "area": "ci-scripts",
+   "problem": "An ads-client refactor broke compilation of the integration-tests crate and only a reviewer running it locally noticed.",
+   "rule": "PR CI runs `cargo test --no-run` (or `cargo check --all-targets`) for every workspace member and excluded integration-test crates, even if their tests are `#[ignore]`d.",
+   "enforcement": "ci-script",
+   "detect": "Add a taskcluster/GitHub step: `cargo check --workspace --all-targets --all-features` plus `cargo test --no-run --manifest-path components/ads-client/integration-tests/Cargo.toml` (enumerate all `integration-tests` crates via `find components -name Cargo.toml -path '*integration-tests*'`).",
+   "autofix": false,
+   "count": 1,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 3066146693 PR#7316",
+     "quote": "Seems that there are some compilation errors here: ```log Compiling ads-client-integration-tests v0.1.0 (/Users/hanshengzhao/workspace/external/application-services/components/ads-client/integration-t"
+    }
+   ]
+  },
+  {
+   "id": "cfg-gate-whole-items",
+   "title": "Gate whole functions/modules behind cfg(feature), not individual params and statements",
+   "area": "other",
+   "problem": "Nimbus code sprinkled `#[cfg(feature = \"stateful\")]` on individual arguments, struct fields, statements and test files; reviewers asked to gate the entire fn/module or move it into `stateful/` (cirrus doesn't need it), and removed a needless `cfg(not(feature = \"signatures\"))` on a test.",
+   "rule": "A feature-specific function or module is gated once at item level (or lives in the feature-specific module); `#[cfg(feature = ...)]` on fn parameters, struct-literal fields or more than two statements within one fn is not allowed.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: attribute `#[cfg($$$)]` attached to a `parameter` node -> error; >2 `#[cfg(feature = $F)]` attributes with the same `$F` inside one function body -> warn 'gate the whole item'; test files where every item carries the same cfg -> suggest moving `mod x;` under the gated parent module.",
+   "autofix": false,
+   "count": 7,
+   "severity": "low",
+   "false_positive_risk": "medium - some per-statement cfgs are unavoidable in shared code",
+   "evidence": [
+    {
+     "ref": "inline 2683743485 PR#7156",
+     "quote": "Should this entire method be `#[cfg(feature = \"stateful\")]` for now? I don't think we'll need it for cirrus."
+    },
+    {
+     "ref": "inline 2683946820 PR#7156",
+     "quote": "you can move `mod test_targeting` into this `mod stateful` expr and then you dont need all the `#[cfg]` in test_targeting.rs"
+    },
+    {
+     "ref": "inline 2733375879 PR#7157",
+     "quote": "This entire function should be `#[cfg(feature = \"stateful\")]`. That way we don't need these annotations on specific args or statements. Cirrus doesn't need support for gecko prefs. (Ideally also"
+    },
+    {
+     "ref": "inline 3100519663 PR#7326",
+     "quote": "Also, you'd could have one `#[cfg]` attr around the entire module. Either an inline module or a separate file could work."
+    },
+    {
+     "ref": "inline 3357040510 PR#7367",
+     "quote": "This is unnecessary -- the entire mod can be `#[cfg(feature = \"stateful\")]` because cirrus doesnt have a DB and doesnt do migrations."
+    },
+    {
+     "ref": "inline 3375500325 PR#7367",
+     "quote": "These should go in `stateful/enrollment.rs` and then we don't need the cfg"
+    }
+   ]
+  },
+  {
+   "id": "changelog-structure",
+   "title": "CHANGELOG edits go into the in-progress section, under the right headings, and never touch released sections",
+   "area": "docs-changelog",
+   "problem": "PRs deleted a released version section and a `## What's Changed` header, split one component across headings (Nimbus FML vs Nimbus), added dev-only features to What's Changed, left extra blank lines, mislabelled non-breaking changes as breaking, and left stale lines after renames.",
+   "rule": "Only the top `# vNNN (In progress)` section may change; headings must come from the canonical set (`## ⚠️ Breaking Changes ⚠️`, `## ✨ What's Changed ✨`, `## Deprecations`...) with exact spelling; `### <Component>` names from an allowlist; markdownlint clean.",
+   "enforcement": "ci-script",
+   "detect": "Python CI: parse CHANGELOG.md for base/head; locate first released header `^# v\\d+\\.\\d+ \\(_\\d{4}-\\d{2}-\\d{2}_\\)`; any diff hunk at/after that line -> fail. Validate `##` headings against canonical list (note current file mixes `## Breaking Changes` and `## ⚠️ Breaking Changes ⚠️`). Validate `###` component names against a map (e.g. 'Nimbus FML' -> 'Nimbus'). Run markdownlint MD012 (multiple blank lines). If components/<c>/src changed in a user-visible way (see breaking-change checker) require an entry.",
+   "autofix": true,
+   "count": 9,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2805967071 PR#7186",
+     "quote": "Assuming I'm right about the alias, you'll need to update this line."
+    },
+    {
+     "ref": "inline 3971616729 PR#7590",
+     "quote": "Not sure why this got removed :)"
+    },
+    {
+     "ref": "inline 4223444098 PR#7632",
+     "quote": "Is this deletion intentional? And why? I'm confused by why this was deleted because it's above the Autofill section and not part of search."
+    },
+    {
+     "ref": "inline 3993526003 PR#7597",
+     "quote": "I would say, let's no put anything in \"What's changed\" yet because right now it's still dev only. This can be misleading if someone wanted to try it. If we wanted to be extra clean we could even flag"
+    },
+    {
+     "ref": "inline 3874823516 PR#7563",
+     "quote": "These can just be grouped under `nimbus`."
+    },
+    {
+     "ref": "inline 4223459982 PR#7632",
+     "quote": "Please remove this extra blank line."
+    }
+   ]
+  },
+  {
+   "id": "doc-comments-match-code",
+   "title": "Keep doc comments in sync: param lists, referenced files/modules, duplicated UDL docs",
+   "area": "docs-changelog",
+   "problem": "Copied doc comments listed parameters the function no longer takes, referenced types/files that do not exist (`mozIBridgedSyncEngine.idl`, `mod test_schema_bw_compat`), duplicated enum value lists that went stale, mentioned 'old'/'now' history in READMEs, claimed a method alters persisted state when it doesn't, and docs copied into the UDL drifted.",
+   "rule": "Doc parameter lists must match the signature; backticked file paths/modules/types in comments must resolve; avoid restating definitions owned elsewhere (link instead); docs for UDL-exposed items must match their Rust docs.",
+   "enforcement": "custom-lint",
+   "detect": "rustdoc-aware checker: parse `# Params`/`# Arguments` lists (`- \\`name\\``) and compare with fn params; extract backticked tokens that look like paths (`/`, `.rs`, `.idl`, `.udl`, `mod x`) and check existence relative to crate/repo root; for UDL-declared fns, compare normalized `///` text in .udl vs the Rust impl and warn on mismatch. Regex warn on README/docs lines containing `\\b(now|old|previously|new)\\b (is|was|code|version)` outside CHANGELOG. For python scripts, compare `--flags` in header comments with `add_argument` calls.",
+   "autofix": false,
+   "count": 10,
+   "severity": "low",
+   "false_positive_risk": "medium - prose heuristics are fuzzy; path/param checks are precise",
+   "evidence": [
+    {
+     "ref": "inline 2603370436 PR#7122",
+     "quote": "There is no mod test_schema_bw_compat in this file. I assume you cargo-culted this from `enrollment.rs` which also does not have that mod statement. The actual tests are in"
+    },
+    {
+     "ref": "inline 4223498884 PR#7632",
+     "quote": "This doc comment looks like it was copied from use_remote_settings_server. It lists options and apply_engine_overrides, but this function only takes service, and v3 doesn't support overrides. Could"
+    },
+    {
+     "ref": "inline 4253558012 PR#7648",
+     "quote": "you probably copied this, but I think that file no longer exists."
+    },
+    {
+     "ref": "inline 3623929085 PR#7487",
+     "quote": "Looks outdated? There is a `--firefox-dir FIREFOX_DIR`, but no `--use-local-repo` or `--remote-repo-url`"
+    },
+    {
+     "ref": "inline 2633003261 PR#7131",
+     "quote": "maybe note that the returned token is cached even when `use_cache = false`? (if you do, I guess in the udl and other places this is copied too?)"
+    },
+    {
+     "ref": "inline 3230478416 PR#7359",
+     "quote": "mentioning the \"old `CallErrorHandler`\" doesn't really make sense for future readers of this."
+    }
+   ]
+  },
+  {
+   "id": "spellcheck-code-and-docs",
+   "title": "Run a spellchecker over comments, docs and CHANGELOG",
+   "area": "docs-changelog",
+   "problem": "Many review comments were pure typo fixes (identiifer, flexibilty, isntead, nothign, measure->measuring, setup tools, UTF=8), several copied from older code.",
+   "rule": "Comments, doc comments, Markdown and CHANGELOG must pass `typos`.",
+   "enforcement": "ci-script",
+   "detect": "CI: `typos` (crate-ci/typos) with `_typos.toml` (extend-words for domain terms like enrolment, megazord, Nimbus slugs); autofix with `typos -w`. Extra regex for `UTF=8`.",
+   "autofix": true,
+   "count": 9,
+   "severity": "low",
+   "false_positive_risk": "low - allowlist for British spellings and identifiers",
+   "evidence": [
+    {
+     "ref": "inline 4221698633 PR#7632",
+     "quote": "typo: `identiifer` should be `identifier`. I think this was copied over form v2 section."
+    },
+    {
+     "ref": "inline 4221699416 PR#7632",
+     "quote": "typo: `flexibilty` should be `flexibility`. I think this was copied over form v2 section."
+    },
+    {
+     "ref": "inline 4221709434 PR#7632",
+     "quote": "typo: `UTF=8` should be `UTF-8`. I think this was copied over form v2 section."
+    },
+    {
+     "ref": "inline 3423371360 PR#7426",
+     "quote": "Typo: `isntead` I think it'll only take `@param experimentsJson`, for kdoc, but I'm not sure."
+    },
+    {
+     "ref": "inline 3424009638 PR#7427",
+     "quote": "typo: `nothign`"
+    },
+    {
+     "ref": "inline 2885635084 PR#7251",
+     "quote": "super nit: `measuring`"
+    }
+   ]
+  },
+  {
+   "id": "kotlin-no-unsafe-casts",
+   "title": "Kotlin wrappers: no unchecked casts to concrete coroutine types",
+   "area": "kotlin",
+   "problem": "`recordEventOrThrow` cast `dbScope.launch{}` to `CompletableJob`, relying on coroutine internals; `Job()` is a factory, not a constructor, and explicit return types were added/changed incorrectly.",
+   "rule": "No `as` casts on values returned by coroutine builders/library APIs in components/*/android; declare the abstract type (`Job`) returned by the API.",
+   "enforcement": "formatter-config",
+   "detect": "detekt config (repo already has detekt-baseline.xml): enable `potential-bugs>UnsafeCast`, `potential-bugs>UnsafeCallOnNullableType`, `style>UnnecessaryAbstractClass` off; custom regex `\\}\\s+as\\s+CompletableJob|launch\\s*\\{[\\s\\S]*?\\}\\s+as\\s+` -> error.",
+   "autofix": false,
+   "count": 3,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 2806578817 PR#7223",
+     "quote": "```suggestion override fun recordEventOrThrow(count: Long, eventId: String): Job = dbScope.launch { nimbusClient.recordEvent(eventId, count) } ``` This type information is not correct --"
+    },
+    {
+     "ref": "inline 2806580806 PR#7223",
+     "quote": "```suggestion fun recordEventOrThrow(count: Long = 1, eventId: String): Job = Job() ``` Job is not a ctor for the Job class -- its a factory for `CompleteableJob`s."
+    },
+    {
+     "ref": "inline 2805714932 PR#7222",
+     "quote": "```suggestion fun recordEventOrThrow(count: Long = 1, eventId: String) = Job() ``` I think you can omit the type annotation because you're returning the value and it can infer it."
+    }
+   ]
+  },
+  {
+   "id": "kotlin-kdoc-param-names",
+   "title": "KDoc @param tags must name the parameter",
+   "area": "kotlin",
+   "problem": "Kotlin docs used `@param The experiments JSON` / `@param Whether ...` without the parameter name, which KDoc mis-attributes.",
+   "rule": "Each `@param` must be followed by an actual parameter name of the documented function.",
+   "enforcement": "formatter-config",
+   "detect": "detekt `comments>OutdatedDocumentation` (active, `matchTypeParameters: true`, `allowParamOnConstructorProperties: true`) plus regex `@param\\s+(The|Whether|A|An)\\b` -> error.",
+   "autofix": false,
+   "count": 2,
+   "severity": "low",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 3423371360 PR#7426",
+     "quote": "Typo: `isntead` I think it'll only take `@param experimentsJson`, for kdoc, but I'm not sure."
+    },
+    {
+     "ref": "inline 3424006474 PR#7427",
+     "quote": "I think kdoc likes this as `@param initial`"
+    }
+   ]
+  },
+  {
+   "id": "kotlin-injectable-dispatchers",
+   "title": "Don't hardcode Dispatchers.IO in Kotlin wrappers; let embedders supply the CoroutineContext",
+   "area": "kotlin",
+   "problem": "The async-bridge ADR's KotlinWorkQueue hardcoded `Dispatchers.IO`; Android reviewers need to inject their own CoroutineContext (exception handlers, supervisor jobs, non-IO long-running tasks).",
+   "rule": "Kotlin code in components/*/android must take dispatchers/CoroutineContext as constructor/default parameters instead of referencing `Dispatchers.*` inline.",
+   "enforcement": "formatter-config",
+   "detect": "detekt `coroutines>InjectDispatcher` (active, `dispatcherNames: [IO, Default, Unconfined]`).",
+   "autofix": false,
+   "count": 2,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 4276429658 PR#7657",
+     "quote": "The layer above or even this one can have a default of `Dispatchers.IO` as long as we allow for it to be overridden by the embedder. The current design would not let me supply my own CoroutineContext"
+    },
+    {
+     "ref": "review 5524861966 PR#7657",
+     "quote": "This largely looks fine to me with a small hold out on the hard-coding of `Dispatchers.IO` in the KotlinWorkQueue. I originally understood it as a placeholder in the pseudo-code, so I want to make"
+    }
+   ]
+  },
+  {
+   "id": "duplicated-code-detection",
+   "title": "Report copy-pasted blocks in new code",
+   "area": "other",
+   "problem": "Reviewers repeatedly asked to fold duplicated logic into a helper: repeated revert blocks in nimbus, near-identical trait methods and fake HTTP clients in merino, duplicated decrypt-optional logic in autofill, vacuum logic copied in places, repeated bearer-token setup.",
+   "rule": "New code should not introduce duplicated blocks above a token threshold within a component.",
+   "enforcement": "ci-script",
+   "detect": "CI: run `jscpd --min-tokens 70 --reporters consoleFull --format rust,kotlin,swift` on changed files vs their component; report only clones introduced by the diff.",
+   "autofix": false,
+   "count": 8,
+   "severity": "low",
+   "false_positive_risk": "high - tests and generated code legitimately repeat; advisory only",
+   "evidence": [
+    {
+     "ref": "inline 2714548304 PR#7157",
+     "quote": "We're doing this in multiple places. Let's refactor this info a function ```suggestion self.maybe_revert_gecko_pref_state(); ``` elsewhere: ```rs impl ExperimentEnrollment { #[cfg(feature ="
+    },
+    {
+     "ref": "inline 3181550763 PR#7345",
+     "quote": "They are all the same. Can we collapse it into one `make_request`? ```rust pub trait HttpClientTrait { fn make_request(&self, url: Url, params: WorldCupQueryParams) -> Result<Option<Response>>; } ```"
+    },
+    {
+     "ref": "inline 3181579869 PR#7345",
+     "quote": "`FakeHttpClientSuccess`, `FakeHttpClientNoContent`, `FakeHttpClientServerError` differ only in their return values. With the trait collapsed to just one method (from the comment earlier), they reduce"
+    },
+    {
+     "ref": "inline 4196237317 PR#7631",
+     "quote": "Can't you use `encrypt_optional_str` here?"
+    },
+    {
+     "ref": "review 5137936633 PR#7583",
+     "quote": "also noticed places copies the vacuum logic, where it could now just call sql_support::vacuum - do you think it's worth cleaning that up too?"
+    },
+    {
+     "ref": "inline 3440679375 PR#7432",
+     "quote": "afact, every user of this passes `BEARER_PREFIX_SESSION_TOKEN` except for one test. Is there a future where this might be different? And every single user of the builder is calling"
+    }
+   ]
+  },
+  {
+   "id": "manual-hash-covers-cache-key",
+   "title": "Manual Hash impls used as cache keys must cover every distinguishing field",
+   "area": "other",
+   "problem": "ads-client's `impl Hash for AdRequest` omitted query params, the endpoint and the OHTTP flag, so different requests could collide in the HTTP cache.",
+   "rule": "For manual `impl Hash` (or cache-key builders), every struct field must either be hashed or be listed in a doc comment as intentionally excluded; adding a field to such a struct requires touching the impl.",
+   "enforcement": "custom-lint",
+   "detect": "syn checker: for `impl Hash for T` with a manual body, collect `self.<field>` accessed; fields of T not accessed and not named in the impl's doc comment -> warn. CI diff: field added to T while impl unchanged -> warn.",
+   "autofix": false,
+   "count": 3,
+   "severity": "medium",
+   "false_positive_risk": "low",
+   "evidence": [
+    {
+     "ref": "inline 3088050128 PR#7318",
+     "quote": "I'm wondering if we should be storing the url query params for the hashing to be more robust?"
+    },
+    {
+     "ref": "inline 3236442768 PR#7368",
+     "quote": "nit: I would just add `ENDPOINT.hash(state);` to bind the hash to the endpoint so if tomorrow we have a `/v2/ads` we wont have hash clashing"
+    },
+    {
+     "ref": "review 4130472675 PR#7315",
+     "quote": "Great work! A quick comment is whether we should include the ohttp option into the cache key!"
+    }
+   ]
+  },
+  {
+   "id": "url-building-via-url-api",
+   "title": "Build request URLs with Url APIs and handle empty/duplicate query params",
+   "area": "other",
+   "problem": "Code built URLs with `format!(\"{}/api/v1/...\")`, risking double/missing slashes; joined an empty provider list into `providers=` (server returns nothing); and appended query params that might already exist.",
+   "rule": "Use `Url::join`/`path_segments_mut`/`query_pairs_mut` instead of string formatting; skip params for empty collections; test path joining with and without leading slashes.",
+   "enforcement": "ast-grep/regex",
+   "detect": "ast-grep: `Url::parse(&format!($$$))` -> warn; `append_pair($K, &$V.join($S))` without an `is_empty` guard in the enclosing block -> warn; `format!(\"{}/{}\", $A, $B)` where the result flows into `Url::parse` -> warn.",
+   "autofix": false,
+   "count": 4,
+   "severity": "low",
+   "false_positive_risk": "medium",
+   "evidence": [
+    {
+     "ref": "inline 3181483101 PR#7345",
+     "quote": "We could add the base url as a const (in addition to the `DEFAULT_BASE_HOST`? Or just do `DEFAULT_BASE_URL`? And then we can use this in the tests too (import it there) instead of having another"
+    },
+    {
+     "ref": "inline 3236429333 PR#7368",
+     "quote": "nit: I realize this function is not properly tested, I can create a ticket for this but I'd like to make sure that for example: `into_url(\"/ads\")` == `into_url(\"ads\")`"
+    },
+    {
+     "ref": "inline 3095638917 PR#7322",
+     "quote": "just an edge case concern. Would we ever get an empty vec? This would result an empty string, I think? Asking because `https://merino.services.mozilla.com/api/v1/suggest?q=ama&providers=\"\"` doesn't"
+    },
+    {
+     "ref": "inline 3041247436 PR#7268",
+     "quote": "Nit: I wonder if we check for duplicated query params? And if MARS is able to handle them? i.e. `?placement_id=1&position=2&placement_id=3&position=4`"
+    }
+   ]
+  },
+  {
+   "id": "copy-paste-identifier-mismatch",
+   "title": "Catch copy-paste mismatches in identifiers (initializer NAME, metric names, key names)",
+   "area": "naming",
+   "problem": "Copied code kept the wrong identifiers: `AdsStoreConnectionInitializer::NAME = \"ads_cache\"`, a logins key named `as-login-key` instead of `as-logins-key`, and a dashboard panel reusing another metric's name.",
+   "rule": "`ConnectionInitializer::NAME` must correspond to the initializer type/DB file name; dashboard configs must not list the same (category, metric) twice under different display names; well-known key names come from a shared const.",
+   "enforcement": "custom-lint",
+   "detect": "ast-grep: `impl $_::ConnectionInitializer for $T { const NAME: &'static str = $S; $$$ }` -> compare snake_case(`$T` minus `ConnectionInitializer`) with `$S`, warn on mismatch. Script over tools/generate-rust-dashboards team_config: duplicate (category, metric) tuples -> error. Regex for string literals equal-but-one-char to existing key consts (`as-logins-key`) -> warn.",
+   "autofix": false,
+   "count": 3,
+   "severity": "low",
+   "false_positive_risk": "medium",
+   "evidence": [
+    {
+     "ref": "inline 3961333788 PR#7567",
+     "quote": "```suggestion const NAME: &'static str = \"ads_store\"; ``` I guess?"
+    },
+    {
+     "ref": "inline 3796398961 PR#7542",
+     "quote": "should be `as-logins-key`"
+    },
+    {
+     "ref": "inline 2636489805 PR#7123",
+     "quote": "Is this the right metric here? it's the same as `Suggest ingest download time` above, lets either put the query_time param here or just remove this"
+    }
+   ]
+  }
+ ],
+ "non_lintable_themes": [
+  {
+   "theme": "FxA state-machine transitions: choosing the right target state on errors (AuthIssues vs Disconnected vs stay), missing states/events, retries",
+   "count": 10,
+   "evidence": [
+    {
+     "ref": "inline 3046866655 PR#7306",
+     "quote": "I think you'll need a new internal state for this since it should call `begin_oauth_scope_authorization_flow()` instead of `begin_oauth_flow()`. Ditto for the complete flow event."
+    },
+    {
+     "ref": "inline 3230517518 PR#7359",
+     "quote": "this seems a little wrong (and may also be wrong currently) - if `ensure_capabilities()` fails due to a non-auth error (eg, a network error), the state becomes disconnected? Shouldn't this use"
+    },
+    {
+     "ref": "inline 3502651365 PR#7457",
+     "quote": "One thing worth checking: in the old code we land at S::AuthIssues when `check_authorization_status` comes back `false`. The new code propagates the original FxaError::Authentication to the"
+    },
+    {
+     "ref": "inline 3271703691 PR#7379",
+     "quote": "I like this idea in general, however I'm not sure about this - in most cases when we get one of those push notifications we are in a \"good\" state, and the event is to tell us that we should almost"
+    },
+    {
+     "ref": "inline 3954734125 PR#7564",
+     "quote": "This patch looks nice to me! But I think the comment about an fxa server bug is wishful thinking (eg, desktop has never done this and there's never been evidence it should), and even \"old browser"
+    }
+   ]
+  },
+  {
+   "theme": "Naming clarity and cross-component consistency (redundant prefixes, collisions like SuggestOptions/SuggestionOptions, cache vs store, harmonize get_candidates, match upstream names)",
+   "count": 12,
+   "evidence": [
+    {
+     "ref": "inline 2603795779 PR#7122",
+     "quote": "nit: we can use a more clear name. Nimbus SDK has some existing issues with unclear names and there's no reason to not use a longer variable name here. ```suggestion let enrollments ="
+    },
+    {
+     "ref": "inline 3081912951 PR#7314",
+     "quote": "We already have `SuggestionOptions` via the `schema.rs`. Can we rename either one of them?"
+    },
+    {
+     "ref": "inline 3110738043 PR#7312",
+     "quote": "Nit: One incongruence I noticed while working with this API is that HIBP refers to this as a breach name, so I kept passing `{ breachId: breach.Name }`. That's a little bit awkward, so we could"
+    },
+    {
+     "ref": "inline 4281809239 PR#7650",
+     "quote": "in logins component we call similar functions `get_candidates` - wdyt about harmonizing naming here? Also, there we expose specific `LoginCandidate` structs, which we could do here, too."
+    },
+    {
+     "ref": "inline 3993584471 PR#7597",
+     "quote": "Why not just `BackgroundWorker`? `AdsClient` -> we are already in the ads-client crate so not sure we need that prefix `Wrapper` -> when I see this, I expect to see some `AdsClientWorker` and"
+    },
+    {
+     "ref": "inline 4280788717 PR#7657",
+     "quote": "⚠️ potential bikeshedding: The name `WorkQueue` implies to me, that it is a queue of tasks, but I didn't see that in the implementation. It seems to me more like a \"runner\" / or \"executor\" than a"
+    }
+   ]
+  },
+  {
+   "theme": "Comments should explain why (non-obvious queries, workarounds, arbitrary values, ignored params), not restate code",
+   "count": 8,
+   "evidence": [
+    {
+     "ref": "inline 3551807352 PR#7467",
+     "quote": "Why do you need the second query? I would have thought the `loginsL` one would be enough. I'm guessing I'm missing something, could you add a comment explaining. The same applies to"
+    },
+    {
+     "ref": "inline 4010328517 PR#7564",
+     "quote": "Can you add a comment here explaining why we're not returning the value we have? I'm pretty sure I'll forget before the next time I look at this code."
+    },
+    {
+     "ref": "inline 3124306947 PR#7306",
+     "quote": "IIUC, this is a workaround to the fact that we don't want to re-request all the scopes when fetching the refresh token. In particular, re-requesting the sync scope creates a UI issue. Are there"
+    },
+    {
+     "ref": "inline 2747629927 PR#7199",
+     "quote": "Maybe add a comment linking to the cli-support code and the reason why we can't import it directly."
+    },
+    {
+     "ref": "inline 4223168267 PR#7632",
+     "quote": "Suggestion: Could we add a short comment explaining why overrides are ignored for v3? And that it's been removed?"
+    }
+   ]
+  },
+  {
+   "theme": "AI-generated or boilerplate comments/READMEs that add no value or are inaccurate",
+   "count": 7,
+   "evidence": [
+    {
+     "ref": "inline 2691896654 PR#7160",
+     "quote": "These comments are not helpful. Was this patch generated by AI?"
+    },
+    {
+     "ref": "inline 2959491845 PR#7274",
+     "quote": "I would rather not have this Architecture session here. Once we change or add files, we always have to update the README. Which, in the end, can get rather large."
+    },
+    {
+     "ref": "inline 2960496589 PR#7274",
+     "quote": "I know this was generated with Claude, but can we make sure to actually include things in the README which are helpful for maintainers/users? :) I don't think we need to mention Cross-platfom etc."
+    },
+    {
+     "ref": "inline 2956363232 PR#7274",
+     "quote": "While I appreciate the comment, not really sure that it provides a lot of help here. maybe ```suggestion /// Internal convenience wrapper for `std::Result`. ```"
+    },
+    {
+     "ref": "inline 2956442271 PR#7274",
+     "quote": "Well, not exactly. Merino is the suggestion engine. It provides a lot of things, including curated recommendations."
+    }
+   ]
+  },
+  {
+   "theme": "PR scope and commit structure: split moves from changes, avoid unrelated changes, split large multi-concern PRs, rebase onto main",
+   "count": 6,
+   "evidence": [
+    {
+     "ref": "review 3651313861 PR#7141",
+     "quote": "From the patch structure, it is pretty hard to review. The problem appears to be the moves/re-ordering of the tests within the file - this makes the differences hard to read and find. It would"
+    },
+    {
+     "ref": "review 4954052589 PR#7531",
+     "quote": "My main concern is scope: this combines FFI, worker/threading, caching, and telemetry changes in one PR, which made some things hard to isolate. Would it be possible to split this into smaller,"
+    },
+    {
+     "ref": "review 3706528349 PR#7141",
+     "quote": "I think the changes here are fine, however I think the diffs might be a bit weird, once the other PR lands on main, please could you rebase and change this PR to be based on main, so that it is"
+    },
+    {
+     "ref": "review 3793157452 PR#7186",
+     "quote": "This is looking good overall, but I had a couple suggestions. Also, I think the branch needs a rebase or something, because there's some extra commits here that don't seem like they belong."
+    },
+    {
+     "ref": "inline 2835174793 PR#7216",
+     "quote": "nit: Did the application names change somewhere else?"
+    }
+   ]
+  },
+  {
+   "theme": "ads-client architecture/design: module boundaries (mars vs store), config placement, collapsing parallel vectors/enums, duplicate sync vs dispatch APIs, worker recovery",
+   "count": 10,
+   "evidence": [
+    {
+     "ref": "inline 3798615502 PR#7531",
+     "quote": "Could we simplify this to a single `requests: Vec<...>` instead of three parallel vectors (`image_ad_requests`, `spoc_ad_requests`, `tile_ad_requests`)? Right now the caller has to split requests by"
+    },
+    {
+     "ref": "inline 3798624471 PR#7531",
+     "quote": "I'm not fully convinced by having both `record_impression` and `dispatch_record_impression` -> they parse the URL and map errors identically, the only difference is sync vs. queued. From a consumer's"
+    },
+    {
+     "ref": "inline 3798628775 PR#7531",
+     "quote": "If this happens, it looks like the client stays broken for the rest of its lifetime, nothing here attempts to restart the worker thread. Since this is an internal implementation detail, I'd prefer we"
+    },
+    {
+     "ref": "inline 3898830620 PR#7567",
+     "quote": "This code feels like a lot for just storing the ad type. I think there are other ways we could explore. 1. We could store it as an enum like: ```rs #[derive(Serialize, Deserialize)] #[serde(tag ="
+    },
+    {
+     "ref": "inline 4273993194 PR#7597",
+     "quote": "I think this belongs in `AdsClientConfig`, not `AdsStoreConfig`. The store only reads and writes ads, and the batch interval is about when requests are sent. Perhaps we don't need `AdsStoreConfig` at"
+    },
+    {
+     "ref": "review 5296795709 PR#7617",
+     "quote": "Hey! Thanks for this. I think the design could be simpler. ohttp, blocks and consent/GPP apply to the whole request, and I don’t see a case where two placements would need different values. I’d make"
+    }
+   ]
+  },
+  {
+   "theme": "Missing tests for new behaviour (Kotlin side effects, external providers, v3 matching, test that fails without the patch)",
+   "count": 6,
+   "evidence": [
+    {
+     "ref": "inline 3423931801 PR#7427",
+     "quote": "Could we have some tests around this?"
+    },
+    {
+     "ref": "inline 3076223000 PR#7278",
+     "quote": "Should we also test external context id provider?"
+    },
+    {
+     "ref": "inline 4224192439 PR#7645",
+     "quote": "All the tests still use v2 environments. Could we add a few v3 ones. Example, firefox-macosx matches a macOS user but not Windows ?"
+    },
+    {
+     "ref": "review 4231424927 PR#7350",
+     "quote": "I would like to see a test where we invoke the generate command and it fails for something in validate (ie the test will fail without this patch)"
+    },
+    {
+     "ref": "inline 2883969503 PR#7253",
+     "quote": "This could also test that records/attachments with packaged data are reverted to the packaged versions. I don't think that's totally necessary though, the addition of this test is already great. If"
+    }
+   ]
+  },
+  {
+   "theme": "Behaviour differs from PR description / silent semantic change (TTL min vs override, missing 7-day cap)",
+   "count": 2,
+   "evidence": [
+    {
+     "ref": "inline 3066226401 PR#7316",
+     "quote": "It seems that we are not getting the smallest of the three anymore, is this a design decision? One scenario to test: `caller=500s, default_ttl=300s, no server header` then the old behavior would"
+    },
+    {
+     "ref": "inline 3190201181 PR#7344",
+     "quote": "Overall implementation looks good! However, the description says the ttl is capped at 7 days max, but this resolve function is not performing any capping. Seems like the capping was removed at some"
+    }
+   ]
+  },
+  {
+   "theme": "HTTP status handling completeness (204/401/403) and keeping status mapping readable",
+   "count": 2,
+   "evidence": [
+    {
+     "ref": "inline 3081896070 PR#7314",
+     "quote": "Do we need to handle 401/403 as well?"
+    },
+    {
+     "ref": "inline 3112009135 PR#7331",
+     "quote": "I would like to keep the error codes on the top level, for readability. The performance cost for unwrapping the `.text()` is very low here, and we could even do: ```rust match status { 200 =>"
+    }
+   ]
+  },
+  {
+   "theme": "Developer docs portability and jargon (Linux vs macOS commands, generic brew advice, unexplained acronyms like HNT)",
+   "count": 5,
+   "evidence": [
+    {
+     "ref": "inline 2989805993 PR#7290",
+     "quote": "This doesn't work for me on my linux distro. But I can do... ``` java -XshowSettings:properties -version 2>&1 > /dev/null | grep 'java.home' ```"
+    },
+    {
+     "ref": "inline 3596057280 PR#7477",
+     "quote": "I'm pretty sure I've seen this same issue, how about making this a bit more generic? I'm thinking something like \"If you encounter a ModuleNotFoundError, then install setuptools on your system (for"
+    },
+    {
+     "ref": "inline 3687418191 PR#7487",
+     "quote": "I have no idea what HNT stands for and google isn't helping. It looks like it's somehow related to desktop, but this all says Fenix."
+    },
+    {
+     "ref": "inline 3687420598 PR#7487",
+     "quote": "ditto here, no idea what a \"hnt desktop\" is?"
+    },
+    {
+     "ref": "review 4824649668 PR#7487",
+     "quote": "This all seems very elaborate and unlikely to be widely used, but you aren't forcing anyone to use this and if it scratches your itch I've no objection. I think \"hnt\" is very unclear though."
+    }
+   ]
+  },
+  {
+   "theme": "Async/threading API design for foreign callers (suspend/async signatures, Swift concurrency bridging, JS main-thread IO)",
+   "count": 4,
+   "evidence": [
+    {
+     "ref": "inline 4281778515 PR#7657",
+     "quote": "Question: Should `add()` become `async add()` now? --- One of the goals of this document is to alleviate the sync/async ambiguities to Kotlin/Swift/JS developers. As a Kotlin developer using these"
+    },
+    {
+     "ref": "inline 4286689724 PR#7657",
+     "quote": "~~This seems fine to me. I guess we might want to leverage a continuation here to make this interface use swift concurrency for callers.~~ I take that back we would want to be extremely thoughtful"
+    },
+    {
+     "ref": "inline 4342526866 PR#7657",
+     "quote": "It would be nice to see an example for the Swift side too maybe! I'm not familiar enough with the Android side/Kotlin to grok this immediately. Here's the current Swift code for adding a LoginEntry:"
+    },
+    {
+     "ref": "inline 4279023791 PR#7657",
+     "quote": "For this future ADR when we think about cancellation, a task could be a [`Continuation`](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.coroutines/-continuation/) when we can describe what that"
+    }
+   ]
+  },
+  {
+   "theme": "SQL query efficiency suggestions (MAX instead of several EXISTS, json_each joins)",
+   "count": 2,
+   "evidence": [
+    {
+     "ref": "inline 3270383176 PR#7375",
+     "quote": "Instead of the exists here we could potentially use `MAX` that way we don't need the 5 exists. This would reduce the amount of scans this query would be doing. ``` SELECT MAX(child.isDeleted IS 1),"
+    },
+    {
+     "ref": "inline 2965863824 PR#7270",
+     "quote": "I think there's way to get sqlite to do this with by joining against the [`json_each` function](https://www.sqlitetutorial.net/sqlite-json-functions/sqlite-json_each-function/). I'm not sure if"
+    }
+   ]
+  },
+  {
+   "theme": "Test isolation for global NSS/key state causing flaky tests",
+   "count": 1,
+   "evidence": [
+    {
+     "ref": "inline 4105377552 PR#7628",
+     "quote": "if you'd add a `TEST_LOCK` similar to the one in sym_key that would solve these flaky tests, too, I think: ``` ---- encryption::tests_keydb::test_nss_key_manager stdout ---- thread"
+    }
+   ]
+  }
+ ],
+ "suspicious": []
+}

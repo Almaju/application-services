@@ -1,0 +1,7 @@
+id: static-mutable-cache
+language: rust
+severity: warning
+message: "Global mutable static; prefer state owned by a store/struct or the DB meta table."
+rule:
+  kind: static_item
+  regex: "(Mutex|RwLock|RefCell)<"

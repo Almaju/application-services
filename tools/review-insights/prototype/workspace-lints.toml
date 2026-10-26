@@ -1,0 +1,68 @@
+# Proposed `[workspace.lints]` for the top-level Cargo.toml.
+#
+# Crates opt in with `[lints] workspace = true` (none do today). CLI/codegen
+# crates (start-bindings, nimbus-cli, examples, dump, ...) can override
+# `print_stdout` locally.
+#
+# The trailing comment on each line is the number of hits on main (5335439) in
+# library code (see results/clippy_counts.md), so it shows how much cleanup
+# each step needs.
+
+# ---------------------------------------------------------------------------
+# Step 1: zero hits today, so deny now as regression guards.
+[workspace.lints.clippy]
+dbg_macro = "deny"                          # 0  no-debug-leftovers
+print_stderr = "deny"                       # 0  no-debug-leftovers
+todo = "deny"                               # 0  uniffi-no-panic-across-ffi
+significant_drop_in_scrutinee = "deny"      # 0  no-callbacks-or-io-under-lock
+mutex_atomic = "deny"                       # 0
+mutex_integer = "deny"                      # 0
+rc_mutex = "deny"                           # 0
+fn_params_excessive_bools = "deny"          # 0  no-bool-params
+empty_enum_variants_with_brackets = "deny"  # 0  pedantic-subset
+inefficient_to_string = "deny"              # 0  needless-clones
+unused_async = "deny"                       # 0
+lossy_float_literal = "deny"                # 0
+
+# ---------------------------------------------------------------------------
+# Step 2: small counts. Warn now, fix per component, then flip to deny.
+let_underscore_must_use = "warn"            # 9    dont-swallow-errors
+empty_structs_with_brackets = "warn"        # 9    pedantic-subset
+redundant_clone = "warn"                    # 12   needless-clones
+ref_option = "warn"                         # 13   borrowed-params
+unimplemented = "warn"                      # 13   uniffi-no-panic-across-ffi
+significant_drop_tightening = "warn"        # 21   no-callbacks-or-io-under-lock
+panic = "warn"                              # 30   no-unwrap-in-component-code
+clone_on_ref_ptr = "warn"                   # 29   needless-clones (write Arc::clone(&x))
+implicit_clone = "warn"                     # 35   needless-clones
+string_slice = "warn"                       # 38   utf8-safe-truncation
+map_err_ignore = "warn"                     # 38   dont-swallow-errors / preserve-error-sources
+unnecessary_wraps = "warn"                  # 43   option-result-combinators
+manual_let_else = "warn"                    # 45   option-result-combinators
+disallowed_types = "warn"                   # 51   parking-lot-locks, persisted-values-stable (clippy.toml)
+disallowed_macros = "warn"                  # 24   tracing-support-logging (clippy.toml)
+undocumented_unsafe_blocks = "warn"         # 68   unsafe-and-nss (62 in nss)
+expect_used = "warn"                        # 75   no-unwrap-in-component-code
+allow_attributes_without_reason = "warn"    # 147  expect-with-reason
+
+# ---------------------------------------------------------------------------
+# Step 3: larger but mostly machine-fixable (`cargo clippy --fix`), one PR per lint.
+uninlined_format_args = "warn"              # 244  pedantic-subset (autofix)
+str_to_string = "warn"                      # 315  needless-clones (autofix)
+unwrap_used = "warn"                        # 262  no-unwrap-in-component-code; ~70 go away with parking_lot
+indexing_slicing = "warn"                   # 105  no-panicking-index-or-arith
+
+# Scoped with `#![warn(...)]` in the modules where they matter rather than workspace-wide:
+#   iter_over_hash_type        (32)  nimbus-fml codegen, suggest/search ingestion  -> deterministic-iteration
+#   wildcard_enum_match_arm    (136) state machines, get_error_handling            -> exhaustive-matches
+#   cast_possible_truncation   (50)  parsing / JEXL / TTL code                     -> no-panicking-index-or-arith
+#   missing_docs              (4357) via the UniFFI docstring checker instead      -> uniffi-docstrings
+
+[workspace.lints.rust]
+unreachable_pub = "warn"                    # 837  minimal-visibility (autofix)
+unused_qualifications = "warn"              # 292  rustfmt-config (autofix)
+let_underscore_drop = "warn"                # 11   dont-swallow-errors
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"             # docs-in-sync
+private_intra_doc_links = "warn"

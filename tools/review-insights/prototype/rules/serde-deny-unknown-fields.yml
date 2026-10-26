@@ -1,0 +1,7 @@
+id: serde-deny-unknown-fields
+language: rust
+severity: warning
+message: "Types deserialized from server / Remote Settings data must tolerate new fields; `deny_unknown_fields` breaks old clients when the schema grows."
+rule:
+  kind: attribute_item
+  regex: "deny_unknown_fields"

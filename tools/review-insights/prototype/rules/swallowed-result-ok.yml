@@ -1,0 +1,9 @@
+id: swallowed-result-ok
+language: rust
+severity: hint
+message: "Error discarded with `.ok()`; log or report it so data loss is visible."
+rule:
+  any:
+    - pattern: $X.filter_map(|$A| $B.ok())
+    - pattern: $X.ok().flatten()
+    - pattern: "if let Ok($P) = $E { $$$ }"
