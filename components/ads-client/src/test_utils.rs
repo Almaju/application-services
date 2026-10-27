@@ -8,12 +8,13 @@ use std::collections::HashMap;
 use url::Url;
 use url_macro::url;
 
-use crate::ads::{AdCallbacks, AdImage, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking};
 #[cfg(feature = "stateful")]
-use crate::ads::{Ads, PlacementId};
+use crate::ads::{AdKind, Ads, PlacementId};
 use crate::mars::{
     ad_request::{AdContentCategory, AdPlacementRequest, IABContentTaxonomy},
-    ad_response::AdResponse,
+    ad_response::{
+        Ad, AdCallbacks, AdImage, AdResponse, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking,
+    },
 };
 use crate::MozAdsTelemetry;
 
@@ -34,7 +35,10 @@ pub fn get_example_happy_image_ads(placement_id: &str) -> (PlacementId, Ads) {
     let images = get_example_happy_image_response()
         .data
         .remove("example_placement_1")
-        .expect("example image response has example_placement_1");
+        .expect("example image response has example_placement_1")
+        .into_iter()
+        .filter_map(AdImage::from_ad)
+        .collect();
     (PlacementId::new(placement_id), Ads::Images(images))
 }
 
@@ -59,13 +63,13 @@ pub fn make_happy_placement_requests() -> Vec<AdPlacementRequest> {
     ]
 }
 
-pub fn get_example_happy_image_response() -> AdResponse<AdImage> {
+pub fn get_example_happy_image_response() -> AdResponse {
     let base_url = mockito::server_url();
     AdResponse {
         data: HashMap::from([
             (
                 "example_placement_1".to_string(),
-                vec![AdImage {
+                vec![Ad::Image(AdImage {
                     url: url!("https://ads.fakeexample.org/example_ad_1"),
                     image_url: url!("https://ads.fakeexample.org/example_image_1"),
                     format: "billboard".to_string(),
@@ -79,11 +83,11 @@ pub fn get_example_happy_image_response() -> AdResponse<AdImage> {
                             Url::parse(&format!("{}/report/example_ad_1", base_url)).unwrap(),
                         ),
                     },
-                }],
+                })],
             ),
             (
                 "example_placement_2".to_string(),
-                vec![AdImage {
+                vec![Ad::Image(AdImage {
                     url: url!("https://ads.fakeexample.org/example_ad_2"),
                     image_url: url!("https://ads.fakeexample.org/example_image_2"),
                     format: "skyscraper".to_string(),
@@ -97,18 +101,18 @@ pub fn get_example_happy_image_response() -> AdResponse<AdImage> {
                             Url::parse(&format!("{}/report/example_ad_2", base_url)).unwrap(),
                         ),
                     },
-                }],
+                })],
             ),
         ]),
     }
 }
 
-pub fn get_example_happy_spoc_response() -> AdResponse<AdSpoc> {
+pub fn get_example_happy_spoc_response() -> AdResponse {
     AdResponse {
         data: HashMap::from([
             (
                 "example_placement_1".to_string(),
-                vec![AdSpoc {
+                vec![Ad::Spoc(AdSpoc {
                     url: url!("https://ads.fakeexample.org/example_spoc_1"),
                     image_url: url!("https://ads.fakeexample.org/example_spoc_image_1"),
                     format: "spoc".to_string(),
@@ -139,11 +143,11 @@ pub fn get_example_happy_spoc_response() -> AdResponse<AdSpoc> {
                                 .unwrap(),
                         ),
                     },
-                }],
+                })],
             ),
             (
                 "example_placement_2".to_string(),
-                vec![AdSpoc {
+                vec![Ad::Spoc(AdSpoc {
                     url: url!("https://ads.fakeexample.org/example_spoc_2"),
                     image_url: url!("https://ads.fakeexample.org/example_spoc_image_2"),
                     format: "spoc".to_string(),
@@ -174,18 +178,18 @@ pub fn get_example_happy_spoc_response() -> AdResponse<AdSpoc> {
                                 .unwrap(),
                         ),
                     },
-                }],
+                })],
             ),
         ]),
     }
 }
 
-pub fn get_example_happy_uatile_response() -> AdResponse<AdTile> {
+pub fn get_example_happy_uatile_response() -> AdResponse {
     AdResponse {
         data: HashMap::from([
             (
                 "example_placement_1".to_string(),
-                vec![AdTile {
+                vec![Ad::Tile(AdTile {
                     url: url!("https://ads.fakeexample.org/example_uatile_1"),
                     image_url: url!("https://ads.fakeexample.org/example_uatile_image_1"),
                     format: "tile".to_string(),
@@ -203,11 +207,11 @@ pub fn get_example_happy_uatile_response() -> AdResponse<AdTile> {
                                 .unwrap(),
                         ),
                     },
-                }],
+                })],
             ),
             (
                 "example_placement_2".to_string(),
-                vec![AdTile {
+                vec![Ad::Tile(AdTile {
                     url: url!("https://ads.fakeexample.org/example_uatile_2"),
                     image_url: url!("https://ads.fakeexample.org/example_uatile_image_2"),
                     format: "tile".to_string(),
@@ -225,7 +229,7 @@ pub fn get_example_happy_uatile_response() -> AdResponse<AdTile> {
                                 .unwrap(),
                         ),
                     },
-                }],
+                })],
             ),
         ]),
     }

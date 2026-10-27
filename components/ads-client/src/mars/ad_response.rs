@@ -3,134 +3,145 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use crate::ads::{AdCallbacks, AdImage, AdImageOrSpoc, AdSpoc, AdTile};
-use crate::http_cache::RequestHash;
 use crate::telemetry;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+use url::Url;
 
-#[derive(Debug, PartialEq, Serialize)]
-pub struct AdResponse<A: AdResponseValue> {
-    pub data: HashMap<String, Vec<A>>,
+/// Response body of `getAds` (the `AdResponse` schema): the ads served for
+/// each placement of the request.
+///
+/// An ad that does not match its schema is recorded and dropped, rather than
+/// failing the whole response.
+#[derive(Debug, Default, PartialEq)]
+pub struct AdResponse {
+    pub data: HashMap<String, Vec<Ad>>,
 }
 
-impl<A: AdResponseValue> AdResponse<A> {
-    pub fn parse(data: serde_json::Value) -> Result<AdResponse<A>, serde_json::Error> {
-        let raw: HashMap<String, serde_json::Value> = serde_json::from_value(data)?;
-        let mut result = HashMap::new();
-
-        for (key, value) in raw {
-            if let serde_json::Value::Array(arr) = value {
-                let mut ads: Vec<A> = vec![];
-                for item in arr {
-                    match serde_json::from_value::<A>(item.clone()) {
-                        Ok(ad) => ads.push(ad),
-                        Err(e) => {
-                            telemetry::record_invalid_ad_item(&e);
-                        }
-                    }
-                }
-                if !ads.is_empty() {
-                    result.insert(key, ads);
-                }
-            }
-        }
-
-        Ok(AdResponse { data: result })
-    }
-
-    pub fn enrich_callbacks(&mut self, request_hash: &RequestHash) {
-        let hash_str = request_hash.to_string();
-        for (placement_id, ads) in self.data.iter_mut() {
-            for (position, ad) in ads.iter_mut().enumerate() {
-                let cap_key = ad.cap_key();
-                let callbacks = ad.callbacks_mut();
-                callbacks
-                    .click
-                    .query_pairs_mut()
-                    .append_pair("request_hash", &hash_str);
-                let mut impression_callback_query = callbacks.impression.query_pairs_mut();
-                impression_callback_query.append_pair("request_hash", &hash_str);
-                if let Some(cap_key) = cap_key {
-                    impression_callback_query.append_pair("cap_key", &cap_key);
-                }
-                if let Some(report_url) = callbacks.report.as_mut() {
-                    report_url
-                        .query_pairs_mut()
-                        .append_pair("placement_id", placement_id)
-                        .append_pair("position", &position.to_string());
-                }
-            }
-        }
-    }
-
-    pub fn take_first(self) -> HashMap<String, A> {
-        self.data
+impl<'de> Deserialize<'de> for AdResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        let data = raw
             .into_iter()
-            .filter_map(|(k, mut v)| {
-                if v.is_empty() {
-                    None
-                } else {
-                    Some((k, v.remove(0)))
-                }
+            .filter_map(|(placement, value)| match value {
+                serde_json::Value::Array(items) => Some((
+                    placement,
+                    items
+                        .into_iter()
+                        .filter_map(|item| {
+                            serde_json::from_value(item)
+                                .inspect_err(telemetry::record_invalid_ad_item)
+                                .ok()
+                        })
+                        .collect(),
+                )),
+                _ => None,
             })
-            .collect()
+            .collect();
+        Ok(AdResponse { data })
     }
 }
 
-pub trait AdResponseValue: DeserializeOwned {
-    fn callbacks_mut(&mut self) -> &mut AdCallbacks;
-    fn cap_key(&self) -> Option<String> {
-        None
-    }
+/// One ad of an [`AdResponse`]: `anyOf: [Image, Spoc, Tile]`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Ad {
+    Image(AdImage),
+    Spoc(AdSpoc),
+    Tile(AdTile),
 }
 
-impl AdResponseValue for AdImage {
-    fn callbacks_mut(&mut self) -> &mut AdCallbacks {
-        &mut self.callbacks
-    }
-}
-
-impl AdResponseValue for AdSpoc {
-    fn callbacks_mut(&mut self) -> &mut AdCallbacks {
-        &mut self.callbacks
-    }
-
-    fn cap_key(&self) -> Option<String> {
-        Some(self.caps.cap_key.clone())
-    }
-}
-
-impl AdResponseValue for AdImageOrSpoc {
-    fn callbacks_mut(&mut self) -> &mut AdCallbacks {
-        match self {
-            AdImageOrSpoc::Image(ad) => &mut ad.callbacks,
-            AdImageOrSpoc::Spoc(ad) => &mut ad.callbacks,
+// The schema has no discriminator, and `#[serde(untagged)]` would take the
+// first variant that fits, but a spoc or a tile has every field an image has.
+// `format` is what tells them apart: `spoc`, `tile`, or an image format such
+// as `billboard`.
+impl<'de> Deserialize<'de> for Ad {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let value = <serde_json::Value>::deserialize(deserializer)?;
+        match value.get("format").and_then(serde_json::Value::as_str) {
+            Some("spoc") => serde_json::from_value(value).map(Self::Spoc),
+            Some("tile") => serde_json::from_value(value).map(Self::Tile),
+            Some(_) => serde_json::from_value(value).map(Self::Image),
+            None => return Err(D::Error::missing_field("format")),
         }
-    }
-
-    fn cap_key(&self) -> Option<String> {
-        match self {
-            AdImageOrSpoc::Image(_ad) => None,
-            AdImageOrSpoc::Spoc(ad) => Some(ad.caps.cap_key.clone()),
-        }
+        .map_err(D::Error::custom)
     }
 }
 
-impl AdResponseValue for AdTile {
-    fn callbacks_mut(&mut self) -> &mut AdCallbacks {
-        &mut self.callbacks
-    }
+/// The `Image` schema.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AdImage {
+    pub alt_text: Option<String>,
+    pub block_key: String,
+    pub callbacks: AdCallbacks,
+    pub format: String,
+    pub image_url: Url,
+    pub url: Url,
+}
+
+/// The `Spoc` schema.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AdSpoc {
+    pub block_key: String,
+    pub callbacks: AdCallbacks,
+    pub caps: SpocFrequencyCaps,
+    pub domain: String,
+    pub excerpt: String,
+    pub format: String,
+    pub image_url: Url,
+    pub ranking: SpocRanking,
+    pub sponsor: String,
+    pub sponsored_by_override: Option<String>,
+    pub title: String,
+    pub url: Url,
+}
+
+/// The `Tile` schema.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AdTile {
+    pub block_key: String,
+    pub callbacks: AdCallbacks,
+    pub format: String,
+    pub image_url: Url,
+    pub name: String,
+    pub url: Url,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SpocFrequencyCaps {
+    pub cap_key: String,
+    pub day: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SpocRanking {
+    pub item_score: f64,
+    pub personalization_models: Option<HashMap<String, u32>>,
+    pub priority: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AdCallbacks {
+    pub click: Url,
+    pub impression: Url,
+    pub report: Option<Url>,
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ads::{SpocFrequencyCaps, SpocRanking};
-
     use super::*;
-    use serde_json::{from_str, json};
-    use url::Url;
+    use crate::test_utils::{
+        get_example_happy_image_response, get_example_happy_spoc_response,
+        get_example_happy_uatile_response,
+    };
+    use serde_json::{from_str, from_value, json};
     use url_macro::url;
 
     #[test]
@@ -289,30 +300,38 @@ mod tests {
             ]
         });
 
-        let parsed = AdResponse::<AdImage>::parse(raw_ad_response).unwrap();
+        let parsed: AdResponse = from_value(raw_ad_response).unwrap();
 
+        // The invalid ads are dropped, but their placements stay.
         let expected = AdResponse {
-            data: HashMap::from([(
-                "valid_ad".to_string(),
-                vec![AdImage {
-                    url: url!("https://ads.fakeexample.org/example_ad_3"),
-                    image_url: url!("https://ads.fakeexample.org/example_image_3"),
-                    format: "skyscraper".to_string(),
-                    block_key: "abc123".into(),
-                    alt_text: Some("An ad for a pet duck".to_string()),
-                    callbacks: AdCallbacks {
-                        click: Url::parse("https://ads.fakeexample.org/click/example_ad_3")
+            data: HashMap::from([
+                ("incorrect_click_url".to_string(), vec![]),
+                ("incorrect_impression_url".to_string(), vec![]),
+                ("missing_click_url".to_string(), vec![]),
+                ("missing_impression_url".to_string(), vec![]),
+                (
+                    "valid_ad".to_string(),
+                    vec![Ad::Image(AdImage {
+                        url: url!("https://ads.fakeexample.org/example_ad_3"),
+                        image_url: url!("https://ads.fakeexample.org/example_image_3"),
+                        format: "skyscraper".to_string(),
+                        block_key: "abc123".into(),
+                        alt_text: Some("An ad for a pet duck".to_string()),
+                        callbacks: AdCallbacks {
+                            click: Url::parse("https://ads.fakeexample.org/click/example_ad_3")
+                                .unwrap(),
+                            impression: Url::parse(
+                                "https://ads.fakeexample.org/impression/example_ad_3",
+                            )
                             .unwrap(),
-                        impression: Url::parse(
-                            "https://ads.fakeexample.org/impression/example_ad_3",
-                        )
-                        .unwrap(),
-                        report: Some(
-                            Url::parse("https://ads.fakeexample.org/report/example_ad_3").unwrap(),
-                        ),
-                    },
-                }],
-            )]),
+                            report: Some(
+                                Url::parse("https://ads.fakeexample.org/report/example_ad_3")
+                                    .unwrap(),
+                            ),
+                        },
+                    })],
+                ),
+            ]),
         };
 
         assert_eq!(parsed, expected);
@@ -325,275 +344,67 @@ mod tests {
             "example_placement_2": []
         });
 
-        let parsed = AdResponse::<AdImage>::parse(raw_ad_response).unwrap();
+        let parsed: AdResponse = from_value(raw_ad_response).unwrap();
 
         let expected = AdResponse {
-            data: HashMap::from([]),
+            data: HashMap::from([
+                ("example_placement_1".to_string(), vec![]),
+                ("example_placement_2".to_string(), vec![]),
+            ]),
         };
 
         assert_eq!(parsed, expected);
     }
 
     #[test]
-    fn test_take_first() {
-        let mut response = AdResponse {
-            data: HashMap::new(),
+    fn ads_are_told_apart_by_format() {
+        let first = |response: AdResponse| {
+            response
+                .data
+                .into_values()
+                .next()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
         };
-        response.data.insert(
-            "placement_1".to_string(),
-            vec![
-                AdImage {
-                    alt_text: Some("First ad".to_string()),
-                    block_key: "key1".to_string(),
-                    callbacks: AdCallbacks {
-                        click: Url::parse("https://example.com/click1").unwrap(),
-                        impression: Url::parse("https://example.com/impression1").unwrap(),
-                        report: None,
-                    },
-                    format: "billboard".to_string(),
-                    image_url: url!("https://example.com/image1.png"),
-                    url: url!("https://example.com/ad1"),
-                },
-                AdImage {
-                    alt_text: Some("Second ad".to_string()),
-                    block_key: "key2".to_string(),
-                    callbacks: AdCallbacks {
-                        click: Url::parse("https://example.com/click2").unwrap(),
-                        impression: Url::parse("https://example.com/impression2").unwrap(),
-                        report: None,
-                    },
-                    format: "billboard".to_string(),
-                    image_url: url!("https://example.com/image2.png"),
-                    url: url!("https://example.com/ad2"),
-                },
-            ],
-        );
-        response.data.insert(
-            "placement_2".to_string(),
-            vec![AdImage {
-                alt_text: Some("Third ad".to_string()),
-                block_key: "key3".to_string(),
-                callbacks: AdCallbacks {
-                    click: Url::parse("https://example.com/click3").unwrap(),
-                    impression: Url::parse("https://example.com/impression3").unwrap(),
-                    report: None,
-                },
-                format: "skyscraper".to_string(),
-                image_url: url!("https://example.com/image3.png"),
-                url: url!("https://example.com/ad3"),
-            }],
-        );
-        response.data.insert("placement_3".to_string(), vec![]);
+        let image = first(get_example_happy_image_response());
+        let spoc = first(get_example_happy_spoc_response());
+        let tile = first(get_example_happy_uatile_response());
 
-        let result = response.take_first();
+        let roundtrip = |ad: &Ad| from_str::<Ad>(&serde_json::to_string(ad).unwrap()).unwrap();
+        assert!(matches!(roundtrip(&image), Ad::Image(_)));
+        assert!(matches!(roundtrip(&spoc), Ad::Spoc(_)));
+        assert!(matches!(roundtrip(&tile), Ad::Tile(_)));
 
-        assert_eq!(result.len(), 2);
-        assert!(result.contains_key("placement_1"));
-        assert!(result.contains_key("placement_2"));
-        assert!(!result.contains_key("placement_3"));
+        let Ad::Spoc(spoc) = spoc else {
+            panic!("example spoc response should hold spocs")
+        };
 
-        let first_ad = result.get("placement_1").unwrap();
-        assert_eq!(first_ad.alt_text, Some("First ad".to_string()));
-        assert_eq!(first_ad.block_key, "key1");
+        // Changing the spocs 'format' field to an image should result in it parsing to a image.
+        let mut renamed = spoc.clone();
+        renamed.format = "billboard".to_string();
+        assert!(matches!(roundtrip(&Ad::Spoc(renamed)), Ad::Image(_)));
 
-        let second_ad = result.get("placement_2").unwrap();
-        assert_eq!(second_ad.alt_text, Some("Third ad".to_string()));
-        assert_eq!(second_ad.block_key, "key3");
+        // Changing the spocs 'format' field to something unrecognized should result in it parsing to an image as well.
+        // TODO: This is not ultimately desired behaviour- see `Deserialize` implementation for `Ad`
+        let mut renamed = spoc;
+        renamed.format = "nonsense_format".to_string();
+        assert!(matches!(roundtrip(&Ad::Spoc(renamed)), Ad::Image(_)));
     }
 
     #[test]
-    fn test_enrich_callbacks() {
-        let mut response = AdResponse {
-            data: HashMap::from([(
-                "mock_tile_1".to_string(),
-                vec![
-                    AdImage {
-                        alt_text: None,
-                        block_key: "key1".into(),
-                        callbacks: AdCallbacks {
-                            click: Url::parse("https://example.com/click1").unwrap(),
-                            impression: Url::parse("https://example.com/impression1").unwrap(),
-                            report: Some(Url::parse("https://example.com/report").unwrap()),
-                        },
-                        format: "billboard".to_string(),
-                        image_url: url!("https://example.com/image1.png"),
-                        url: url!("https://example.com/ad1"),
-                    },
-                    AdImage {
-                        alt_text: None,
-                        block_key: "key2".into(),
-                        callbacks: AdCallbacks {
-                            click: Url::parse("https://example.com/click2").unwrap(),
-                            impression: Url::parse("https://example.com/impression2").unwrap(),
-                            report: Some(Url::parse("https://example.com/report").unwrap()),
-                        },
-                        format: "billboard".to_string(),
-                        image_url: url!("https://example.com/image2.png"),
-                        url: url!("https://example.com/ad2"),
-                    },
-                ],
-            )]),
-        };
+    fn an_ad_without_format_is_a_deserialization_error() {
+        let ad = json!({
+            "block_key": "abc123",
+            "callbacks": {
+                "click": "https://example.test/click",
+                "impression": "https://example.test/impression"
+            },
+            "image_url": "https://example.test/image.png",
+            "url": "https://example.test/item"
+        });
 
-        let request_hash = RequestHash::from("abc123def456");
-        response.enrich_callbacks(&request_hash);
-
-        let ads = &response.data["mock_tile_1"];
-
-        // request_hash added to click and impression
-        assert!(ads[0]
-            .callbacks
-            .click
-            .query()
-            .unwrap_or("")
-            .contains("request_hash=abc123def456"));
-        assert!(ads[0]
-            .callbacks
-            .impression
-            .query()
-            .unwrap_or("")
-            .contains("request_hash=abc123def456"));
-
-        // placement info added to report
-        let report_0 = ads[0]
-            .callbacks
-            .report
-            .as_ref()
-            .unwrap()
-            .query()
-            .unwrap_or("");
-        assert!(report_0.contains("placement_id=mock_tile_1"));
-        assert!(report_0.contains("position=0"));
-
-        let report_1 = ads[1]
-            .callbacks
-            .report
-            .as_ref()
-            .unwrap()
-            .query()
-            .unwrap_or("");
-        assert!(report_1.contains("placement_id=mock_tile_1"));
-        assert!(report_1.contains("position=1"));
-    }
-
-    #[test]
-    fn test_enrich_callbacks_spoc_impressions_have_cap_key() {
-        let mut response = AdResponse {
-            data: HashMap::from([(
-                "tile1".into(),
-                vec![
-                    AdSpoc {
-                        block_key: "block_key1".into(),
-                        callbacks: AdCallbacks {
-                            click: Url::parse("https://example.com/click1").unwrap(),
-                            impression: Url::parse("https://example.com/impression1").unwrap(),
-                            report: Some(Url::parse("https://example.com/report1").unwrap()),
-                        },
-                        caps: SpocFrequencyCaps {
-                            cap_key: "cap_key1".into(),
-                            day: 100,
-                        },
-                        domain: "1.example.com".into(),
-                        excerpt: "excerpt1".into(),
-                        format: "format1".into(),
-                        image_url: url!("https://example.com/image1.png"),
-                        url: url!("https://example.com/ad1"),
-                        ranking: SpocRanking {
-                            priority: 1,
-                            personalization_models: None,
-                            item_score: 1.0,
-                        },
-                        sponsor: "sponsor1".into(),
-                        sponsored_by_override: None,
-                        title: "title1".into(),
-                    },
-                    AdSpoc {
-                        block_key: "block_key2".into(),
-                        callbacks: AdCallbacks {
-                            click: Url::parse("https://example.com/click2").unwrap(),
-                            impression: Url::parse("https://example.com/impression2").unwrap(),
-                            report: Some(Url::parse("https://example.com/report2").unwrap()),
-                        },
-                        caps: SpocFrequencyCaps {
-                            cap_key: "cap_key2".into(),
-                            day: 200,
-                        },
-                        domain: "2.example.com".into(),
-                        excerpt: "excerpt2".into(),
-                        format: "format2".into(),
-                        image_url: url!("https://example.com/image2.png"),
-                        url: url!("https://example.com/ad2"),
-                        ranking: SpocRanking {
-                            priority: 2,
-                            personalization_models: None,
-                            item_score: 2.0,
-                        },
-                        sponsor: "sponsor2".into(),
-                        sponsored_by_override: None,
-                        title: "title2".into(),
-                    },
-                ],
-            )]),
-        };
-
-        let request_hash = RequestHash::from("abc123def456");
-        response.enrich_callbacks(&request_hash);
-
-        let ads = &response.data["tile1"];
-
-        assert!(ads[0]
-            .callbacks
-            .impression
-            .query()
-            .unwrap_or("")
-            .contains("cap_key=cap_key1"));
-
-        assert!(ads[1]
-            .callbacks
-            .impression
-            .query()
-            .unwrap_or("")
-            .contains("cap_key=cap_key2"));
-    }
-
-    #[test]
-    fn test_enrich_callbacks_skips_ads_without_report_url() {
-        let mut response = AdResponse {
-            data: HashMap::from([(
-                "mock_tile_1".to_string(),
-                vec![AdImage {
-                    alt_text: None,
-                    block_key: "key1".into(),
-                    callbacks: AdCallbacks {
-                        click: Url::parse("https://example.com/click").unwrap(),
-                        impression: Url::parse("https://example.com/impression").unwrap(),
-                        report: None,
-                    },
-                    format: "billboard".to_string(),
-                    image_url: url!("https://example.com/image.png"),
-                    url: url!("https://example.com/ad"),
-                }],
-            )]),
-        };
-
-        // Should not panic
-        let request_hash = RequestHash::from("abc123def456");
-        response.enrich_callbacks(&request_hash);
-
-        let ad = &response.data["mock_tile_1"][0];
-        assert!(ad.callbacks.report.is_none());
-        // click/impression still get request_hash
-        assert!(ad
-            .callbacks
-            .click
-            .query()
-            .unwrap_or("")
-            .contains("request_hash=abc123def456"));
-        assert!(ad
-            .callbacks
-            .impression
-            .query()
-            .unwrap_or("")
-            .contains("request_hash=abc123def456"));
+        assert!(from_value::<Ad>(ad).is_err());
     }
 }
