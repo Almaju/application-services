@@ -11,12 +11,7 @@
 ## ✨ What's New ✨
 
 ### Ads-Client
-- New metrics (success rates, fill rate, cache hit rate, request duration, context ID lifetime, and `expected_error` / `unexpected_error` events), passed to the new `MozAdsTelemetrySink` set with `MozAdsClientBuilder::telemetry_sink()` (`AdsClientTelemetrySink` on Android). See `components/ads-client/docs/telemetry.md`.
-
-## ✨ What's Changed ✨
-
-### Ads-Client
-- `MozAdsTelemetry` and `MozAdsClientBuilder::telemetry()` are deprecated in favor of `MozAdsTelemetrySink` and `telemetry_sink()`. Both keep receiving their metrics until the old ones are removed.
+- New metrics through `MozAdsClientBuilder::telemetry_sink()` (`AdsClientTelemetrySink` on Android), which deprecates `telemetry()`.
 
 # v160.0 (_2026-10-22_)
 

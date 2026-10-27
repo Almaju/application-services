@@ -3,9 +3,8 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! Sorts errors into expected ones, which a healthy device, network and server
-//! can still produce, and unexpected ones, which point to a bug. Only fixed
-//! kinds and codes are recorded, never an error's message.
+//! Expected: could happen on a healthy device, with a working network and
+//! every party behaving correctly. Unexpected: anything else.
 
 use sql_support::open_database;
 use viaduct::ViaductError;
@@ -107,8 +106,6 @@ fn invalid_response(error: &serde_json::Error) -> ErrorKind {
     ErrorKind::unexpected("invalid_response").detail(serde_category(error))
 }
 
-/// A response item that did not deserialize, with the path of the field that
-/// failed, e.g. `callbacks.click`.
 pub fn invalid_ad_item(path: String) -> ErrorKind {
     ErrorKind::unexpected("invalid_ad_item").detail(path)
 }
@@ -179,8 +176,7 @@ fn viaduct(error: &ViaductError) -> ErrorKind {
     }
 }
 
-/// Reads the network error code out of a backend's error text, since no
-/// backend reports a structured kind yet.
+/// No backend reports a structured network error yet.
 fn transport(message: &str) -> ErrorKind {
     // Desktop (necko) ends with "(0x804b000e)".
     let nsresult = message

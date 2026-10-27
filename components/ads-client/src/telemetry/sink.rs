@@ -3,30 +3,37 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! Records the metrics through the [`MozAdsTelemetrySink`] the consumer hands
-//! to `MozAdsClientBuilder::telemetry_sink()`. Until one is installed, and
-//! after it is uninstalled, recording is a no-op.
+//! Records the metrics through the [`MozAdsTelemetrySink`] passed to
+//! `MozAdsClientBuilder::telemetry_sink()`.
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use context_id::ContextIdCallback;
 use parking_lot::RwLock;
 
 use super::errors::{self, ErrorKind};
 use crate::client::error::ComponentError;
-use crate::http_cache::CacheOutcome;
+use crate::http_cache::{CacheOutcome, CachePolicy};
 use crate::MozAdsTelemetrySink;
 
 // By design: process-wide, like the `Telemetry` callback.
 static SINK: RwLock<Option<Arc<dyn MozAdsTelemetrySink>>> = RwLock::new(None);
+/// When the current context ID was issued, in Unix seconds.
+static CONTEXT_ID_ISSUED_AT: AtomicI64 = AtomicI64::new(0);
 
 pub fn install(sink: Arc<dyn MozAdsTelemetrySink>) {
-    // Dropping a UniFFI callback calls into foreign code, so let the replaced
-    // one drop after the lock is released.
+    // Dropping a UniFFI callback calls into foreign code: do it out of the lock.
     let _replaced = SINK.write().replace(sink);
 }
 
+/// Ends the current context ID's lifetime and drops the sink.
 pub fn uninstall() {
+    let issued_at = CONTEXT_ID_ISSUED_AT.swap(0, Ordering::Relaxed);
+    if issued_at > 0 {
+        record_context_id_lifetime(chrono::Utc::now().timestamp() - issued_at);
+    }
     let _removed = SINK.write().take();
 }
 
@@ -37,8 +44,6 @@ fn with_sink(f: impl FnOnce(&dyn MozAdsTelemetrySink)) {
     f(sink.as_ref());
 }
 
-/// Records an ad request: whether it succeeded, how long the caller waited,
-/// and its error, if any.
 pub fn record_ad_request<T>(
     operation: &'static str,
     ohttp: bool,
@@ -66,7 +71,6 @@ pub enum Callback {
     Report,
 }
 
-/// Records a click, impression or report callback and its error, if any.
 pub fn record_callback(callback: Callback, result: &Result<(), ComponentError>) {
     let ok = i32::from(result.is_ok());
     with_sink(|sink| match callback {
@@ -84,8 +88,7 @@ pub fn record_callback(callback: Callback, result: &Result<(), ComponentError>) 
     }
 }
 
-/// Records an error as an `expected_error` or `unexpected_error` event.
-/// `operation` is the public method it failed, if any.
+/// `operation` is the public method the error failed, if any.
 pub fn record_error(operation: Option<&'static str>, error: ErrorKind) {
     let operation = operation.map(str::to_string);
     let kind = error.kind.to_string();
@@ -98,8 +101,7 @@ pub fn record_error(operation: Option<&'static str>, error: ErrorKind) {
     });
 }
 
-/// Records a failed HTTP cache read or write, which does not fail the request.
-pub fn record_cache_failure(outcome: &CacheOutcome) {
+pub(super) fn record_cache_failure(outcome: &CacheOutcome) {
     match outcome {
         CacheOutcome::CleanupFailed(e)
         | CacheOutcome::LookupFailed(e)
@@ -112,14 +114,29 @@ pub fn record_cache_failure(outcome: &CacheOutcome) {
     }
 }
 
-/// Records whether a cache-first ad request was answered from the cache.
-pub fn record_cache_lookup(hit: bool) {
-    with_sink(|sink| sink.record_cache_hit_rate(i32::from(hit), 1));
+pub fn record_cache_lookup(policy: &CachePolicy, outcomes: &[CacheOutcome]) {
+    if let CachePolicy::CacheFirst { .. } = policy {
+        let hit = outcomes.iter().any(|o| matches!(o, CacheOutcome::Hit));
+        with_sink(|sink| sink.record_cache_hit_rate(i32::from(hit), 1));
+    }
 }
 
-/// Records how long a context ID was used, in seconds.
-pub fn record_context_id_lifetime(seconds: i64) {
+fn record_context_id_lifetime(seconds: i64) {
     with_sink(|sink| sink.record_context_id_lifetime(seconds.max(0) / 60));
+}
+
+/// Measures how long each context ID is used.
+pub struct ContextIdLifetime;
+
+impl ContextIdCallback for ContextIdLifetime {
+    fn persist(&self, _context_id: String, creation_date: i64) {
+        let previous = CONTEXT_ID_ISSUED_AT.swap(creation_date, Ordering::Relaxed);
+        if previous > 0 {
+            record_context_id_lifetime(creation_date - previous);
+        }
+    }
+
+    fn rotated(&self, _old_context_id: String) {}
 }
 
 #[cfg(test)]
@@ -251,11 +268,7 @@ mod tests {
         let _m = mock_ads(200, body);
 
         client.request_image_ads(placement(), None).unwrap();
-        calls.assert_recorded(&[
-            "cache_hit_rate 0/1",
-            "request_success_rate 1/1",
-            "request_duration_direct",
-        ]);
+        calls.assert_recorded(&["request_success_rate 1/1", "request_duration_direct"]);
         client.shutdown().unwrap();
     }
 

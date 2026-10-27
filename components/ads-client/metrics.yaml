@@ -164,7 +164,7 @@ ads_client:
   cache_hit_rate:
     type: rate
     description: >
-      Cache-first ad requests answered from the HTTP cache, out of all cache-first ad requests.
+      Cache-first MARS requests answered from the HTTP cache, out of all cache-first MARS requests.
     data_sensitivity: [technical]
     bugs: *bugs
     data_reviews: *data_reviews
@@ -214,8 +214,7 @@ ads_client:
     type: event
     description: >
       An error that a healthy device, network and server can still produce,
-      such as a timeout or a 5xx response. `kind` values are listed in
-      `docs/telemetry.md`.
+      such as a timeout or a 5xx response.
     extra_keys:
       operation:
         type: string
@@ -236,8 +235,7 @@ ads_client:
     type: event
     description: >
       An error that points to a bug or a broken contract, such as a response
-      that does not deserialize or an SQL error. `kind` values are listed in
-      `docs/telemetry.md`.
+      that does not deserialize or an SQL error.
     extra_keys:
       operation:
         type: string

@@ -10,7 +10,7 @@ use viaduct::{Client, ClientSettings, Request, Response};
 
 use super::error::{HTTPError, TransportError};
 use crate::{
-    http_cache::{CacheOutcome, HttpCache, RequestHash},
+    http_cache::{HttpCache, RequestHash},
     telemetry, CachePolicy,
 };
 
@@ -50,27 +50,25 @@ impl MARSTransport {
         Ok(())
     }
 
-    /// Sends `request`, and says whether the response came from the cache.
     pub fn send<R: Hash + Into<Request>>(
         &self,
         request: R,
         policy: &CachePolicy,
         ohttp: bool,
-    ) -> Result<(Response, bool), TransportError> {
+    ) -> Result<Response, TransportError> {
         let client = Self::client_for(ohttp)?;
         if let Some(cache) = self.http_cache.as_ref() {
             let (response, outcomes) = cache.send_with_policy(&client, request, policy)?;
             for outcome in &outcomes {
                 telemetry::record_http_cache_outcome(outcome);
-                telemetry::sink::record_cache_failure(outcome);
             }
+            telemetry::sink::record_cache_lookup(policy, &outcomes);
             HTTPError::check(&response)?;
-            let from_cache = outcomes.iter().any(|o| matches!(o, CacheOutcome::Hit));
-            Ok((response, from_cache))
+            Ok(response)
         } else {
             let response = client.send_sync(request.into())?;
             HTTPError::check(&response)?;
-            Ok((response, false))
+            Ok(response)
         }
     }
 

@@ -14,11 +14,11 @@ use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError}
 use crate::mars::{MARSClient, ReportReason};
 use crate::telemetry::{self, ClientOperation};
 use config::AdsClientConfig;
-use context_id::{ContextIDComponent, ContextIdCallback};
+use context_id::ContextIDComponent;
 use error::RequestAdsError;
 use sql_support::open_database;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+#[cfg(feature = "stateful")]
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -31,42 +31,20 @@ const DEFAULT_TTL_SECONDS: u64 = 300;
 const DEFAULT_MAX_CACHE_SIZE_MIB: u64 = 10;
 const DEFAULT_ROTATION_DAYS: u8 = 3;
 
-/// Measures how long each context ID is used, for
-/// `ads_client.context_id_lifetime`.
-struct AdsContextIdCallback {
-    /// When the current context ID was issued, in Unix seconds.
-    issued_at: Arc<AtomicI64>,
-}
-
-impl ContextIdCallback for AdsContextIdCallback {
-    fn persist(&self, _context_id: String, creation_date: i64) {
-        let previous = self.issued_at.swap(creation_date, Ordering::Relaxed);
-        if previous > 0 {
-            telemetry::sink::record_context_id_lifetime(creation_date - previous);
-        }
-    }
-
-    fn rotated(&self, _old_context_id: String) {}
-}
-
 pub struct AdsClient {
     #[cfg(feature = "stateful")]
     ads_store: Arc<Option<AdsStore>>,
     client: MARSClient,
     context_id_component: ContextIDComponent,
-    context_id_issued_at: Arc<AtomicI64>,
 }
 
 impl AdsClient {
     pub fn new(client_config: AdsClientConfig) -> Self {
-        let context_id_issued_at = Arc::new(AtomicI64::new(0));
         let context_id_component = ContextIDComponent::new(
             &Uuid::new_v4().to_string(),
             0,
             cfg!(test),
-            Box::new(AdsContextIdCallback {
-                issued_at: context_id_issued_at.clone(),
-            }),
+            Box::new(telemetry::sink::ContextIdLifetime),
         );
 
         let environment = client_config.environment;
@@ -90,7 +68,6 @@ impl AdsClient {
                 Ok(cache) => Some(cache),
                 Err(e) => {
                     telemetry::record_build_cache_error(&e);
-                    telemetry::sink::record_error(None, telemetry::errors::cache_builder(&e));
                     None
                 }
             }
@@ -104,7 +81,6 @@ impl AdsClient {
                     Ok(store) => Some(store),
                     Err(e) => {
                         telemetry::record_ads_store_error(&e);
-                        telemetry::sink::record_error(None, telemetry::errors::store_builder(&e));
                         None
                     }
                 });
@@ -116,7 +92,6 @@ impl AdsClient {
             ads_store: Arc::new(ads_store),
             client,
             context_id_component,
-            context_id_issued_at,
         }
     }
 
@@ -315,12 +290,6 @@ impl AdsClient {
     }
 
     pub fn shutdown(&self) {
-        // The current context ID ends with the client.
-        let issued_at = self.context_id_issued_at.load(Ordering::Relaxed);
-        if issued_at > 0 {
-            let lifetime = chrono::Utc::now().timestamp() - issued_at;
-            telemetry::sink::record_context_id_lifetime(lifetime);
-        }
         telemetry::uninstall();
         telemetry::sink::uninstall();
 
@@ -395,7 +364,6 @@ mod tests {
                 false,
                 Box::new(context_id::DefaultContextIdCallback),
             ),
-            context_id_issued_at: Default::default(),
         }
     }
 

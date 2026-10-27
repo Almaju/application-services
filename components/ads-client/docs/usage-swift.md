@@ -68,8 +68,7 @@ class MozAdsClientBuilder {
 - **`MozAdsClientBuilder()`** - Creates a new builder with default values
 - **`environment(environment: MozAdsEnvironment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig: MozAdsCacheConfig)`** - Sets the cache configuration
-- **`telemetry(telemetry: MozAdsTelemetry)`** - Sets the telemetry implementation (deprecated: use `telemetrySink`)
-- **`telemetrySink(sink: MozAdsTelemetrySink)`** - Sets where the metrics go (see [telemetry.md](telemetry.md))
+- **`telemetry(telemetry: MozAdsTelemetry)`** - Sets the telemetry implementation
 - **`build()`** - Builds and returns the configured client
 
 | Configuration  | Type                  | Description                                                                                            |

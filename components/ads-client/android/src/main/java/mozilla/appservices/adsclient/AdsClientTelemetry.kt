@@ -10,9 +10,6 @@ import org.mozilla.appservices.adsclient.GleanMetrics.AdsClient
 /**
  * AdsClientTelemetry is a thin wrapper used to expose
  * callbacks used to emit telemetry events to Glean.
- *
- * Deprecated: pass [AdsClientTelemetrySink] to `telemetrySink()` instead.
- * Both record until this one is removed.
  */
 @Deprecated(
     "Pass AdsClientTelemetrySink to MozAdsClientBuilder.telemetrySink() instead",
@@ -40,10 +37,6 @@ class AdsClientTelemetry : MozAdsTelemetry {
     }
 }
 
-/**
- * Records the ads client's metrics in Glean. Pass it to
- * `MozAdsClientBuilder.telemetrySink()`.
- */
 class AdsClientTelemetrySink : MozAdsTelemetrySink {
     override fun recordRequestSuccessRate(numerator: Int, denominator: Int) {
         AdsClient.requestSuccessRate.addToNumerator(numerator)

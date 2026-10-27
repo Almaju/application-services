@@ -15,6 +15,8 @@ pub use environment::Environment;
 pub use report_reason::ReportReason;
 use sql_support::open_database;
 
+#[cfg(feature = "stateful")]
+use self::ad_response::parse_item;
 use self::{
     ad_request::{AdPlacementRequest, AdRequest, AdRequestFlags, AdRequestRelevance},
     ad_response::{AdResponse, AdResponseValue},
@@ -28,7 +30,7 @@ use self::{
 use crate::ads::{Ads, PlacementId};
 use crate::{
     http_cache::{HttpCache, RequestHash},
-    telemetry, CachePolicy,
+    CachePolicy,
 };
 #[cfg(feature = "stateful")]
 use std::collections::HashMap;
@@ -83,10 +85,7 @@ impl MARSClient {
                 .extend(Headers::try_from(self.fetch_preflight()?)?);
         }
 
-        let (response, from_cache) = self.transport.send(ad_request, &cache_policy, ohttp)?;
-        if let CachePolicy::CacheFirst { .. } = cache_policy {
-            telemetry::sink::record_cache_lookup(from_cache);
-        }
+        let response = self.transport.send(ad_request, &cache_policy, ohttp)?;
         let ads = AdResponse::<A>::parse(response.json()?)?;
         Ok((ads, request_hash))
     }
@@ -116,7 +115,7 @@ impl MARSClient {
                 .extend(Headers::try_from(self.fetch_preflight()?)?);
         }
 
-        let (response, _) =
+        let response =
             self.transport
                 .send(ad_request, &CachePolicy::NetworkFirst { ttl: None }, ohttp)?;
         let raw: HashMap<String, Vec<serde_json::Value>> = response.json()?;
@@ -133,42 +132,9 @@ impl MARSClient {
                 .unwrap_or("")
                 .to_string();
             let ads = match format.as_str() {
-                "spoc" => Ads::Spocs(
-                    items
-                        .into_iter()
-                        .filter_map(|v| match serde_json::from_value(v) {
-                            Ok(ad) => Some(ad),
-                            Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
-                                None
-                            }
-                        })
-                        .collect(),
-                ),
-                "tile" => Ads::Tiles(
-                    items
-                        .into_iter()
-                        .filter_map(|v| match serde_json::from_value(v) {
-                            Ok(ad) => Some(ad),
-                            Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
-                                None
-                            }
-                        })
-                        .collect(),
-                ),
-                _ => Ads::Images(
-                    items
-                        .into_iter()
-                        .filter_map(|v| match serde_json::from_value(v) {
-                            Ok(ad) => Some(ad),
-                            Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
-                                None
-                            }
-                        })
-                        .collect(),
-                ),
+                "spoc" => Ads::Spocs(items.into_iter().filter_map(parse_item).collect()),
+                "tile" => Ads::Tiles(items.into_iter().filter_map(parse_item).collect()),
+                _ => Ads::Images(items.into_iter().filter_map(parse_item).collect()),
             };
             result.insert(placement_id.into(), ads);
         }
@@ -215,7 +181,7 @@ impl MARSClient {
     }
 
     fn fetch_preflight(&self) -> Result<preflight::PreflightResponse, CallbackRequestError> {
-        let (response, _) = self.transport.send(
+        let response = self.transport.send(
             PreflightRequest(self.environment.clone().into_url("ads-preflight")),
             &CachePolicy::CacheFirst { ttl: None },
             false,

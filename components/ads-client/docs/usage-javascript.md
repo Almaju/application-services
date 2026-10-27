@@ -92,8 +92,7 @@ builder.build()
 - **`MozAdsClientBuilder()`** - Creates a new builder with default values
 - **`environment(environment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig)`** - Sets the cache configuration
-- **`telemetry(telemetry)`** - Sets the telemetry implementation (deprecated: use `telemetrySink`)
-- **`telemetrySink(sink)`** - Sets where the metrics go (see [telemetry.md](telemetry.md))
+- **`telemetry(telemetry)`** - Sets the telemetry implementation
 - **`build()`** - Builds and returns the configured client
 
 | Configuration  | Type                       | Description                                                                                            |

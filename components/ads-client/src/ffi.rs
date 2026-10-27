@@ -136,15 +136,12 @@ impl MozAdsClientBuilder {
         self
     }
 
-    /// Deprecated: use `telemetry_sink`. Both receive their metrics until this
-    /// one is removed.
+    /// Deprecated: use `telemetry_sink`.
     pub fn telemetry(self: Arc<Self>, telemetry: Box<dyn MozAdsTelemetry>) -> Arc<Self> {
         self.0.lock().telemetry = Some(Arc::from(telemetry));
         self
     }
 
-    /// Receives the metrics in `metrics.yaml`. Like `telemetry`, it is
-    /// process-wide and dropped when a client shuts down.
     pub fn telemetry_sink(self: Arc<Self>, sink: Box<dyn MozAdsTelemetrySink>) -> Arc<Self> {
         self.0.lock().telemetry_sink = Some(Arc::from(sink));
         self
