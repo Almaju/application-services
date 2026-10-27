@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
-pub use telemetry::MozAdsTelemetry;
+pub use telemetry::{MozAdsTelemetry, MozAdsTelemetrySink};
 
 #[derive(Default, uniffi::Record)]
 pub struct MozAdsRequestOptions {
@@ -85,6 +85,7 @@ struct MozAdsClientBuilderInner {
     environment: Option<MozAdsEnvironment>,
     store_config: Option<MozAdsStoreConfig>,
     telemetry: Option<Arc<dyn MozAdsTelemetry>>,
+    telemetry_sink: Option<Arc<dyn MozAdsTelemetrySink>>,
 }
 
 impl Default for MozAdsClientBuilder {
@@ -105,6 +106,9 @@ impl MozAdsClientBuilder {
         // Taken so the builder does not keep the callback alive.
         if let Some(callback) = inner.telemetry.take() {
             telemetry::install(callback);
+        }
+        if let Some(sink) = inner.telemetry_sink.take() {
+            crate::telemetry::sink::install(sink);
         }
         let client_config = AdsClientConfig {
             cache_config: inner.cache_config.clone().map(Into::into),
@@ -132,8 +136,14 @@ impl MozAdsClientBuilder {
         self
     }
 
+    /// Deprecated: use `telemetry_sink`.
     pub fn telemetry(self: Arc<Self>, telemetry: Box<dyn MozAdsTelemetry>) -> Arc<Self> {
         self.0.lock().telemetry = Some(Arc::from(telemetry));
+        self
+    }
+
+    pub fn telemetry_sink(self: Arc<Self>, sink: Box<dyn MozAdsTelemetrySink>) -> Arc<Self> {
+        self.0.lock().telemetry_sink = Some(Arc::from(sink));
         self
     }
 }

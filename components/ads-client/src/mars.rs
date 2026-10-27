@@ -15,6 +15,8 @@ pub use environment::Environment;
 pub use report_reason::ReportReason;
 use sql_support::open_database;
 
+#[cfg(feature = "stateful")]
+use self::ad_response::parse_item;
 use self::{
     ad_request::{AdPlacementRequest, AdRequest, AdRequestFlags, AdRequestRelevance},
     ad_response::{AdResponse, AdResponseValue},
@@ -26,8 +28,6 @@ use self::{
 };
 #[cfg(feature = "stateful")]
 use crate::ads::{Ads, PlacementId};
-#[cfg(feature = "stateful")]
-use crate::telemetry;
 use crate::{
     http_cache::{HttpCache, RequestHash},
     CachePolicy,
@@ -132,42 +132,9 @@ impl MARSClient {
                 .unwrap_or("")
                 .to_string();
             let ads = match format.as_str() {
-                "spoc" => Ads::Spocs(
-                    items
-                        .into_iter()
-                        .filter_map(|v| match serde_json::from_value(v) {
-                            Ok(ad) => Some(ad),
-                            Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
-                                None
-                            }
-                        })
-                        .collect(),
-                ),
-                "tile" => Ads::Tiles(
-                    items
-                        .into_iter()
-                        .filter_map(|v| match serde_json::from_value(v) {
-                            Ok(ad) => Some(ad),
-                            Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
-                                None
-                            }
-                        })
-                        .collect(),
-                ),
-                _ => Ads::Images(
-                    items
-                        .into_iter()
-                        .filter_map(|v| match serde_json::from_value(v) {
-                            Ok(ad) => Some(ad),
-                            Err(e) => {
-                                telemetry::record_invalid_ad_item(&e);
-                                None
-                            }
-                        })
-                        .collect(),
-                ),
+                "spoc" => Ads::Spocs(items.into_iter().filter_map(parse_item).collect()),
+                "tile" => Ads::Tiles(items.into_iter().filter_map(parse_item).collect()),
+                _ => Ads::Images(items.into_iter().filter_map(parse_item).collect()),
             };
             result.insert(placement_id.into(), ads);
         }

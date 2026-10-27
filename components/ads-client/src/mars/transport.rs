@@ -62,6 +62,7 @@ impl MARSTransport {
             for outcome in &outcomes {
                 telemetry::record_http_cache_outcome(outcome);
             }
+            telemetry::sink::record_cache_lookup(policy, &outcomes);
             HTTPError::check(&response)?;
             Ok(response)
         } else {

@@ -14,7 +14,7 @@ use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError}
 use crate::mars::{MARSClient, ReportReason};
 use crate::telemetry::{self, ClientOperation};
 use config::AdsClientConfig;
-use context_id::{ContextIDComponent, DefaultContextIdCallback};
+use context_id::ContextIDComponent;
 use error::RequestAdsError;
 use sql_support::open_database;
 use std::collections::HashMap;
@@ -44,7 +44,7 @@ impl AdsClient {
             &Uuid::new_v4().to_string(),
             0,
             cfg!(test),
-            Box::new(DefaultContextIdCallback),
+            Box::new(telemetry::sink::ContextIdLifetime),
         );
 
         let environment = client_config.environment;
@@ -291,6 +291,7 @@ impl AdsClient {
 
     pub fn shutdown(&self) {
         telemetry::uninstall();
+        telemetry::sink::uninstall();
 
         #[cfg(feature = "stateful")]
         if let Some(ads_store) = self.ads_store.as_ref() {
@@ -361,7 +362,7 @@ mod tests {
                 &Uuid::new_v4().to_string(),
                 0,
                 false,
-                Box::new(DefaultContextIdCallback),
+                Box::new(context_id::DefaultContextIdCallback),
             ),
         }
     }

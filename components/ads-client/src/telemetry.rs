@@ -28,6 +28,8 @@ use std::fmt::Display;
 use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
 mod backend;
+pub(crate) mod errors;
+pub(crate) mod sink;
 
 #[cfg(test)]
 pub(crate) use backend::test_lock;
@@ -158,6 +160,7 @@ pub fn record_build_cache_error(error: &HttpCacheBuilderError) {
         HttpCacheBuilderError::InvalidTtl { .. } => BuildCacheErrorLabel::InvalidTtl,
     };
     backend::build_cache_error(label.as_str(), error.to_string());
+    sink::record_error(None, errors::cache_builder(error));
 }
 
 // By design: a free function, so recording a metric is one call from anywhere.
@@ -175,6 +178,7 @@ pub fn record_ads_store_error(error: &crate::ads_store::builder::AdsStoreBuilder
         AdsStoreBuilderError::InvalidMaxSize { .. } => BuildCacheErrorLabel::StoreInvalidMaxSize,
     };
     backend::build_cache_error(label.as_str(), error.to_string());
+    sink::record_error(None, errors::store_builder(error));
 }
 
 // By design: a free function, so recording a metric is one call from anywhere.
@@ -192,13 +196,15 @@ pub fn record_http_cache_outcome(outcome: &CacheOutcome) {
         CacheOutcome::TrimFailed(e) => (HttpCacheOutcomeLabel::TrimFailed, e.to_string()),
     };
     backend::http_cache_outcome(label.as_str(), value);
+    sink::record_cache_failure(outcome);
 }
 
 /// Records an ad item we could not deserialize against
 /// `ads_client.deserialization_error`.
-pub fn record_invalid_ad_item(error: &serde_json::Error) {
+pub fn record_invalid_ad_item(error: &serde_path_to_error::Error<serde_json::Error>) {
     backend::deserialization_error(
         DeserializationErrorLabel::InvalidAdItem.as_str(),
-        error.to_string(),
+        error.inner().to_string(),
     );
+    sink::record_error(None, errors::invalid_ad_item(error.path().to_string()));
 }

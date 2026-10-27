@@ -31,6 +31,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sql-support",
  "thiserror 2.0.20",
  "uniffi",

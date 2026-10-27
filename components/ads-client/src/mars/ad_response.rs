@@ -15,6 +15,13 @@ pub struct AdResponse<A: AdResponseValue> {
     pub data: HashMap<String, Vec<A>>,
 }
 
+/// Skips an ad that does not deserialize.
+pub fn parse_item<A: DeserializeOwned>(item: serde_json::Value) -> Option<A> {
+    serde_path_to_error::deserialize(item)
+        .inspect_err(telemetry::record_invalid_ad_item)
+        .ok()
+}
+
 impl<A: AdResponseValue> AdResponse<A> {
     pub fn parse(data: serde_json::Value) -> Result<AdResponse<A>, serde_json::Error> {
         let raw: HashMap<String, serde_json::Value> = serde_json::from_value(data)?;
@@ -22,15 +29,7 @@ impl<A: AdResponseValue> AdResponse<A> {
 
         for (key, value) in raw {
             if let serde_json::Value::Array(arr) = value {
-                let mut ads: Vec<A> = vec![];
-                for item in arr {
-                    match serde_json::from_value::<A>(item.clone()) {
-                        Ok(ad) => ads.push(ad),
-                        Err(e) => {
-                            telemetry::record_invalid_ad_item(&e);
-                        }
-                    }
-                }
+                let ads: Vec<A> = arr.into_iter().filter_map(parse_item).collect();
                 if !ads.is_empty() {
                     result.insert(key, ads);
                 }
