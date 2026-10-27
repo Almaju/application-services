@@ -37,21 +37,16 @@ fn with_sink(f: impl FnOnce(&dyn MozAdsTelemetrySink)) {
     f(sink.as_ref());
 }
 
-/// Records an ad request: whether it succeeded, how many ads came back, how
-/// long the caller waited, and its error, if any.
+/// Records an ad request: whether it succeeded, how long the caller waited,
+/// and its error, if any.
 pub fn record_ad_request<T>(
     operation: &'static str,
     ohttp: bool,
     started: Instant,
     result: &Result<T, ComponentError>,
-    requested: u32,
-    returned: u32,
 ) {
     with_sink(|sink| {
         sink.record_request_success_rate(i32::from(result.is_ok()), 1);
-        if result.is_ok() && requested > 0 {
-            sink.record_fill_rate(saturating(returned), saturating(requested));
-        }
         let millis = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
         if ohttp {
             sink.record_request_duration_ohttp(millis);
@@ -127,10 +122,6 @@ pub fn record_context_id_lifetime(seconds: i64) {
     with_sink(|sink| sink.record_context_id_lifetime(seconds.max(0) / 60));
 }
 
-fn saturating(value: u32) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use parking_lot::Mutex;
@@ -192,9 +183,6 @@ mod tests {
         }
         fn record_click_success_rate(&self, numerator: i32, denominator: i32) {
             self.push(format!("click_success_rate {numerator}/{denominator}"));
-        }
-        fn record_fill_rate(&self, numerator: i32, denominator: i32) {
-            self.push(format!("fill_rate {numerator}/{denominator}"));
         }
         fn record_cache_hit_rate(&self, numerator: i32, denominator: i32) {
             self.push(format!("cache_hit_rate {numerator}/{denominator}"));
@@ -266,8 +254,6 @@ mod tests {
         calls.assert_recorded(&[
             "cache_hit_rate 0/1",
             "request_success_rate 1/1",
-            // Two placements come back, the caller gets the one it asked for.
-            "fill_rate 2/1",
             "request_duration_direct",
         ]);
         client.shutdown().unwrap();

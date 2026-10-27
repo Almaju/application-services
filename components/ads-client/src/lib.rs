@@ -132,21 +132,12 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let requested = ads_requested(&requests);
         let started = Instant::now();
         let result = self
             .inner
             .request_image_ads(requests, flags, cache_policy, ohttp, blocks)
             .map_err(ComponentError::RequestAds);
-        let returned = result.as_ref().map_or(0, HashMap::len);
-        telemetry::sink::record_ad_request(
-            "request_image_ads",
-            ohttp,
-            started,
-            &result,
-            requested,
-            count(returned),
-        );
+        telemetry::sink::record_ad_request("request_image_ads", ohttp, started, &result);
         let response = result?;
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
@@ -164,23 +155,12 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let requested = ads_requested(&requests);
         let started = Instant::now();
         let result = self
             .inner
             .request_spoc_ads(requests, flags, cache_policy, ohttp, blocks)
             .map_err(ComponentError::RequestAds);
-        let returned = result
-            .as_ref()
-            .map_or(0, |ads| ads.values().map(Vec::len).sum());
-        telemetry::sink::record_ad_request(
-            "request_spoc_ads",
-            ohttp,
-            started,
-            &result,
-            requested,
-            count(returned),
-        );
+        telemetry::sink::record_ad_request("request_spoc_ads", ohttp, started, &result);
         let response = result?;
         Ok(response
             .into_iter()
@@ -201,23 +181,12 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let requested = ads_requested(&requests);
         let started = Instant::now();
         let result = self
             .inner
             .request_spoc_or_image_ads(requests, flags, cache_policy, ohttp, blocks)
             .map_err(ComponentError::RequestAds);
-        let returned = result
-            .as_ref()
-            .map_or(0, |ads| ads.values().map(Vec::len).sum());
-        telemetry::sink::record_ad_request(
-            "request_spoc_or_image_ads",
-            ohttp,
-            started,
-            &result,
-            requested,
-            count(returned),
-        );
+        telemetry::sink::record_ad_request("request_spoc_or_image_ads", ohttp, started, &result);
         let response = result?;
         Ok(response
             .into_iter()
@@ -239,21 +208,12 @@ impl MozAdsClient {
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
         let relevance = options.relevance;
-        let requested = ads_requested(&requests);
         let started = Instant::now();
         let result = self
             .inner
             .request_tile_ads(requests, flags, cache_policy, ohttp, blocks, relevance)
             .map_err(ComponentError::RequestAds);
-        let returned = result.as_ref().map_or(0, HashMap::len);
-        telemetry::sink::record_ad_request(
-            "request_tile_ads",
-            ohttp,
-            started,
-            &result,
-            requested,
-            count(returned),
-        );
+        telemetry::sink::record_ad_request("request_tile_ads", ohttp, started, &result);
         let response = result?;
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
@@ -267,14 +227,4 @@ impl MozAdsClient {
         self.inner.shutdown();
         Ok(())
     }
-}
-
-fn ads_requested(requests: &[AdPlacementRequest]) -> u32 {
-    requests
-        .iter()
-        .fold(0, |sum, r| sum.saturating_add(r.count))
-}
-
-fn count(ads: usize) -> u32 {
-    u32::try_from(ads).unwrap_or(u32::MAX)
 }

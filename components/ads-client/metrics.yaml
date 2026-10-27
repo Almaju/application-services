@@ -129,7 +129,7 @@ ads_client:
   request_success_rate:
     type: rate
     description: >
-      Ad requests that returned ads, out of all ad requests.
+      Ad requests that succeeded, out of all ad requests.
     data_sensitivity: [technical, interaction]
     bugs: &bugs
       - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
@@ -155,16 +155,6 @@ ads_client:
     type: rate
     description: >
       Click callbacks answered with a success, out of all `record_click` calls.
-    data_sensitivity: [technical, interaction]
-    bugs: *bugs
-    data_reviews: *data_reviews
-    notification_emails: *emails
-    expires: never
-
-  fill_rate:
-    type: rate
-    description: >
-      On successful ad requests, the ads returned out of the ads requested.
     data_sensitivity: [technical, interaction]
     bugs: *bugs
     data_reviews: *data_reviews

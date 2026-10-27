@@ -58,7 +58,6 @@ pub trait MozAdsTelemetrySink: Send + Sync {
     fn record_request_success_rate(&self, numerator: i32, denominator: i32);
     fn record_impression_success_rate(&self, numerator: i32, denominator: i32);
     fn record_click_success_rate(&self, numerator: i32, denominator: i32);
-    fn record_fill_rate(&self, numerator: i32, denominator: i32);
     fn record_cache_hit_rate(&self, numerator: i32, denominator: i32);
     fn record_request_duration_direct(&self, millis: i64);
     fn record_request_duration_ohttp(&self, millis: i64);

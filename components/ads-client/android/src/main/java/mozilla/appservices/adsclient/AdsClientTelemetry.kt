@@ -60,11 +60,6 @@ class AdsClientTelemetrySink : MozAdsTelemetrySink {
         AdsClient.clickSuccessRate.addToDenominator(denominator)
     }
 
-    override fun recordFillRate(numerator: Int, denominator: Int) {
-        AdsClient.fillRate.addToNumerator(numerator)
-        AdsClient.fillRate.addToDenominator(denominator)
-    }
-
     override fun recordCacheHitRate(numerator: Int, denominator: Int) {
         AdsClient.cacheHitRate.addToNumerator(numerator)
         AdsClient.cacheHitRate.addToDenominator(denominator)
