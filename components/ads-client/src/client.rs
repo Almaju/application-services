@@ -7,10 +7,13 @@ use crate::ads::{AdImage, AdImageOrSpoc, AdSpoc, AdTile};
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
-use crate::http_cache::{CachePolicy, HttpCache};
-use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelevance};
+use crate::http_cache::{CachePolicy, HttpCache, RequestHash};
+use crate::mars::ad_request::{AdPlacementRequest, AdRequest, AdRequestFlags, AdRequestRelevance};
 use crate::mars::ad_response::AdResponse;
-use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
+use crate::mars::error::{
+    CallbackRequestError, FetchAdsError, RecordClickError, RecordImpressionError, ReportAdError,
+};
+use crate::mars::preflight::PreflightRequest;
 use crate::mars::{MARSClient, ReportReason};
 use crate::telemetry::{self, ClientOperation};
 use config::AdsClientConfig;
@@ -22,6 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
+use viaduct::Headers;
 
 pub mod config;
 pub mod error;
@@ -223,8 +227,9 @@ impl AdsClientInner {
         // if let Some(request_hash) = RequestHash::pop_from_url(&mut click_url) {
         //     let _ = self.client.invalidate_cache_by_hash(&request_hash);
         // }
-        self.client
-            .record_click(click_url, ohttp)
+        self.preflight_headers(ohttp)
+            .map_err(RecordClickError::from)
+            .and_then(|headers| self.client.record_click(click_url, ohttp, headers))
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::RecordClick, e);
             })
@@ -267,8 +272,12 @@ impl AdsClientInner {
             impression_url
         };
 
-        self.client
-            .record_impression(impression_url, ohttp)
+        self.preflight_headers(ohttp)
+            .map_err(RecordImpressionError::from)
+            .and_then(|headers| {
+                self.client
+                    .record_impression(impression_url, ohttp, headers)
+            })
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::RecordImpression, e);
             })
@@ -283,8 +292,9 @@ impl AdsClientInner {
         reason: ReportReason,
         ohttp: bool,
     ) -> Result<(), ReportAdError> {
-        self.client
-            .report_ad(report_url, reason, ohttp)
+        self.preflight_headers(ohttp)
+            .map_err(ReportAdError::from)
+            .and_then(|headers| self.client.report_ad(report_url, reason, ohttp, headers))
             .inspect_err(|e| {
                 telemetry::record_client_error(ClientOperation::ReportAd, e);
             })
@@ -413,6 +423,18 @@ impl AdsClientInner {
         self.client.shutdown_db();
     }
 
+    /// The headers an OHTTP request carries from the (cached) preflight.
+    /// Empty when the request does not go through OHTTP.
+    fn preflight_headers(&self, ohttp: bool) -> Result<Headers, CallbackRequestError> {
+        if !ohttp {
+            return Ok(Headers::new());
+        }
+        let preflight = self
+            .client
+            .fetch_preflight(PreflightRequest::new(self.client.environment()))?;
+        Ok(Headers::try_from(preflight)?)
+    }
+
     fn request_ads(
         &self,
         placements: Vec<AdPlacementRequest>,
@@ -428,16 +450,24 @@ impl AdsClientInner {
             None
         };
 
-        let cache_policy = options.unwrap_or_default();
-        let (mut response, request_hash) = self.client.fetch_ads(
-            context_id,
-            flags,
-            placements,
-            cache_policy,
-            ohttp,
+        let mut ad_request = AdRequest::try_new(
             blocks,
+            context_id,
+            self.client.environment().clone(),
+            flags,
+            ohttp,
+            placements,
             relevance,
-        )?;
+        )
+        .map_err(FetchAdsError::from)?;
+        let request_hash = RequestHash::new(&ad_request);
+        ad_request.headers.extend(
+            self.preflight_headers(ohttp)
+                .map_err(FetchAdsError::Preflight)?,
+        );
+
+        let cache_policy = options.unwrap_or_default();
+        let mut response = self.client.fetch_ads(ad_request, cache_policy)?;
         response.enrich_callbacks(&request_hash);
         Ok(response)
     }
