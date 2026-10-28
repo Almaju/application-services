@@ -8,7 +8,15 @@ use std::hash::{Hash, Hasher};
 use url::Url;
 use viaduct::{Headers, Request};
 
+use super::Environment;
+
 pub struct PreflightRequest(pub Url);
+
+impl PreflightRequest {
+    pub fn new(environment: &Environment) -> Self {
+        Self(environment.clone().into_url("ads-preflight"))
+    }
+}
 
 impl Hash for PreflightRequest {
     fn hash<H: Hasher>(&self, state: &mut H) {
