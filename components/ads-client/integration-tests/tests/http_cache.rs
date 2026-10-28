@@ -3,31 +3,15 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use std::hash::{Hash, Hasher};
+use std::cell::Cell;
+use std::convert::Infallible;
 use std::path::Path;
 use std::time::Duration;
 
 use ads_client::bytesize::ByteSize;
-use ads_client::http_cache::{CacheOutcome, CachePolicy, HttpCache};
-use mockito::mock;
-use viaduct::{Client, ClientSettings, Request};
-
-/// Test-only hashable wrapper around Request.
-#[derive(Clone)]
-struct TestRequest(Request);
-
-impl Hash for TestRequest {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.method.as_str().hash(state);
-        self.0.url.as_str().hash(state);
-    }
-}
-
-impl From<TestRequest> for Request {
-    fn from(t: TestRequest) -> Self {
-        t.0
-    }
-}
+use ads_client::cache_control::CacheControl;
+use ads_client::http_cache::{CacheOutcome, CachePolicy, HttpCache, RequestHash};
+use serde_json::{json, Value};
 
 // Deletes existing temporary dbs passed to `clear_test_dbs` to reset tests that require making them.
 fn clear_test_dbs(test_db_locations: &[&'static str]) {
@@ -48,8 +32,6 @@ fn clear_test_dbs(test_db_locations: &[&'static str]) {
 #[test]
 #[ignore = "integration test: run manually with -- --ignored"]
 fn test_cache_works_using_real_timeouts() {
-    viaduct_dev::init_backend_dev();
-
     let test_db_location = "integration_tests.db";
     match std::fs::remove_file(std::path::Path::new(test_db_location)) {
         Ok(()) => println!("Deleted previous test's `{test_db_location}`"),
@@ -61,62 +43,41 @@ fn test_cache_works_using_real_timeouts() {
         .build()
         .expect("cache build should succeed");
 
-    let url = format!("{}/v1/ads", mockito::server_url()).parse().unwrap();
-    let req = TestRequest(Request::post(url).json(&serde_json::json!({
-        "context_id": "12347fff-00b0-aaaa-0978-189231239808",
-        "placements": [
-            {
-            "placement": "mock_pocket_billboard_1",
-            "count": 1,
-            }
-        ],
-    })));
-
-    let client = Client::new(ClientSettings::default());
+    let hash = RequestHash::new(&("POST", "https://ads.mozilla.org/v1/ads"));
+    let calls = Cell::new(0);
+    let fetch = || {
+        calls.set(calls.get() + 1);
+        Ok::<_, Infallible>((json!({"ok": true}), CacheControl::default()))
+    };
     let test_ttl = 2;
-
-    let m1 = mock("POST", "/v1/ads")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(r#"{"ok":true}"#)
-        .expect(1)
-        .create();
 
     // First call: miss -> store
     let (_, outcomes) = cache
-        .send_with_policy(
-            &client,
-            req.clone(),
+        .fetch_with_policy(
+            &hash,
             &CachePolicy::CacheFirst {
                 ttl: Some(Duration::from_secs(test_ttl)),
             },
+            fetch,
         )
         .unwrap();
     assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-    // Second call: hit (no extra HTTP due to expect(1))
-    let (response, outcomes) = cache
-        .send_with_policy(&client, req.clone(), &CachePolicy::default())
+    // Second call: hit, without fetching again
+    let (value, outcomes) = cache
+        .fetch_with_policy(&hash, &CachePolicy::default(), fetch)
         .unwrap();
     assert!(matches!(outcomes.last().unwrap(), CacheOutcome::Hit));
-    assert_eq!(response.status, 200);
-    m1.assert();
-
-    let m2 = mock("POST", "/v1/ads")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(r#"{"ok":true}"#)
-        .expect(1)
-        .create();
+    assert_eq!(value, json!({"ok": true}));
+    assert_eq!(calls.get(), 1);
 
     // Third call: Miss due to timeout for the test_ttl duration
     std::thread::sleep(Duration::from_secs(test_ttl));
-    let (response, outcomes) = cache
-        .send_with_policy(&client, req, &CachePolicy::default())
+    let (_, outcomes): (Value, _) = cache
+        .fetch_with_policy(&hash, &CachePolicy::default(), fetch)
         .unwrap();
     assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
-    assert_eq!(response.status, 200);
-    m2.assert();
+    assert_eq!(calls.get(), 2);
 }
 
 #[test]

@@ -3,7 +3,7 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use url::Url;
 use viaduct::{Headers, Request};
@@ -31,7 +31,7 @@ impl From<PreflightRequest> for Request {
 }
 
 /// Response from the MARS `/v1/ads-preflight` endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PreflightResponse {
     #[serde(default)]
     pub geo_location: String,
