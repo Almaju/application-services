@@ -13,7 +13,6 @@ mod transport;
 
 pub use environment::Environment;
 pub use report_reason::ReportReason;
-use sql_support::open_database;
 
 use self::{
     ad_request::AdRequest,
@@ -24,28 +23,29 @@ use self::{
     preflight::{PreflightRequest, PreflightResponse},
     transport::MARSTransport,
 };
-use crate::{
-    http_cache::{HttpCache, RequestHash},
-    CachePolicy,
-};
+use crate::cache_control::CacheControl;
 use url::Url;
 use viaduct::{Headers, Request};
 
+/// A deserialized MARS response, with the `Cache-Control` it was sent with.
+pub struct MARSResponse<T> {
+    pub cache_control: CacheControl,
+    pub value: T,
+}
+
+/// Sends MARS requests and deserializes their responses. Caching is up to the
+/// caller.
 pub struct MARSClient {
     environment: Environment,
     transport: MARSTransport,
 }
 
 impl MARSClient {
-    pub fn new(environment: Environment, http_cache: Option<HttpCache>) -> Self {
+    pub fn new(environment: Environment) -> Self {
         Self {
             environment,
-            transport: MARSTransport::new(http_cache),
+            transport: MARSTransport,
         }
-    }
-
-    pub fn clear_cache(&self) -> Result<(), open_database::Error> {
-        self.transport.clear_cache()
     }
 
     pub fn environment(&self) -> &Environment {
@@ -55,28 +55,24 @@ impl MARSClient {
     pub fn fetch_ads(
         &self,
         ad_request: AdRequest,
-        cache_policy: CachePolicy,
-    ) -> Result<AdResponse, FetchAdsError> {
+    ) -> Result<MARSResponse<AdResponse>, FetchAdsError> {
         let ohttp = ad_request.ohttp;
-        Ok(self.transport.send(ad_request, &cache_policy, ohttp)?)
+        let response = self.transport.send(ad_request, ohttp)?;
+        Ok(MARSResponse {
+            cache_control: CacheControl::from(&response),
+            value: response.json()?,
+        })
     }
 
     pub fn fetch_preflight(
         &self,
         request: PreflightRequest,
-    ) -> Result<PreflightResponse, CallbackRequestError> {
-        Ok(self
-            .transport
-            .send(request, &CachePolicy::CacheFirst { ttl: None }, false)?)
-    }
-
-    // TODO: Remove this allow(dead_code) when cache invalidation is re-enabled behind Nimbus experiment
-    #[allow(dead_code)]
-    pub fn invalidate_cache_by_hash(
-        &self,
-        request_hash: &RequestHash,
-    ) -> Result<(), open_database::Error> {
-        self.transport.invalidate_cache_by_hash(request_hash)
+    ) -> Result<MARSResponse<PreflightResponse>, CallbackRequestError> {
+        let response = self.transport.send(request, false)?;
+        Ok(MARSResponse {
+            cache_control: CacheControl::from(&response),
+            value: response.json()?,
+        })
     }
 
     pub fn record_click(
@@ -110,11 +106,6 @@ impl MARSClient {
         Ok(self.make_callback_request(callback, ohttp, headers)?)
     }
 
-    #[allow(dead_code)]
-    pub fn shutdown_db(&self) {
-        self.transport.shutdown_db();
-    }
-
     fn make_callback_request(
         &self,
         callback: Url,
@@ -137,21 +128,8 @@ mod tests {
     };
     use mockito::mock;
 
-    fn make_test_client(http_cache: Option<HttpCache>) -> MARSClient {
-        MARSClient::new(Environment::Test, http_cache)
-    }
-
-    fn make_ad_request() -> AdRequest {
-        AdRequest::try_new(
-            Default::default(),
-            Some(TEST_CONTEXT_ID.to_string()),
-            Environment::Test,
-            AdRequestFlags::default(),
-            false,
-            make_happy_placement_requests(),
-            AdRequestRelevance::default(),
-        )
-        .unwrap()
+    fn make_test_client() -> MARSClient {
+        MARSClient::new(Environment::Test)
     }
 
     #[test]
@@ -160,7 +138,7 @@ mod tests {
         let m = mock("GET", "/impression_callback_url")
             .with_status(200)
             .create();
-        let client = make_test_client(None);
+        let client = make_test_client();
         let url = Url::parse(&format!(
             "{}/impression_callback_url",
             &mockito::server_url()
@@ -176,7 +154,7 @@ mod tests {
         viaduct_dev::init_backend_dev();
         let m = mock("GET", "/click_callback_url").with_status(200).create();
 
-        let client = make_test_client(None);
+        let client = make_test_client();
         let url = Url::parse(&format!("{}/click_callback_url", &mockito::server_url())).unwrap();
         let result = client.record_click(url, false, Headers::new());
         assert!(result.is_ok());
@@ -191,7 +169,7 @@ mod tests {
             .with_status(200)
             .create();
 
-        let client = make_test_client(None);
+        let client = make_test_client();
         let url = Url::parse(&format!("{}/click_with_headers", &mockito::server_url())).unwrap();
         let mut headers = Headers::new();
         headers.insert("X-Geo-Location", "US-CA").unwrap();
@@ -211,7 +189,7 @@ mod tests {
             .with_status(200)
             .create();
 
-        let client = make_test_client(None);
+        let client = make_test_client();
         let url = Url::parse(&format!(
             "{}/report_ad_callback_url",
             &mockito::server_url()
@@ -231,15 +209,25 @@ mod tests {
             .match_header("content-type", "application/json")
             .with_status(200)
             .with_header("content-type", "application/json")
+            .with_header("cache-control", "max-age=60")
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let client = make_test_client(None);
+        let client = make_test_client();
+        let ad_request = AdRequest::try_new(
+            Default::default(),
+            Some(TEST_CONTEXT_ID.to_string()),
+            Environment::Test,
+            AdRequestFlags::default(),
+            false,
+            make_happy_placement_requests(),
+            AdRequestRelevance::default(),
+        )
+        .unwrap();
 
-        let response = client
-            .fetch_ads(make_ad_request(), CachePolicy::default())
-            .unwrap();
-        assert_eq!(expected_response, response);
+        let response = client.fetch_ads(ad_request).unwrap();
+        assert_eq!(expected_response, response.value);
+        assert_eq!(response.cache_control.max_age, Some(60));
         m.assert();
     }
 
@@ -252,82 +240,12 @@ mod tests {
             .with_body(r#"{"geo_location":"US-CA","normalized_ua":"Firefox/140.0"}"#)
             .create();
 
-        let client = make_test_client(None);
+        let client = make_test_client();
         let preflight = client
             .fetch_preflight(PreflightRequest::new(&Environment::Test))
             .unwrap();
-        assert_eq!(preflight.geo_location, "US-CA");
-        assert_eq!(preflight.normalized_ua, "Firefox/140.0");
-        m.assert();
-    }
-
-    #[test]
-    fn test_fetch_ads_cache_hit_skips_network() {
-        viaduct_dev::init_backend_dev();
-        let expected = get_example_happy_image_response();
-        let m = mock("POST", "/ads")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::to_string(&expected.data).unwrap())
-            .expect(1) // only first request goes to network
-            .create();
-
-        let cache = HttpCache::builder("test_fetch_ads_cache_hit_skips_network.db")
-            .default_ttl(std::time::Duration::from_secs(300))
-            .max_size(crate::bytesize::ByteSize::mib(1))
-            .build()
-            .unwrap();
-        let client = make_test_client(Some(cache));
-
-        // First call should be a miss then warm the cache
-        let response1 = client
-            .fetch_ads(make_ad_request(), CachePolicy::default())
-            .unwrap();
-        assert_eq!(response1, expected);
-
-        // Second call should be a hit
-        let response2 = client
-            .fetch_ads(make_ad_request(), CachePolicy::default())
-            .unwrap();
-        assert_eq!(response2, expected);
-        m.assert();
-    }
-
-    #[test]
-    fn test_record_click_makes_callback_request() {
-        viaduct_dev::init_backend_dev();
-        let cache = HttpCache::builder("test_record_click.db")
-            .default_ttl(std::time::Duration::from_secs(300))
-            .max_size(crate::bytesize::ByteSize::mib(1))
-            .build()
-            .unwrap();
-
-        let client = make_test_client(Some(cache));
-        let callback_url = Url::parse(&format!("{}/click", mockito::server_url())).unwrap();
-
-        let m = mock("GET", "/click").with_status(200).create();
-
-        let result = client.record_click(callback_url, false, Headers::new());
-        assert!(result.is_ok());
-        m.assert();
-    }
-
-    #[test]
-    fn test_record_impression_makes_callback_request() {
-        viaduct_dev::init_backend_dev();
-        let cache = HttpCache::builder("test_record_impression.db")
-            .default_ttl(std::time::Duration::from_secs(300))
-            .max_size(crate::bytesize::ByteSize::mib(1))
-            .build()
-            .unwrap();
-
-        let client = make_test_client(Some(cache));
-        let callback_url = Url::parse(&format!("{}/impression", mockito::server_url())).unwrap();
-
-        let m = mock("GET", "/impression").with_status(200).create();
-
-        let result = client.record_impression(callback_url, false, Headers::new());
-        assert!(result.is_ok());
+        assert_eq!(preflight.value.geo_location, "US-CA");
+        assert_eq!(preflight.value.normalized_ua, "Firefox/140.0");
         m.assert();
     }
 }
