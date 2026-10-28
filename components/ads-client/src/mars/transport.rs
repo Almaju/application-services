@@ -5,11 +5,13 @@
 
 use std::hash::Hash;
 
+use serde::{de::DeserializeOwned, Serialize};
 use sql_support::open_database;
-use viaduct::{Client, ClientSettings, Request, Response};
+use viaduct::{Client, ClientSettings, Request};
 
 use super::error::{HTTPError, TransportError};
 use crate::{
+    cache_control::CacheControl,
     http_cache::{HttpCache, RequestHash},
     telemetry, CachePolicy,
 };
@@ -50,31 +52,44 @@ impl MARSTransport {
         Ok(())
     }
 
-    pub fn send<R: Hash + Into<Request>>(
+    /// Sends `request` and deserializes the response, through the HTTP cache
+    /// with `policy` when there is one.
+    pub fn send<T, R>(
         &self,
         request: R,
         policy: &CachePolicy,
         ohttp: bool,
-    ) -> Result<Response, TransportError> {
+    ) -> Result<T, TransportError>
+    where
+        T: Serialize + DeserializeOwned,
+        R: Hash + Into<Request>,
+    {
         let client = Self::client_for(ohttp)?;
-        if let Some(cache) = self.http_cache.as_ref() {
-            let (response, outcomes) = cache.send_with_policy(&client, request, policy)?;
-            for outcome in &outcomes {
-                telemetry::record_http_cache_outcome(outcome);
-            }
-            HTTPError::check(&response)?;
-            Ok(response)
-        } else {
-            let response = client.send_sync(request.into())?;
-            HTTPError::check(&response)?;
-            Ok(response)
+        let Some(cache) = self.http_cache.as_ref() else {
+            return Self::fetch(&client, request).map(|(value, _)| value);
+        };
+        let request_hash = RequestHash::new(&request);
+        let (value, outcomes) =
+            cache.fetch_with_policy(&request_hash, policy, || Self::fetch(&client, request))?;
+        for outcome in &outcomes {
+            telemetry::record_http_cache_outcome(outcome);
         }
+        Ok(value)
     }
 
     pub fn shutdown_db(&self) {
         if let Some(cache) = self.http_cache.as_ref() {
             cache.shutdown_db();
         }
+    }
+
+    fn fetch<T: DeserializeOwned>(
+        client: &Client,
+        request: impl Into<Request>,
+    ) -> Result<(T, CacheControl), TransportError> {
+        let response = client.send_sync(request.into())?;
+        HTTPError::check(&response)?;
+        Ok((response.json()?, CacheControl::from(&response)))
     }
 
     fn client_for(ohttp: bool) -> Result<Client, viaduct::ViaductError> {

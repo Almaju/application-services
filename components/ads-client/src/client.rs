@@ -599,6 +599,52 @@ mod tests {
     }
 
     #[test]
+    fn test_request_ads_does_not_cache_error_responses() {
+        viaduct_dev::init_backend_dev();
+        let cache = HttpCache::builder("test_request_ads_does_not_cache_error_responses.db")
+            .build()
+            .unwrap();
+        let mars_client = MARSClient::new(Environment::Test, Some(cache));
+        let ads_client = new_with_mars_client(mars_client);
+
+        let failure = mockito::mock("POST", "/ads")
+            .with_status(500)
+            .with_body("MARS is down")
+            .expect(1)
+            .create();
+        let result = ads_client.request_ads(
+            make_happy_placement_requests(),
+            AdRequestFlags::default(),
+            None,
+            false,
+            Default::default(),
+            AdRequestRelevance::default(),
+        );
+        assert!(result.is_err());
+        failure.assert();
+        drop(failure);
+
+        // The failure was not cached: the next request goes back to MARS.
+        let expected = get_example_happy_image_response();
+        let success = mockito::mock("POST", "/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&expected.data).unwrap())
+            .expect(1)
+            .create();
+        let result = ads_client.request_ads(
+            make_happy_placement_requests(),
+            AdRequestFlags::default(),
+            None,
+            false,
+            Default::default(),
+            AdRequestRelevance::default(),
+        );
+        assert!(result.is_ok());
+        success.assert();
+    }
+
+    #[test]
     fn test_context_id_is_sent_to_mars() {
         viaduct_dev::init_backend_dev();
 
