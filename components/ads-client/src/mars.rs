@@ -58,18 +58,16 @@ impl MARSClient {
         cache_policy: CachePolicy,
     ) -> Result<AdResponse, FetchAdsError> {
         let ohttp = ad_request.ohttp;
-        let response = self.transport.send(ad_request, &cache_policy, ohttp)?;
-        Ok(response.json()?)
+        Ok(self.transport.send(ad_request, &cache_policy, ohttp)?)
     }
 
     pub fn fetch_preflight(
         &self,
         request: PreflightRequest,
     ) -> Result<PreflightResponse, CallbackRequestError> {
-        let response =
-            self.transport
-                .send(request, &CachePolicy::CacheFirst { ttl: None }, false)?;
-        Ok(response.json()?)
+        Ok(self
+            .transport
+            .send(request, &CachePolicy::CacheFirst { ttl: None }, false)?)
     }
 
     // TODO: Remove this allow(dead_code) when cache invalidation is re-enabled behind Nimbus experiment

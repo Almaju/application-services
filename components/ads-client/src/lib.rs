@@ -17,6 +17,7 @@ mod ads;
 #[cfg(feature = "stateful")]
 pub mod ads_store;
 pub mod bytesize;
+pub mod cache_control;
 mod client;
 pub mod clock;
 mod ffi;
