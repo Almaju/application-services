@@ -767,6 +767,7 @@ Tiers: Tier 0 · config only · Tier 1 · small script / ast-grep · Tier 2 · c
 - **Evidence:** 14 review threads in ≥11 PRs · seen in 2/7 periods · 2 bugfix PRs
 - **Enforcement:** Tier 1 · small script / ast-grep
 - **How:** Script: every `docs/**/*.md` appears in `docs/SUMMARY.md`; ADR front-matter has Status/Deciders/Date and a unique number; GitHub links with `#L` anchors must use a commit SHA; no `docs.google.com` links.
+- **Today:** ADR-0006, ADR-0008 and ADR-0009 are not linked from `docs/SUMMARY.md`, so mdbook never publishes them
 - **From reviews:**
   - [#5326](https://github.com/mozilla/application-services/pull/5326#pullrequestreview-1244478994) (2023-01-11): “we may want to link the how to in the application services book in https://github.com/mozilla/application-services/blob/main/docs/SUMMARY.md”
   - [#4876](https://github.com/mozilla/application-services/pull/4876#pullrequestreview-913257405) (2022-03-17): “💯 Awesome!! do we want to link to it in https://github.com/mozilla/application-services/blob/main/docs/SUMMARY.md so it's easily accessible from the website - if anybody still uses it nowadays 😢”

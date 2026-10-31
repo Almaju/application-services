@@ -704,6 +704,7 @@ TODAY = {
     "shell-strict-shellcheck": "17 `*.sh` without `set -e` (checks.py)",
     "doc-comment-format": "`doc_markdown` 593",
     "naming": "`disallowed_names` 34 (`nm` 32, `th` 2)",
+    "docs-index-and-adr": "ADR-0006, ADR-0008 and ADR-0009 are not linked from `docs/SUMMARY.md`, so mdbook never publishes them",
     "changelog-required": "backtest: 381 of 603 consumer-visible PRs since 2025 (63%) had no CHANGELOG.md change, so a hard gate is too noisy; make it a warning with an opt-out label",
     "tests-with-behaviour": "backtest: 95 of 359 PRs with ≥20 new src lines (26%) touched no tests",
 }
