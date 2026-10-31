@@ -8,6 +8,9 @@
 
 - New `ReportReason` and `MozAdsReportReason` variants to match new reasons supported by MARS.
 - Added attempted in-memory fallback for inner http cache if no filesystem path is provided.
+- The HTTP cache no longer stores error responses: a failed request is retried on the next call instead of being replayed for the cache TTL.
+- Every exported type and method has a docstring in the Kotlin and Swift bindings.
+- `MozAdsRequestOptions.cachePolicy` defaults to `null`, like the record's other fields.
 
 ### Autofill
 

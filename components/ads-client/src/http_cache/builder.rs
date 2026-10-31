@@ -60,7 +60,7 @@ impl HttpCacheBuilder {
     // `db_path`: location of sqlite file for file-based db. If `None`, the db will be created in-memory.
     pub fn new(db_path: Option<impl Into<PathBuf>>) -> Self {
         Self {
-            db_path: db_path.map(|x| x.into()),
+            db_path: db_path.map(Into::into),
             default_ttl: None,
             max_size: None,
             is_memory: false,
@@ -144,9 +144,11 @@ impl HttpCacheBuilder {
 
         // Attempt to open initial connection, resolving an error if needed.
         // TODO: This is cast to DatabaseMemory rather than Database. Remove this when DatabaseMemory is removed.
-        let _ = memory_db
-            .lock()
-            .map_err(HttpCacheBuilderError::DatabaseMemory)?;
+        drop(
+            memory_db
+                .lock()
+                .map_err(HttpCacheBuilderError::DatabaseMemory)?,
+        );
 
         Ok(memory_db)
     }
@@ -155,8 +157,7 @@ impl HttpCacheBuilder {
         if self
             .db_path
             .as_ref()
-            .map(|p| p.to_string_lossy().trim().is_empty())
-            .unwrap_or(false)
+            .is_some_and(|p| p.to_string_lossy().trim().is_empty())
         {
             return Err(HttpCacheBuilderError::EmptyDbPath);
         }

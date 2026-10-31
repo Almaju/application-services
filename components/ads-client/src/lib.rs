@@ -38,8 +38,10 @@ uniffi::setup_scaffolding!("ads_client");
 uniffi::custom_type!(AdsClientUrl, String, {
     remote,
     try_lift: |val| Ok(AdsClientUrl::parse(&val)?),
-    lower: |obj| obj.as_str().to_string(),
+    lower: |obj| obj.as_str().to_owned(),
 });
+/// Requests ads from MARS and records their clicks, impressions and reports.
+/// Build it with [`MozAdsClientBuilder`], ideally once per app.
 #[derive(uniffi::Object)]
 pub struct MozAdsClient {
     inner: Arc<AdsClient>,
@@ -47,14 +49,13 @@ pub struct MozAdsClient {
 
 #[uniffi::export]
 impl MozAdsClient {
+    /// Deletes everything in the HTTP cache.
+    #[handle_error(ComponentError)]
     pub fn clear_cache(&self) -> AdsClientApiResult<()> {
-        self.inner
-            .clear_cache()
-            .map_err(|e| MozAdsClientApiError::Other {
-                reason: format!("Failed to clear cache: {}", e),
-            })
+        self.inner.clear_cache().map_err(ComponentError::ClearCache)
     }
 
+    /// Records a click on an ad, from its `callbacks.click` URL.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn record_click(
@@ -64,12 +65,13 @@ impl MozAdsClient {
     ) -> AdsClientApiResult<()> {
         let url = AdsClientUrl::parse(&click_url)
             .map_err(|e| ComponentError::RecordClick(CallbackRequestError::InvalidUrl(e).into()))?;
-        let ohttp = options.map(|o| o.ohttp).unwrap_or(false);
+        let ohttp = options.is_some_and(|o| o.ohttp);
         self.inner
             .record_click(url, ohttp)
             .map_err(ComponentError::RecordClick)
     }
 
+    /// Records an impression of an ad, from its `callbacks.impression` URL.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn record_impression(
@@ -80,12 +82,13 @@ impl MozAdsClient {
         let url = AdsClientUrl::parse(&impression_url).map_err(|e| {
             ComponentError::RecordImpression(CallbackRequestError::InvalidUrl(e).into())
         })?;
-        let ohttp = options.map(|o| o.ohttp).unwrap_or(false);
+        let ohttp = options.is_some_and(|o| o.ohttp);
         self.inner
             .record_impression(url, ohttp)
             .map_err(ComponentError::RecordImpression)
     }
 
+    /// Reports an ad, from its `callbacks.report` URL.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn report_ad(
@@ -96,12 +99,14 @@ impl MozAdsClient {
     ) -> AdsClientApiResult<()> {
         let url = AdsClientUrl::parse(&report_url)
             .map_err(|e| ComponentError::ReportAd(CallbackRequestError::InvalidUrl(e).into()))?;
-        let ohttp = options.map(|o| o.ohttp).unwrap_or(false);
+        let ohttp = options.is_some_and(|o| o.ohttp);
         self.inner
             .report_ad(url, reason.into(), ohttp)
             .map_err(ComponentError::ReportAd)
     }
 
+    /// Requests one image ad per placement. The result is keyed by
+    /// `placement_id` and leaves out placements with no ad.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn request_image_ads(
@@ -109,7 +114,7 @@ impl MozAdsClient {
         moz_ad_requests: Vec<MozAdsPlacementRequest>,
         options: Option<MozAdsRequestOptions>,
     ) -> AdsClientApiResult<HashMap<String, MozAdsImage>> {
-        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
+        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(Into::into).collect();
         let options = options.unwrap_or_default();
         let flags = AdRequestFlags::from(&options);
         let ohttp = options.ohttp;
@@ -122,6 +127,8 @@ impl MozAdsClient {
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
+    /// Requests `count` spocs per placement. The result is keyed by
+    /// `placement_id` and leaves out placements with no ad.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn request_spoc_ads(
@@ -129,7 +136,7 @@ impl MozAdsClient {
         moz_ad_requests: Vec<MozAdsPlacementRequestWithCount>,
         options: Option<MozAdsRequestOptions>,
     ) -> AdsClientApiResult<HashMap<String, Vec<MozAdsSpoc>>> {
-        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
+        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(Into::into).collect();
         let options = options.unwrap_or_default();
         let flags = AdRequestFlags::from(&options);
         let ohttp = options.ohttp;
@@ -141,10 +148,13 @@ impl MozAdsClient {
             .map_err(ComponentError::RequestAds)?;
         Ok(response
             .into_iter()
-            .map(|(k, v)| (k, v.into_iter().map(|spoc| spoc.into()).collect()))
+            .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
             .collect())
     }
 
+    /// Requests `count` ads per placement, for placements that can return
+    /// either spocs or image ads. The result is keyed by `placement_id` and
+    /// leaves out placements with no ad.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn request_spoc_or_image_ads(
@@ -152,7 +162,7 @@ impl MozAdsClient {
         moz_ad_requests: Vec<MozAdsPlacementRequestWithCount>,
         options: Option<MozAdsRequestOptions>,
     ) -> AdsClientApiResult<HashMap<String, Vec<MozAdsImageOrSpoc>>> {
-        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
+        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(Into::into).collect();
         let options = options.unwrap_or_default();
         let flags = AdRequestFlags::from(&options);
         let ohttp = options.ohttp;
@@ -164,10 +174,12 @@ impl MozAdsClient {
             .map_err(ComponentError::RequestAds)?;
         Ok(response
             .into_iter()
-            .map(|(k, v)| (k, v.into_iter().map(|spoc| spoc.into()).collect()))
+            .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
             .collect())
     }
 
+    /// Requests one tile ad per placement. The result is keyed by
+    /// `placement_id` and leaves out placements with no ad.
     #[handle_error(ComponentError)]
     #[uniffi::method(default(options = None))]
     pub fn request_tile_ads(
@@ -175,7 +187,7 @@ impl MozAdsClient {
         moz_ad_requests: Vec<MozAdsPlacementRequest>,
         options: Option<MozAdsRequestOptions>,
     ) -> AdsClientApiResult<HashMap<String, MozAdsTile>> {
-        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(|r| r.into()).collect();
+        let requests: Vec<AdPlacementRequest> = moz_ad_requests.iter().map(Into::into).collect();
         let options = options.unwrap_or_default();
         let flags = AdRequestFlags::from(&options);
         let ohttp = options.ohttp;
@@ -189,10 +201,10 @@ impl MozAdsClient {
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
-    // Allows the ads-client to unload some references and prepare for a safe shutdown.
-    // Other methods should not be called after this one.
-    // Currently, we shutdown (with no expected errors).
-    // However, future shutdowns may require an error to be logged, so we keep the Result.
+    /// Allows the ads-client to unload some references and prepare for a safe shutdown.
+    /// Other methods should not be called after this one.
+    /// Currently, we shutdown (with no expected errors).
+    /// However, future shutdowns may require an error to be logged, so we keep the Result.
     #[uniffi::method()]
     pub fn shutdown(&self) -> AdsClientApiResult<()> {
         self.inner.shutdown();
