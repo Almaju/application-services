@@ -265,7 +265,7 @@ CANON = [
     dict(id="sync-payload-compat", group="remote", tier=2,
          title="Sync payloads round-trip unknown fields and tolerate nulls",
          how="Test-harness rule: each sync engine's payload type has a round-trip test with an unknown field, an "
-             "unknown enum value and explicit `null`s (ADR-0008).",
+             "unknown enum value and explicit `null`s.",
          members=["f2:serde-sync-payload-robustness", "c4:sync-payload-backward-compat", "c2:sync-payload-roundtrip-unknown-fields"]),
     # ------------------------------------------------------------- concurrency
     dict(id="no-callbacks-or-io-under-lock", group="concurrency", tier=2,
@@ -668,7 +668,7 @@ TODAY = {
     "no-panicking-index-or-arith": "`indexing_slicing` 105, `cast_possible_truncation` 50, `cast_sign_loss` 34, `arithmetic_side_effects` 284 (too noisy workspace-wide)",
     "utf8-safe-truncation": "`string_slice` 38, `String::truncate` 1 (`disallowed-methods`)",
     "dont-swallow-errors": "`let_underscore_must_use` 9, `map_err_ignore` 38, `.ok()`-style discards 29 (ast-grep)",
-    "error-report-labels": "2 duplicated `report_error!` labels, 2 not kebab-case (checks.py)",
+    "error-report-labels": "6 labels used at two call sites and 2 not kebab-case (checks.py); one is a real copy-paste: remote_settings reports its backoff errors as `suggest-backoff`",
     "transaction-must-commit": "4 (ast-grep) — all read-only transactions; the rule would ask for an explicit `rollback()`",
     "sqlite-footguns": "`INSERT OR REPLACE`/`REPLACE INTO` 44 (ast-grep) — mostly key/value `meta` tables where it is harmless; scope it to tables with FK children or DELETE triggers",
     "schema-constraints": "10 `REFERENCES` without `ON DELETE` (all places, checks.py)",

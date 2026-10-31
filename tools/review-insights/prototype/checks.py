@@ -269,7 +269,7 @@ def check_report_error_labels():
     labels = collections.defaultdict(list)
     for f in tracked("components/**/*.rs"):
         for i, line in enumerate(f.read_text(errors="replace").splitlines()):
-            m = re.search(r"report_error!\(\s*\"([^\"]+)\"", line)
+            m = re.search(r"report_error(?:!\(|\()\s*\"([^\"]+)\"", line)
             if m:
                 labels[m.group(1)].append(f"{f}:{i + 1}")
     hits = [f"duplicate label {l!r}: {', '.join(locs)}" for l, locs in labels.items() if len(locs) > 1]

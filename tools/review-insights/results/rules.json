@@ -4930,7 +4930,7 @@
    "group_title": "Remote data & serde compatibility",
    "tier": 2,
    "title": "Sync payloads round-trip unknown fields and tolerate nulls",
-   "how": "Test-harness rule: each sync engine's payload type has a round-trip test with an unknown field, an unknown enum value and explicit `null`s (ADR-0008).",
+   "how": "Test-harness rule: each sync engine's payload type has a round-trip test with an unknown field, an unknown enum value and explicit `null`s.",
    "review_threads": 8,
    "review_prs_min": 4,
    "periods_seen": 2,

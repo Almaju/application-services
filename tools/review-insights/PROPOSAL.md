@@ -188,8 +188,10 @@ These came up while running the prototype checks on `main`. They need a second l
    logger or bridges it to `tracing_support`, so on Android/iOS these most likely never reach the app's logger. That's
    the bug #7332 fixed for cli-support.
    The trace calls also print raw response bodies.
-3. **Duplicated error-report labels:** `fxa-client-malformed-url` and `tabs-read-remote` are each used at two call
-   sites, so a report can't be traced back to the code that sent it. Two labels aren't kebab-case.
+3. **Copy-pasted error-report labels:** remote_settings reports its backoff errors as `suggest-backoff`
+   (`components/remote_settings/src/error.rs:134`), the label suggest uses, so they show up as suggest errors. #6731
+   fixed the same mistake (`logins-unexpected` in remote_settings). Five more labels are used at two call sites, so a
+   report can't be traced back to the code that sent it, and two labels aren't kebab-case.
 4. **`filter_adult` and `breach-alerts` constructors** return `ApiResult` without `#[handle_error]`. One unwraps inside,
    the other stringifies the error (27 such fns in total).
 5. **10 foreign keys in the places schema have no `ON DELETE`.** That may be deliberate for desktop parity, but #6016
@@ -230,7 +232,7 @@ These came up while running the prototype checks on `main`. They need a second l
 | `static` Mutex/RwLock caches | 12 |
 | FKs without `ON DELETE` | 10 |
 | transactions never committed (all read-only today) | 4 |
-| duplicate / malformed `report_error!` labels | 4 |
+| duplicate / malformed `report_error` labels | 8 |
 | duplicate exported UniFFI names (iOS megazord) | 0 |
 | `Arc::try_unwrap(x.clone())` | 0 |
 

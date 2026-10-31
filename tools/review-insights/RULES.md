@@ -262,7 +262,7 @@ Tiers: Tier 0 · config only · Tier 1 · small script / ast-grep · Tier 2 · c
 - **Evidence:** 13 review threads in ≥9 PRs · seen in 3/7 periods · 3 bugfix PRs
 - **Enforcement:** Tier 1 · small script / ast-grep
 - **How:** Regex over `report_error!("…")`/`breadcrumb!`: label must match `^<component>-[a-z0-9-]+$` and be unique across the repo; use `error_support` reporting instead of `log::error!` for unexpected states; flag reporting inside per-record loops.
-- **Today:** 2 duplicated `report_error!` labels, 2 not kebab-case (checks.py)
+- **Today:** 6 labels used at two call sites and 2 not kebab-case (checks.py); one is a real copy-paste: remote_settings reports its backoff errors as `suggest-backoff`
 - **From reviews:**
   - [#6749](https://github.com/mozilla/application-services/pull/6749#discussion_r2078207488) (2025-05-07): “maybe `logins-db-disk-full` here? Totally up to you but would seem clearer without context on the sentry side.”
   - [#5304](https://github.com/mozilla/application-services/pull/5304#pullrequestreview-1236540428) (2023-01-04): “I don't really understand why we don't just never report `UrlParseError` whereever it happens?”
@@ -519,7 +519,7 @@ Tiers: Tier 0 · config only · Tier 1 · small script / ast-grep · Tier 2 · c
 
 - **Evidence:** 8 review threads in ≥4 PRs · seen in 2/7 periods · 2 bugfix PRs
 - **Enforcement:** Tier 2 · custom tooling
-- **How:** Test-harness rule: each sync engine's payload type has a round-trip test with an unknown field, an unknown enum value and explicit `null`s (ADR-0008).
+- **How:** Test-harness rule: each sync engine's payload type has a round-trip test with an unknown field, an unknown enum value and explicit `null`s.
 - **From reviews:**
   - [#6118](https://github.com/mozilla/application-services/pull/6118#discussion_r1484806697) (2024-02-09): “I think it's worth a comment here explaining what this is doing (ie, that we are handling incoming payloads from "old" devices where the name fields are split, and we are updating the payload to have”
   - [#4861](https://github.com/mozilla/application-services/pull/4861#discussion_r1064867144) (2023-01-09): “It makes logical sense, but it seems like there could be issues with syncing:”
