@@ -7,7 +7,7 @@ use std::time::Duration;
 use viaduct::{header_names, Response};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct CacheControl {
+pub(crate) struct CacheControl {
     pub max_age: Option<u64>,
     pub must_revalidate: bool,
     pub no_cache: bool,
@@ -47,11 +47,11 @@ impl From<&Response> for CacheControl {
 }
 
 impl CacheControl {
-    pub(super) fn max_age_duration(&self) -> Option<Duration> {
+    pub(crate) fn max_age_duration(&self) -> Option<Duration> {
         self.max_age.map(Duration::from_secs)
     }
 
-    pub(super) fn should_cache(&self) -> bool {
+    pub(crate) fn should_cache(&self) -> bool {
         !self.no_store
     }
 }

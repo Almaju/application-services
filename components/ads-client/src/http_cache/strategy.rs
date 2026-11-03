@@ -7,19 +7,22 @@ use super::cache_control::CacheControl;
 use super::request_hash::RequestHash;
 use super::store::HttpCacheStore;
 use super::ttl::EffectiveTtl;
-use super::{CacheOutcome, HttpCacheSendResult};
+use super::CacheOutcome;
+use crate::mars::ad_response::AdResponse;
 use std::time::Duration;
-use viaduct::{Client, Request};
 
 pub(super) struct CacheFirst {
     pub default_ttl: Duration,
     pub explicit_ttl: Option<Duration>,
     pub hash: RequestHash,
-    pub request: Request,
 }
 
 impl CacheFirst {
-    pub(super) fn apply(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
+    pub(super) fn apply<E>(
+        self,
+        store: &HttpCacheStore,
+        fetch: impl FnOnce() -> Result<(AdResponse, CacheControl), E>,
+    ) -> Result<(AdResponse, Vec<CacheOutcome>), E> {
         let mut outcomes = vec![];
         match store.lookup(&self.hash) {
             Ok(Some(response)) => return Ok((response, vec![CacheOutcome::Hit])),
@@ -31,9 +34,8 @@ impl CacheFirst {
             default_ttl: self.default_ttl,
             explicit_ttl: self.explicit_ttl,
             hash: self.hash,
-            request: self.request,
         };
-        let (response, mut network_outcomes) = network.apply(client, store)?;
+        let (response, mut network_outcomes) = network.apply(store, fetch)?;
         outcomes.append(&mut network_outcomes);
         Ok((response, outcomes))
     }
@@ -43,15 +45,16 @@ pub(super) struct NetworkFirst {
     pub default_ttl: Duration,
     pub explicit_ttl: Option<Duration>,
     pub hash: RequestHash,
-    pub request: Request,
 }
 
 impl NetworkFirst {
-    pub(super) fn apply(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
-        let response = client.send_sync(self.request)?;
-        let cache_control = CacheControl::from(&response);
-        // An error response is not an answer to cache: the next send retries.
-        let outcome = if response.is_success() && cache_control.should_cache() {
+    pub(super) fn apply<E>(
+        self,
+        store: &HttpCacheStore,
+        fetch: impl FnOnce() -> Result<(AdResponse, CacheControl), E>,
+    ) -> Result<(AdResponse, Vec<CacheOutcome>), E> {
+        let (response, cache_control) = fetch()?;
+        let outcome = if cache_control.should_cache() {
             let ttl = EffectiveTtl {
                 default: self.default_ttl,
                 explicit: self.explicit_ttl,

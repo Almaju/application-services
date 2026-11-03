@@ -17,18 +17,16 @@ use self::{
     strategy::{CacheFirst, NetworkFirst},
 };
 use crate::bytesize::ByteSize;
+use crate::mars::ad_response::AdResponse;
 
 use sql_support::open_database;
-use std::hash::Hash;
-use viaduct::{Client, Request, Response};
 
 pub use self::builder::HttpCacheBuilderError;
+pub(crate) use self::cache_control::CacheControl;
 pub use self::outcome::CacheOutcome;
 pub use self::request_hash::RequestHash;
 use std::path::Path;
 use std::time::Duration;
-
-pub type HttpCacheSendResult = Result<(Response, Vec<CacheOutcome>), viaduct::ViaductError>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CachePolicy {
@@ -74,14 +72,16 @@ impl HttpCache {
         Ok(())
     }
 
-    pub fn send_with_policy<T: Hash + Into<Request>>(
+    /// Returns the ads cached under `hash`, or the ones `fetch` gets, as
+    /// `policy` decides. Fetched ads are stored for as long as their
+    /// `Cache-Control` and the policy allow. `fetch` returns an error for a
+    /// response that must not be cached, such as an error status.
+    pub(crate) fn fetch_with_policy<E>(
         &self,
-        client: &Client,
-        item: T,
+        hash: &RequestHash,
         policy: &CachePolicy,
-    ) -> HttpCacheSendResult {
-        let hash = RequestHash::new(&item);
-        let request = item.into();
+        fetch: impl FnOnce() -> Result<(AdResponse, CacheControl), E>,
+    ) -> Result<(AdResponse, Vec<CacheOutcome>), E> {
         let mut outcomes = vec![];
 
         // Clean up expired entries before applying the policy
@@ -94,17 +94,15 @@ impl HttpCache {
             CachePolicy::CacheFirst { ttl } => CacheFirst {
                 default_ttl: self.default_ttl,
                 explicit_ttl: *ttl,
-                hash,
-                request,
+                hash: hash.clone(),
             }
-            .apply(client, &self.store),
+            .apply(&self.store, fetch),
             CachePolicy::NetworkFirst { ttl } => NetworkFirst {
                 default_ttl: self.default_ttl,
                 explicit_ttl: *ttl,
-                hash,
-                request,
+                hash: hash.clone(),
             }
-            .apply(client, &self.store),
+            .apply(&self.store, fetch),
         }?;
         outcomes.append(&mut strategy_outcomes);
 
@@ -132,10 +130,28 @@ mod tests {
     use std::hash::{Hash, Hasher};
 
     use super::*;
-    use viaduct::ClientSettings;
+    use crate::mars::error::{HTTPError, TransportError};
+    use std::collections::HashMap;
+    use viaduct::{Client, ClientSettings, Request};
 
     fn make_client() -> Client {
         Client::new(ClientSettings::default())
+    }
+
+    /// Gets `req` through the cache, sending it to the mock server and reading
+    /// the ads on a miss, as `MARSClient` does.
+    fn send(
+        cache: &HttpCache,
+        client: &Client,
+        req: TestRequest,
+        policy: &CachePolicy,
+    ) -> Result<(AdResponse, Vec<CacheOutcome>), TransportError> {
+        let hash = RequestHash::new(&req);
+        cache.fetch_with_policy(&hash, policy, || {
+            let response = client.send_sync(req.into())?;
+            HTTPError::check(&response)?;
+            Ok((response.json()?, CacheControl::from(&response)))
+        })
     }
 
     /// Test-only hashable wrapper around Request.
@@ -197,15 +213,10 @@ mod tests {
     fn test_clear_cache() {
         let cache: HttpCache = HttpCache::builder_memory().build().unwrap();
 
-        // Create a test request and response
         let hash = RequestHash::new(&("Get", "https://example.com/test"));
 
-        let response = viaduct::Response {
-            body: b"test response".to_vec(),
-            headers: viaduct::Headers::new(),
-            request_method: viaduct::Method::Get,
-            status: 200,
-            url: "https://example.com/test".parse().unwrap(),
+        let response = AdResponse {
+            data: HashMap::from([("test response".to_owned(), vec![])]),
         };
 
         cache
@@ -242,17 +253,13 @@ mod tests {
         let client = make_client();
 
         // First call: miss -> store
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req.clone(), &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req.clone(), &CachePolicy::default()).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Second call: hit (no extra HTTP request due to expect(1))
-        let (response, outcomes) = cache
-            .send_with_policy(&client, req, &CachePolicy::default())
-            .unwrap();
+        let (response, outcomes) = send(&cache, &client, req, &CachePolicy::default()).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::Hit));
-        assert_eq!(response.status, 200);
+        assert!(response.data.is_empty());
         m.assert();
     }
 
@@ -273,21 +280,25 @@ mod tests {
         let client = make_client();
 
         // First refresh: live -> MissStored
-        let (_, outcomes) = cache
-            .send_with_policy(
-                &client,
-                req.clone(),
-                &CachePolicy::NetworkFirst { ttl: None },
-            )
-            .unwrap();
+        let (_, outcomes) = send(
+            &cache,
+            &client,
+            req.clone(),
+            &CachePolicy::NetworkFirst { ttl: None },
+        )
+        .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Second refresh: live again, still MissStored
-        let (response, outcomes) = cache
-            .send_with_policy(&client, req, &CachePolicy::NetworkFirst { ttl: None })
-            .unwrap();
+        let (response, outcomes) = send(
+            &cache,
+            &client,
+            req,
+            &CachePolicy::NetworkFirst { ttl: None },
+        )
+        .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
-        assert_eq!(response.status, 200);
+        assert!(response.data.is_empty());
         m.assert();
     }
 
@@ -307,18 +318,14 @@ mod tests {
         let req = make_post_request();
         let client = make_client();
 
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req.clone(), &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req.clone(), &CachePolicy::default()).unwrap();
         assert!(matches!(
             outcomes.last().unwrap(),
             CacheOutcome::MissNotCacheable
         ));
 
         // Next call should hit network again (since we didn't cache)
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req, &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req, &CachePolicy::default()).unwrap();
         assert!(matches!(
             outcomes.last().unwrap(),
             CacheOutcome::MissNotCacheable
@@ -342,14 +349,8 @@ mod tests {
         let client = make_client();
 
         for _ in 0..2 {
-            let (response, outcomes) = cache
-                .send_with_policy(&client, req.clone(), &CachePolicy::default())
-                .unwrap();
-            assert_eq!(response.status, 500);
-            assert!(matches!(
-                outcomes.last().unwrap(),
-                CacheOutcome::MissNotCacheable
-            ));
+            let result = send(&cache, &client, req.clone(), &CachePolicy::default());
+            assert!(matches!(result, Err(TransportError::Http(_))));
         }
         m.assert();
     }
@@ -375,7 +376,7 @@ mod tests {
 
         let client = make_client();
         // Caller's explicit TTL wins over the server's max-age.
-        let (_, outcomes) = cache.send_with_policy(&client, req, &policy).unwrap();
+        let (_, outcomes) = send(&cache, &client, req, &policy).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Past the server max-age (1s) but still under the explicit TTL (20s) — entry is still there.
@@ -408,9 +409,7 @@ mod tests {
         let hash = RequestHash::new(&req);
 
         let client = make_client();
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req, &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req, &CachePolicy::default()).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Still cached at ~1s.
@@ -445,7 +444,7 @@ mod tests {
 
         let client = make_client();
         // Store with effective TTL = 2s
-        let (_, outcomes) = cache.send_with_policy(&client, req, &policy).unwrap();
+        let (_, outcomes) = send(&cache, &client, req, &policy).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired yet at ~1s
@@ -477,9 +476,7 @@ mod tests {
         let hash = RequestHash::new(&req);
         let client = make_client();
         // Store with effective TTL = 2s from client default
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req, &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req, &CachePolicy::default()).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired at ~1s
@@ -510,18 +507,14 @@ mod tests {
         let client = make_client();
 
         // First call: miss -> store with 2s TTL
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req.clone(), &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req.clone(), &CachePolicy::default()).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Advance clock past the TTL
         cache.store.get_clock().advance(3);
 
         // Second call: expired entry must be a miss, not a hit
-        let (_, outcomes) = cache
-            .send_with_policy(&client, req, &CachePolicy::default())
-            .unwrap();
+        let (_, outcomes) = send(&cache, &client, req, &CachePolicy::default()).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
         m.assert();
     }
@@ -533,12 +526,8 @@ mod tests {
         let hash1 = RequestHash::new(&("Post", "https://example.com/api1"));
         let hash2 = RequestHash::new(&("Post", "https://example.com/api2"));
 
-        let response = viaduct::Response {
-            body: b"test response".to_vec(),
-            headers: viaduct::Headers::new(),
-            request_method: viaduct::Method::Post,
-            status: 200,
-            url: "https://example.com/test".parse().unwrap(),
+        let response = AdResponse {
+            data: HashMap::from([("test response".to_owned(), vec![])]),
         };
 
         cache
@@ -558,5 +547,76 @@ mod tests {
 
         assert!(cache.store.lookup(&hash1).unwrap().is_none());
         assert!(cache.store.lookup(&hash2).unwrap().is_some());
+    }
+
+    #[test]
+    #[ignore = "uses a file and real timeouts: run manually with -- --ignored"]
+    fn test_cache_works_using_real_timeouts() {
+        viaduct_dev::init_backend_dev();
+
+        let test_db_location = "integration_tests.db";
+        match std::fs::remove_file(std::path::Path::new(test_db_location)) {
+            Ok(()) => println!("Deleted previous test's `{test_db_location}`"),
+            Err(e) => println!("Did not delete previous test's `{test_db_location}`: {e}"),
+        }
+        let cache = HttpCache::builder("integration_tests.db")
+            .default_ttl(Duration::from_secs(60))
+            .max_size(ByteSize::mib(1))
+            .build()
+            .expect("cache build should succeed");
+
+        let url = format!("{}/v1/ads", mockito::server_url()).parse().unwrap();
+        let req = TestRequest(Request::post(url).json(&serde_json::json!({
+            "context_id": "12347fff-00b0-aaaa-0978-189231239808",
+            "placements": [
+                {
+                "placement": "mock_pocket_billboard_1",
+                "count": 1,
+                }
+            ],
+        })));
+
+        let client = Client::new(ClientSettings::default());
+        let test_ttl = 2;
+
+        let m1 = mock("POST", "/v1/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":true}"#)
+            .expect(1)
+            .create();
+
+        // First call: miss -> store
+        let (_, outcomes) = send(
+            &cache,
+            &client,
+            req.clone(),
+            &CachePolicy::CacheFirst {
+                ttl: Some(Duration::from_secs(test_ttl)),
+            },
+        )
+        .unwrap();
+        assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
+
+        // Second call: hit (no extra HTTP due to expect(1))
+        let (response, outcomes) =
+            send(&cache, &client, req.clone(), &CachePolicy::default()).unwrap();
+        assert!(matches!(outcomes.last().unwrap(), CacheOutcome::Hit));
+        assert!(response.data.is_empty());
+        m1.assert();
+
+        let m2 = mock("POST", "/v1/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":true}"#)
+            .expect(1)
+            .create();
+
+        // Third call: Miss due to timeout for the test_ttl duration
+        std::thread::sleep(Duration::from_secs(test_ttl));
+        let (response, outcomes) = send(&cache, &client, req, &CachePolicy::default()).unwrap();
+        assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
+        assert!(response.data.is_empty());
+        m2.assert();
     }
 }
