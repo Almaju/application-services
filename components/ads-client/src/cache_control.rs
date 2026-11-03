@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use viaduct::{header_names, Response};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct CacheControl {
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CacheControl {
     pub max_age: Option<u64>,
     pub must_revalidate: bool,
     pub no_cache: bool,
@@ -17,13 +17,7 @@ pub(super) struct CacheControl {
 
 impl From<&Response> for CacheControl {
     fn from(response: &Response) -> Self {
-        let mut cache_control = Self {
-            max_age: None,
-            must_revalidate: false,
-            no_cache: false,
-            no_store: false,
-            private: false,
-        };
+        let mut cache_control = Self::default();
 
         if let Some(header) = response.headers.get(header_names::CACHE_CONTROL) {
             for directive in header.split(',').map(str::trim) {

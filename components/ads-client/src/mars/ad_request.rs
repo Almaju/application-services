@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use serde::Serialize;
-use viaduct::{Headers, Request};
+use viaduct::Request;
 
 use crate::mars::Environment;
 
@@ -27,8 +27,6 @@ pub struct AdRequest {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub flags: AdRequestFlags,
     #[serde(skip)]
-    pub headers: Headers,
-    #[serde(skip)]
     pub ohttp: bool,
     pub placements: Vec<AdPlacementRequest>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -37,7 +35,6 @@ pub struct AdRequest {
 
 /// Hash implementation intentionally excludes `context_id` as it rotates
 /// on client re-instantiation and should not invalidate cached responses.
-/// `headers` are also excluded as they are request metadata, not cache keys.
 /// `flags` is hashed only when set so non-flag callers keep prior cache keys.
 /// If response shape ever varies, add a version to this hash for variant tracking.
 impl Hash for AdRequest {
@@ -70,9 +67,7 @@ impl Hash for AdRequest {
 impl From<AdRequest> for Request {
     fn from(ad_request: AdRequest) -> Self {
         let url = ad_request.environment.clone().into_url(ENDPOINT);
-        let mut request = Request::post(url).json(&ad_request);
-        request.headers.extend(ad_request.headers);
-        request
+        Request::post(url).json(&ad_request)
     }
 }
 
@@ -95,7 +90,6 @@ impl AdRequest {
             context_id,
             environment,
             flags,
-            headers: Headers::new(),
             ohttp,
             placements: vec![],
             relevance,
@@ -251,7 +245,6 @@ mod tests {
             context_id: Some(TEST_CONTEXT_ID.to_string()),
             environment: Environment::Test,
             flags: HashMap::from([("contextual_placement".to_string(), true)]),
-            headers: Headers::new(),
             ohttp: false,
             placements: vec![
                 AdPlacementRequest {

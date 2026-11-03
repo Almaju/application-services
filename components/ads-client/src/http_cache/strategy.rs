@@ -3,26 +3,32 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use super::cache_control::CacheControl;
 use super::request_hash::RequestHash;
 use super::store::HttpCacheStore;
 use super::ttl::EffectiveTtl;
-use super::{CacheOutcome, HttpCacheSendResult};
+use super::CacheOutcome;
+use crate::cache_control::CacheControl;
+use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
-use viaduct::{Client, Request};
 
 pub(super) struct CacheFirst {
     pub default_ttl: Duration,
     pub explicit_ttl: Option<Duration>,
     pub hash: RequestHash,
-    pub request: Request,
 }
 
 impl CacheFirst {
-    pub(super) fn apply(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
+    pub(super) fn apply<T, E>(
+        self,
+        store: &HttpCacheStore,
+        fetch: impl FnOnce() -> Result<(T, CacheControl), E>,
+    ) -> Result<(T, Vec<CacheOutcome>), E>
+    where
+        T: Serialize + DeserializeOwned,
+    {
         let mut outcomes = vec![];
         match store.lookup(&self.hash) {
-            Ok(Some(response)) => return Ok((response, vec![CacheOutcome::Hit])),
+            Ok(Some(value)) => return Ok((value, vec![CacheOutcome::Hit])),
             Err(e) => outcomes.push(CacheOutcome::LookupFailed(e)),
             Ok(None) => {}
         }
@@ -31,11 +37,10 @@ impl CacheFirst {
             default_ttl: self.default_ttl,
             explicit_ttl: self.explicit_ttl,
             hash: self.hash,
-            request: self.request,
         };
-        let (response, mut network_outcomes) = network.apply(client, store)?;
+        let (value, mut network_outcomes) = network.apply(store, fetch)?;
         outcomes.append(&mut network_outcomes);
-        Ok((response, outcomes))
+        Ok((value, outcomes))
     }
 }
 
@@ -43,15 +48,19 @@ pub(super) struct NetworkFirst {
     pub default_ttl: Duration,
     pub explicit_ttl: Option<Duration>,
     pub hash: RequestHash,
-    pub request: Request,
 }
 
 impl NetworkFirst {
-    pub(super) fn apply(self, client: &Client, store: &HttpCacheStore) -> HttpCacheSendResult {
-        let response = client.send_sync(self.request)?;
-        let cache_control = CacheControl::from(&response);
-        // An error response is not an answer to cache: the next send retries.
-        let outcome = if response.is_success() && cache_control.should_cache() {
+    pub(super) fn apply<T, E>(
+        self,
+        store: &HttpCacheStore,
+        fetch: impl FnOnce() -> Result<(T, CacheControl), E>,
+    ) -> Result<(T, Vec<CacheOutcome>), E>
+    where
+        T: Serialize,
+    {
+        let (value, cache_control) = fetch()?;
+        let outcome = if cache_control.should_cache() {
             let ttl = EffectiveTtl {
                 default: self.default_ttl,
                 explicit: self.explicit_ttl,
@@ -59,15 +68,15 @@ impl NetworkFirst {
             }
             .resolve();
             if ttl.is_zero() {
-                return Ok((response, vec![CacheOutcome::NoCache]));
+                return Ok((value, vec![CacheOutcome::NoCache]));
             }
-            match store.store_with_ttl(&self.hash, &response, &ttl) {
+            match store.store_with_ttl(&self.hash, &value, &ttl) {
                 Ok(()) => CacheOutcome::MissStored,
                 Err(e) => CacheOutcome::StoreFailed(e),
             }
         } else {
             CacheOutcome::MissNotCacheable
         };
-        Ok((response, vec![outcome]))
+        Ok((value, vec![outcome]))
     }
 }
