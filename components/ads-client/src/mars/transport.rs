@@ -3,84 +3,52 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use std::hash::Hash;
-
-use sql_support::open_database;
 use viaduct::{Client, ClientSettings, Request, Response};
 
 use super::error::{HTTPError, TransportError};
-use crate::{
-    http_cache::{HttpCache, RequestHash},
-    telemetry, CachePolicy,
-};
+use super::preflight::Preflight;
+use super::Environment;
 
 const OHTTP_CHANNEL_ID: &str = "ads-client";
 
+/// Sends MARS requests and checks their status. An OHTTP request goes
+/// through the relay and carries the preflight's headers, since the relay
+/// strips the user's own.
 pub(super) struct MARSTransport {
-    http_cache: Option<HttpCache>,
+    preflight: Preflight,
 }
 
 impl MARSTransport {
-    pub(super) fn new(http_cache: Option<HttpCache>) -> Self {
-        Self { http_cache }
-    }
-
-    pub(super) fn clear_cache(&self) -> Result<(), open_database::Error> {
-        if let Some(cache) = self.http_cache.as_ref() {
-            cache.clear()?;
+    pub(super) fn new(environment: &Environment) -> Self {
+        Self {
+            preflight: Preflight::new(environment),
         }
-        Ok(())
     }
 
-    pub(super) fn fire(&self, request: Request, ohttp: bool) -> Result<(), TransportError> {
-        let client = Self::client_for(ohttp)?;
-        let response = client.send_sync(request)?;
-        HTTPError::check(&response)?;
-        Ok(())
-    }
-
-    pub(super) fn invalidate_cache_by_hash(
+    pub(super) fn send(
         &self,
-        request_hash: &RequestHash,
-    ) -> Result<(), open_database::Error> {
-        if let Some(cache) = self.http_cache.as_ref() {
-            cache.invalidate_by_hash(request_hash)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn send<R: Hash + Into<Request>>(
-        &self,
-        request: R,
-        policy: &CachePolicy,
+        request: impl Into<Request>,
         ohttp: bool,
     ) -> Result<Response, TransportError> {
-        let client = Self::client_for(ohttp)?;
-        if let Some(cache) = self.http_cache.as_ref() {
-            let (response, outcomes) = cache.send_with_policy(&client, request, policy)?;
-            for outcome in &outcomes {
-                telemetry::record_http_cache_outcome(outcome);
-            }
-            HTTPError::check(&response)?;
-            Ok(response)
+        let mut request = request.into();
+        let client = if ohttp {
+            request
+                .headers
+                .extend(self.preflight.headers(Self::send_direct)?);
+            Client::with_ohttp_channel(OHTTP_CHANNEL_ID, ClientSettings::default())?
         } else {
-            let response = client.send_sync(request.into())?;
-            HTTPError::check(&response)?;
-            Ok(response)
-        }
+            Client::new(ClientSettings::default())
+        };
+        Self::send_with(&client, request)
     }
 
-    pub(super) fn shutdown_db(&self) {
-        if let Some(cache) = self.http_cache.as_ref() {
-            cache.shutdown_db();
-        }
+    fn send_direct(request: Request) -> Result<Response, TransportError> {
+        Self::send_with(&Client::new(ClientSettings::default()), request)
     }
 
-    fn client_for(ohttp: bool) -> Result<Client, viaduct::ViaductError> {
-        if ohttp {
-            Client::with_ohttp_channel(OHTTP_CHANNEL_ID, ClientSettings::default())
-        } else {
-            Ok(Client::new(ClientSettings::default()))
-        }
+    fn send_with(client: &Client, request: Request) -> Result<Response, TransportError> {
+        let response = client.send_sync(request)?;
+        HTTPError::check(&response)?;
+        Ok(response)
     }
 }

@@ -7,15 +7,16 @@ use crate::ads::{AdImage, AdImageOrSpoc, AdSpoc, AdTile};
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
-use crate::http_cache::{CachePolicy, HttpCache};
-use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelevance};
+use crate::http_cache::{CachePolicy, HttpCache, RequestHash};
+use crate::mars::ad_request::{AdPlacementRequest, AdRequest, AdRequestFlags, AdRequestRelevance};
 use crate::mars::ad_response::AdResponse;
-use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
-use crate::mars::{MARSClient, ReportReason};
+use crate::mars::error::{FetchAdsError, RecordClickError, RecordImpressionError, ReportAdError};
+use crate::mars::{MARSClient, MARSResponse, ReportReason};
 use crate::telemetry::{self, ClientOperation};
 use config::AdsClientConfig;
 use context_id::{ContextIDComponent, DefaultContextIdCallback};
 use error::RequestAdsError;
+use serde::{de::DeserializeOwned, Serialize};
 use sql_support::open_database;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,6 +40,7 @@ pub struct AdsClientInner {
     ads_store: Arc<Option<AdsStore>>,
     client: MARSClient,
     context_id_component: ContextIDComponent,
+    http_cache: Option<HttpCache>,
 }
 
 impl AdsClient {
@@ -209,18 +211,22 @@ impl AdsClientInner {
                     }
                 });
 
-        let client = MARSClient::new(environment, http_cache);
+        let client = MARSClient::new(environment);
         telemetry::record_client_operation(ClientOperation::New);
         Self {
             #[cfg(feature = "stateful")]
             ads_store: Arc::new(ads_store),
             client,
             context_id_component,
+            http_cache,
         }
     }
 
     pub(crate) fn clear_cache(&self) -> Result<(), open_database::Error> {
-        self.client.clear_cache()
+        if let Some(cache) = self.http_cache.as_ref() {
+            cache.clear()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn get_context_id(&self) -> context_id::ApiResult<String> {
@@ -232,7 +238,7 @@ impl AdsClientInner {
         // The mobile team has requested this be temporarily disabled.
         // let mut click_url = click_url.clone();
         // if let Some(request_hash) = RequestHash::pop_from_url(&mut click_url) {
-        //     let _ = self.client.invalidate_cache_by_hash(&request_hash);
+        //     let _ = self.invalidate_cache_by_hash(&request_hash);
         // }
         self.client
             .record_click(click_url, ohttp)
@@ -253,7 +259,7 @@ impl AdsClientInner {
         // The mobile team has requested this be temporarily disabled.
         // let mut impression_url = impression_url.clone();
         // if let Some(request_hash) = RequestHash::pop_from_url(&mut impression_url) {
-        //     let _ = self.client.invalidate_cache_by_hash(&request_hash);
+        //     let _ = self.invalidate_cache_by_hash(&request_hash);
         // }
 
         // TODO: Add count call with _cap_key for impression capping logic
@@ -421,7 +427,46 @@ impl AdsClientInner {
             ads_store.shutdown_db();
         }
 
-        self.client.shutdown_db();
+        if let Some(cache) = self.http_cache.as_ref() {
+            cache.shutdown_db();
+        }
+    }
+
+    /// Gets `fetch`'s value through the HTTP cache with `policy`, or straight
+    /// from MARS when no cache is configured.
+    fn cached<T, E>(
+        &self,
+        request_hash: &RequestHash,
+        policy: CachePolicy,
+        fetch: impl FnOnce() -> Result<MARSResponse<T>, E>,
+    ) -> Result<T, E>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let Some(cache) = self.http_cache.as_ref() else {
+            return fetch().map(|response| response.value);
+        };
+        let (value, outcomes) = cache.fetch_with_policy(request_hash, &policy, || {
+            fetch().map(|response| (response.value, response.cache_control))
+        })?;
+        for outcome in &outcomes {
+            telemetry::record_http_cache_outcome(outcome);
+        }
+        Ok(value)
+    }
+
+    #[expect(
+        dead_code,
+        reason = "cache invalidation on click is off until a Nimbus experiment re-enables it"
+    )]
+    fn invalidate_cache_by_hash(
+        &self,
+        request_hash: &RequestHash,
+    ) -> Result<(), open_database::Error> {
+        if let Some(cache) = self.http_cache.as_ref() {
+            cache.invalidate_by_hash(request_hash)?;
+        }
+        Ok(())
     }
 
     fn request_ads(
@@ -439,16 +484,21 @@ impl AdsClientInner {
             None
         };
 
-        let cache_policy = options.unwrap_or_default();
-        let (mut response, request_hash) = self.client.fetch_ads(
-            context_id,
-            flags,
-            placements,
-            cache_policy,
-            ohttp,
+        let ad_request = AdRequest::try_new(
             blocks,
+            context_id,
+            self.client.environment().clone(),
+            flags,
+            ohttp,
+            placements,
             relevance,
-        )?;
+        )
+        .map_err(FetchAdsError::from)?;
+        let request_hash = RequestHash::new(&ad_request);
+        let cache_policy = options.unwrap_or_default();
+        let mut response = self.cached(&request_hash, cache_policy, || {
+            self.client.fetch_ads(ad_request)
+        })?;
         response.enrich_callbacks(&request_hash);
         Ok(response)
     }
@@ -469,7 +519,7 @@ mod tests {
 
     use super::*;
 
-    fn new_with_mars_client(client: MARSClient) -> AdsClient {
+    fn new_with_mars_client(client: MARSClient, http_cache: Option<HttpCache>) -> AdsClient {
         let inner = Arc::new(AdsClientInner {
             #[cfg(feature = "stateful")]
             ads_store: Arc::new(Some(
@@ -484,6 +534,7 @@ mod tests {
                 false,
                 Box::new(DefaultContextIdCallback),
             ),
+            http_cache,
         });
         AdsClient {
             inner: inner.clone(),
@@ -514,8 +565,8 @@ mod tests {
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let mars_client = MARSClient::new(Environment::Test, None);
-        let ads_client = new_with_mars_client(mars_client);
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, None);
 
         let result = ads_client.request_image_ads(
             make_happy_placement_requests(),
@@ -539,8 +590,8 @@ mod tests {
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let mars_client = MARSClient::new(Environment::Test, None);
-        let ads_client = new_with_mars_client(mars_client);
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, None);
 
         let result = ads_client.request_spoc_ads(
             make_happy_placement_requests(),
@@ -564,8 +615,8 @@ mod tests {
             .with_body(serde_json::to_string(&expected_response.data).unwrap())
             .create();
 
-        let mars_client = MARSClient::new(Environment::Test, None);
-        let ads_client = new_with_mars_client(mars_client);
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, None);
 
         let result = ads_client.request_tile_ads(
             make_happy_placement_requests(),
@@ -577,6 +628,96 @@ mod tests {
         );
         assert!(result.is_ok());
         m.assert();
+    }
+
+    #[test]
+    fn test_request_ads_cache_hit_skips_network() {
+        viaduct_dev::init_backend_dev();
+        let expected = get_example_happy_image_response();
+        let m = mockito::mock("POST", "/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&expected.data).unwrap())
+            .expect(1) // only first request goes to network
+            .create();
+
+        let cache = HttpCache::builder_memory()
+            .default_ttl(Duration::from_secs(300))
+            .max_size(ByteSize::mib(1))
+            .build()
+            .unwrap();
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, Some(cache));
+
+        // First call should be a miss then warm the cache
+        let response1 = ads_client
+            .request_ads(
+                make_happy_placement_requests(),
+                AdRequestFlags::default(),
+                None,
+                false,
+                Default::default(),
+                AdRequestRelevance::default(),
+            )
+            .unwrap();
+
+        // Second call should be a hit
+        let response2 = ads_client
+            .request_ads(
+                make_happy_placement_requests(),
+                AdRequestFlags::default(),
+                None,
+                false,
+                Default::default(),
+                AdRequestRelevance::default(),
+            )
+            .unwrap();
+        assert_eq!(response1, response2);
+        m.assert();
+    }
+
+    #[test]
+    fn test_request_ads_does_not_cache_error_responses() {
+        viaduct_dev::init_backend_dev();
+        let cache = HttpCache::builder_memory().build().unwrap();
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, Some(cache));
+
+        let failure = mockito::mock("POST", "/ads")
+            .with_status(500)
+            .with_body("MARS is down")
+            .expect(1)
+            .create();
+        let result = ads_client.request_ads(
+            make_happy_placement_requests(),
+            AdRequestFlags::default(),
+            None,
+            false,
+            Default::default(),
+            AdRequestRelevance::default(),
+        );
+        assert!(result.is_err());
+        failure.assert();
+        drop(failure);
+
+        // The failure was not cached: the next request goes back to MARS.
+        let expected = get_example_happy_image_response();
+        let success = mockito::mock("POST", "/ads")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&expected.data).unwrap())
+            .expect(1)
+            .create();
+        let result = ads_client.request_ads(
+            make_happy_placement_requests(),
+            AdRequestFlags::default(),
+            None,
+            false,
+            Default::default(),
+            AdRequestRelevance::default(),
+        );
+        assert!(result.is_ok());
+        success.assert();
     }
 
     #[test]
@@ -659,8 +800,8 @@ mod tests {
     #[test]
     fn test_record_impression_removes_cap_key() {
         viaduct_dev::init_backend_dev();
-        let mars_client = MARSClient::new(Environment::Test, None);
-        let ads_client = new_with_mars_client(mars_client);
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, None);
 
         let base_url = mockito::server_url();
         let path_and_query = "/impression?kept=example";
@@ -688,8 +829,8 @@ mod tests {
     fn test_record_click_invalidates_cache() {
         viaduct_dev::init_backend_dev();
         let cache = HttpCache::builder_memory().build().unwrap();
-        let mars_client = MARSClient::new(Environment::Test, Some(cache));
-        let ads_client = new_with_mars_client(mars_client);
+        let mars_client = MARSClient::new(Environment::Test);
+        let ads_client = new_with_mars_client(mars_client, Some(cache));
 
         let response = get_example_happy_image_response();
 

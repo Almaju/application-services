@@ -118,6 +118,9 @@ pub(crate) enum TransportError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("OHTTP preflight failed: {0}")]
+    Preflight(Box<TransportError>),
+
     #[error("Request error: {0}")]
     Request(#[from] viaduct::ViaductError),
 }
@@ -127,6 +130,7 @@ impl From<TransportError> for FetchAdsError {
         match err {
             TransportError::Http(e) => Self::HTTPError(e),
             TransportError::Json(e) => Self::Json(e),
+            TransportError::Preflight(e) => Self::Preflight((*e).into()),
             TransportError::Request(e) => Self::Request(e),
         }
     }
@@ -137,6 +141,7 @@ impl From<TransportError> for CallbackRequestError {
         match err {
             TransportError::Http(e) => Self::HTTPError(e),
             TransportError::Json(e) => Self::Json(e),
+            TransportError::Preflight(e) => (*e).into(),
             TransportError::Request(e) => Self::Request(e),
         }
     }
