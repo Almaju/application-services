@@ -2,18 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     clock::{CacheClock, Clock},
     http_cache::{
         connection_initializer::HttpCacheConnectionInitializer, request_hash::RequestHash, ByteSize,
     },
+    mars::ad_response::AdResponse,
 };
-use error_support::warn;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, types::Type, OptionalExtension};
 use sql_support::{open_database, LazyDb};
-use viaduct::{Header, Response};
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,77 +115,26 @@ impl HttpCacheStore {
     pub(super) fn lookup(
         &self,
         request_hash: &RequestHash,
-    ) -> Result<Option<Response>, open_database::Error> {
+    ) -> Result<Option<AdResponse>, open_database::Error> {
         #[cfg(test)]
         if *self.fault.lock() == FaultKind::Lookup {
             return Err(Self::forced_fault_error("forced lookup failure"))?;
         }
         let (conn, _) = self.db.lock()?;
-        Ok(conn.query_row(
-            "SELECT response_body, response_headers, response_status, request_method, request_url
-             FROM http_cache
-             WHERE request_hash = ?1",
-            params![request_hash.to_string()],
-            |row| {
-                let response_body: Vec<u8> = row.get(0)?;
-                let response_headers: Vec<u8> = row.get(1)?;
-                let response_status: i64 = row.get(2)?;
-                let method_str: String = row.get(3)?;
-                let url_str: String = row.get(4)?;
-
-                let headers = serde_json::from_slice::<HashMap<String, String>>(&response_headers)
-                    .map_or_else(
-                        |e| {
-                            warn!("Ignoring unreadable cached headers: {e}");
-                            viaduct::Headers::new()
-                        },
-                        |map| {
-                            map.into_iter()
-                                .filter_map(|(n, v)| {
-                                    Header::new(n, v)
-                                        .inspect_err(|e| warn!("Skipping a cached header: {e}"))
-                                        .ok()
-                                })
-                                .collect::<Vec<_>>()
-                                .into()
-                        },
-                    );
-
-                let request_method = match method_str.as_str() {
-                    "HEAD" => viaduct::Method::Head,
-                    "POST" => viaduct::Method::Post,
-                    "PUT" => viaduct::Method::Put,
-                    "DELETE" => viaduct::Method::Delete,
-                    "PATCH" => viaduct::Method::Patch,
-                    // "GET", and anything this cache did not write.
-                    _ => viaduct::Method::Get,
-                };
-
-                let url = url::Url::parse(&url_str).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        4,
-                        rusqlite::types::Type::Text,
-                        format!("invalid URL in cache: {url_str}: {e}").into(),
-                    )
-                })?;
-                let status = u16::try_from(response_status).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Integer,
-                        Box::new(e),
-                    )
-                })?;
-
-                Ok(Response {
-                    body: response_body,
-                    headers,
-                    request_method,
-                    status,
-                    url,
-                })
-            },
-        )
-        .optional()?)
+        Ok(conn
+            .query_row(
+                "SELECT response_body
+                 FROM http_cache
+                 WHERE request_hash = ?1",
+                params![request_hash.to_string()],
+                |row| {
+                    let response_body: Vec<u8> = row.get(0)?;
+                    serde_json::from_slice(&response_body).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Blob, Box::new(e))
+                    })
+                },
+            )
+            .optional()?)
     }
 
     #[cfg(test)]
@@ -200,16 +148,16 @@ impl HttpCacheStore {
     pub(super) fn store_with_ttl(
         &self,
         request_hash: &RequestHash,
-        response: &Response,
+        response: &AdResponse,
         ttl: &Duration,
     ) -> Result<(), open_database::Error> {
         #[cfg(test)]
         if *self.fault.lock() == FaultKind::Store {
             return Err(Self::forced_fault_error("forced store failure"))?;
         }
-        let headers_map: HashMap<String, String> = response.headers.clone().into();
-        let response_headers = serde_json::to_vec(&headers_map).unwrap_or_default();
-        let size_bytes = (response_headers.len() + response.body.len()) as i64;
+        let response_body = serde_json::to_vec(response)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let size_bytes = response_body.len() as i64;
         let now = self.clock.now_epoch_seconds();
         let ttl_seconds = ttl.as_secs();
         let expires_at = now + ttl_seconds as i64;
@@ -220,34 +168,22 @@ impl HttpCacheStore {
                 cached_at,
                 expires_at,
                 request_hash,
-                request_method,
-                request_url,
                 response_body,
-                response_headers,
-                response_status,
                 size_bytes,
                 ttl_seconds
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(request_hash) DO UPDATE SET
                 cached_at=excluded.cached_at,
                 expires_at=excluded.expires_at,
-                request_method=excluded.request_method,
-                request_url=excluded.request_url,
                 response_body=excluded.response_body,
-                response_headers=excluded.response_headers,
-                response_status=excluded.response_status,
                 size_bytes=excluded.size_bytes,
                 ttl_seconds=excluded.ttl_seconds",
             params![
                 now,
                 expires_at,
                 request_hash.to_string(),
-                response.request_method.as_str(),
-                response.url.as_str(),
-                response.body,
-                response_headers,
-                response.status,
+                response_body,
                 size_bytes,
                 ttl_seconds as i64,
             ],
@@ -296,10 +232,11 @@ impl HttpCacheStore {
 mod tests {
     use super::*;
     use crate::http_cache::connection_initializer::HttpCacheConnectionInitializer;
+    use crate::test_utils::get_example_happy_image_response;
     use rusqlite::OpenFlags;
     use sql_support::open_database;
-    use std::{path::Path, time::Duration};
-    use viaduct::{header_names, Headers, Method, Request, Response};
+    use std::{collections::HashMap, path::Path, time::Duration};
+    use viaduct::{Headers, Method, Request};
 
     fn hash_for_request(req: &Request) -> RequestHash {
         RequestHash::new(&(req.method.as_str(), req.url.as_str()))
@@ -333,18 +270,16 @@ mod tests {
         }
     }
 
-    fn create_test_response(status: u16, body: &[u8]) -> Response {
-        let mut headers = Headers::new();
-        headers
-            .insert(header_names::CONTENT_TYPE, "application/json")
-            .unwrap();
-
-        Response {
-            body: body.to_vec(),
-            headers,
-            request_method: Method::Get,
-            status,
-            url: "https://example.com/test".parse().unwrap(),
+    /// One example ad for `placement`. A placement without ads would not read
+    /// back, since `AdResponse` drops empty placements.
+    fn create_test_response(placement: &str) -> AdResponse {
+        let ad = get_example_happy_image_response()
+            .data
+            .remove("example_placement_1")
+            .unwrap()
+            .remove(0);
+        AdResponse {
+            data: HashMap::from([(placement.to_owned(), vec![ad])]),
         }
     }
 
@@ -380,7 +315,7 @@ mod tests {
         let store = create_test_store();
         store.set_fault(FaultKind::Store);
 
-        let resp = create_test_response(200, b"resp");
+        let resp = create_test_response("resp");
         let hash = hash_for_request(&create_test_request("https://example.com/api", b"body"));
 
         let err = store
@@ -401,7 +336,7 @@ mod tests {
 
         let req = create_test_request("https://example.com/api", b"");
         let hash = hash_for_request(&req);
-        let resp = create_test_response(200, b"resp");
+        let resp = create_test_response("resp");
         store
             .store_with_ttl(&hash, &resp, &Duration::from_secs(300))
             .unwrap();
@@ -434,7 +369,7 @@ mod tests {
         let store = create_test_store();
         let req = create_test_request("https://example.com/a", b"");
         let hash = hash_for_request(&req);
-        let resp = create_test_response(200, b"X");
+        let resp = create_test_response("X");
 
         let ttl = Duration::from_secs(5);
         store.store_with_ttl(&hash, &resp, &ttl).unwrap();
@@ -456,7 +391,7 @@ mod tests {
         let store = create_test_store();
         let req = create_test_request("https://example.com/b", b"");
         let hash = hash_for_request(&req);
-        let resp = create_test_response(200, b"Y");
+        let resp = create_test_response("Y");
 
         store
             .store_with_ttl(&hash, &resp, &Duration::from_secs(300))
@@ -482,7 +417,7 @@ mod tests {
         let hash_exp = hash_for_request(&req_exp);
         let req_fresh = create_test_request("https://example.com/fresh", b"");
         let hash_fresh = hash_for_request(&req_fresh);
-        let resp = create_test_response(200, b"Z");
+        let resp = create_test_response("Z");
 
         store
             .store_with_ttl(&hash_exp, &resp, &Duration::from_secs(1))
@@ -510,7 +445,7 @@ mod tests {
         let store = create_test_store();
         let req = create_test_request("https://example.com/stale", b"");
         let hash = hash_for_request(&req);
-        let resp = create_test_response(200, b"W");
+        let resp = create_test_response("W");
 
         store
             .store_with_ttl(&hash, &resp, &Duration::from_secs(1))
@@ -527,7 +462,7 @@ mod tests {
         let store = create_test_store();
         let req = create_test_request("https://example.com/zero", b"");
         let hash = hash_for_request(&req);
-        let resp = create_test_response(200, b"0");
+        let resp = create_test_response("0");
 
         store
             .store_with_ttl(&hash, &resp, &Duration::from_secs(0))
@@ -546,15 +481,14 @@ mod tests {
 
         let request = create_test_request("https://example.com/api", b"test body");
         let hash = hash_for_request(&request);
-        let response = create_test_response(200, b"test response");
+        let response = create_test_response("test response");
 
         store
             .store_with_ttl(&hash, &response, &Duration::from_secs(300))
             .unwrap();
 
         let retrieved = store.lookup(&hash).unwrap().unwrap();
-        assert_eq!(retrieved.status, 200);
-        assert_eq!(retrieved.body, b"test response");
+        assert_eq!(retrieved, create_test_response("test response"));
     }
 
     #[test]
@@ -563,14 +497,14 @@ mod tests {
 
         let request = create_test_request("https://example.com/api", b"test body");
         let hash = hash_for_request(&request);
-        let response = create_test_response(200, b"test response");
+        let response = create_test_response("test response");
 
         store
             .store_with_ttl(&hash, &response, &Duration::from_secs(300))
             .unwrap();
 
         let retrieved = store.lookup(&hash).unwrap().unwrap();
-        assert_eq!(retrieved.body, b"test response");
+        assert_eq!(retrieved, create_test_response("test response"));
 
         store.clock.advance(2);
 
@@ -585,8 +519,7 @@ mod tests {
         for i in 0..5 {
             let request = create_test_request(&format!("https://example.com/api/{}", i), b"");
             let hash = hash_for_request(&request);
-            let large_body = vec![0u8; 300];
-            let response = create_test_response(200, &large_body);
+            let response = create_test_response(&"x".repeat(300));
             store
                 .store_with_ttl(&hash, &response, &Duration::from_secs(300))
                 .unwrap();
@@ -608,22 +541,27 @@ mod tests {
     }
 
     #[test]
-    fn test_no_store_directive() {
+    fn test_lookup_of_an_undecodable_entry_is_an_error() {
         let store = create_test_store();
-        let request = create_test_request("https://example.com/api", b"test body");
+        let request = create_test_request("https://example.com/api", b"");
         let hash = hash_for_request(&request);
-
-        let mut response = create_test_response(200, b"test response");
-        response
-            .headers
-            .insert("cache-control", "no-store")
-            .unwrap();
-
         store
-            .store_with_ttl(&hash, &response, &Duration::from_secs(300))
+            .store_with_ttl(
+                &hash,
+                &create_test_response("ok"),
+                &Duration::from_secs(300),
+            )
             .unwrap();
-        let retrieved = store.lookup(&hash).unwrap();
-        assert!(retrieved.is_some());
+        {
+            let (conn, _) = store.db.lock().unwrap();
+            conn.execute(
+                "UPDATE http_cache SET response_body = ?1",
+                [b"not json".to_vec()],
+            )
+            .unwrap();
+        }
+
+        assert!(store.lookup(&hash).is_err());
     }
 
     #[test]
@@ -632,14 +570,14 @@ mod tests {
 
         let request1 = create_test_request("https://example.com/api1", b"test body 1");
         let hash1 = hash_for_request(&request1);
-        let response1 = create_test_response(200, b"test response 1");
+        let response1 = create_test_response("test response 1");
         store
             .store_with_ttl(&hash1, &response1, &Duration::from_secs(300))
             .unwrap();
 
         let request2 = create_test_request("https://example.com/api2", b"test body 2");
         let hash2 = hash_for_request(&request2);
-        let response2 = create_test_response(200, b"test response 2");
+        let response2 = create_test_response("test response 2");
         store
             .store_with_ttl(&hash2, &response2, &Duration::from_secs(300))
             .unwrap();
@@ -662,7 +600,7 @@ mod tests {
         let hash1 = hash_for_request(&request1);
         let request2 = create_test_request("https://example.com/api2", b"body2");
         let hash2 = hash_for_request(&request2);
-        let resp = create_test_response(200, b"resp");
+        let resp = create_test_response("resp");
 
         store
             .store_with_ttl(&hash1, &resp, &Duration::from_secs(300))
