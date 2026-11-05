@@ -3,13 +3,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::ads::Ad;
-use crate::ads_store::connection_initializer::AdsStoreConnectionInitializer;
 use crate::bytesize::ByteSize;
 use crate::clock::Clock;
+use crate::db::AdsDb;
 use crate::mars::error::FetchAdsError;
 use crate::{ads::PlacementId, clock::CacheClock};
 use rusqlite::{params, OptionalExtension};
-use sql_support::{open_database, LazyDb};
+use sql_support::open_database;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -23,13 +23,13 @@ pub enum FaultKind {
 
 pub struct AdsStoreHolder {
     clock: Arc<dyn Clock>,
-    db: LazyDb<AdsStoreConnectionInitializer>,
+    db: AdsDb,
     #[cfg(test)]
     fault: parking_lot::Mutex<FaultKind>,
 }
 
 impl AdsStoreHolder {
-    pub fn new(db: LazyDb<AdsStoreConnectionInitializer>) -> Self {
+    pub fn new(db: AdsDb) -> Self {
         Self {
             clock: Arc::new(CacheClock),
             db,
@@ -39,7 +39,7 @@ impl AdsStoreHolder {
     }
 
     #[cfg(test)]
-    pub fn new_with_test_clock(db: LazyDb<AdsStoreConnectionInitializer>) -> Self {
+    pub fn new_with_test_clock(db: AdsDb) -> Self {
         use crate::clock::TestClock;
 
         Self {
@@ -64,9 +64,7 @@ impl AdsStoreHolder {
 
     /// Returns whether the db is in memory rather than backed by a file.
     pub fn is_memory(&self) -> Result<bool, open_database::Error> {
-        let (conn, _) = self.db.lock()?;
-        // SQLite reports an empty path for in-memory dbs.
-        Ok(conn.path() == Some(""))
+        self.db.is_memory()
     }
 
     /// Returns total size of the cache in bytes.
@@ -194,24 +192,12 @@ impl AdsStoreHolder {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::{
-        ads_store::connection_initializer::AdsStoreConnectionInitializer,
-        test_utils::{get_example_happy_image_ads, get_example_happy_spoc_response},
-    };
-    use rusqlite::OpenFlags;
+    use crate::test_utils::{get_example_happy_image_ads, get_example_happy_spoc_response};
     use sql_support::open_database;
 
     fn create_test_store() -> AdsStoreHolder {
-        let initializer = AdsStoreConnectionInitializer {};
-        let db = LazyDb::new(
-            Path::new(crate::IN_MEMORY_DB_PATH),
-            OpenFlags::default(),
-            initializer,
-        );
-        AdsStoreHolder::new_with_test_clock(db)
+        AdsStoreHolder::new_with_test_clock(AdsDb::open_memory().unwrap())
     }
 
     #[test]

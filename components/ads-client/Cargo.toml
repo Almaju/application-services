@@ -34,4 +34,5 @@ sql-support = { path = "../support/sql" }
 
 [dev-dependencies]
 mockito = { version = "0.31", default-features = false }
+tempfile = "3"
 viaduct-dev = { path = "../support/viaduct-dev" }

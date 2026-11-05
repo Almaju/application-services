@@ -2,15 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use super::connection_initializer::HttpCacheConnectionInitializer;
 use super::store::HttpCacheStore;
 use crate::bytesize::ByteSize;
+use crate::db::AdsDb;
 use crate::http_cache::HttpCache;
 use crate::telemetry;
-use crate::IN_MEMORY_DB_PATH;
-use rusqlite::OpenFlags;
-use sql_support::{open_database, LazyDb};
-use std::path::{Path, PathBuf};
+use sql_support::open_database;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const DEFAULT_MAX_SIZE: ByteSize = ByteSize::mib(10);
@@ -50,6 +48,7 @@ pub struct HttpCacheBuilder {
     db_path: Option<PathBuf>,
     default_ttl: Option<Duration>,
     max_size: Option<ByteSize>,
+    shared_db: Option<AdsDb>,
 }
 
 impl HttpCacheBuilder {
@@ -59,6 +58,18 @@ impl HttpCacheBuilder {
             db_path: db_path.map(Into::into),
             default_ttl: None,
             max_size: None,
+            shared_db: None,
+        }
+    }
+
+    /// A builder for a cache kept in `db`, an already open db shared with the
+    /// rest of the client.
+    pub(crate) fn with_db(db: AdsDb) -> Self {
+        Self {
+            db_path: None,
+            default_ttl: None,
+            max_size: None,
+            shared_db: Some(db),
         }
     }
 
@@ -105,17 +116,17 @@ impl HttpCacheBuilder {
         self
     }
 
-    // Opens the db at `db_path`, or a memory db if there is no path or it fails to open.
-    fn open_db(&self) -> Result<LazyDb<HttpCacheConnectionInitializer>, HttpCacheBuilderError> {
-        if let Some(db_path) = &self.db_path {
-            match open_connection(db_path) {
-                Ok(db) => return Ok(db),
-                Err(e) => telemetry::record_build_cache_error(&HttpCacheBuilderError::from(e)),
-            }
+    // The shared db if there is one, else the db at `db_path`, or a memory db
+    // if there is no path or it fails to open.
+    fn open_db(&self) -> Result<AdsDb, HttpCacheBuilderError> {
+        if let Some(db) = &self.shared_db {
+            return Ok(db.clone());
         }
-
         // TODO: This is cast to DatabaseMemory rather than Database. Remove this when DatabaseMemory is removed.
-        open_connection(Path::new(IN_MEMORY_DB_PATH)).map_err(HttpCacheBuilderError::DatabaseMemory)
+        AdsDb::open_or_memory(self.db_path.as_deref(), |e| {
+            telemetry::record_build_cache_error(&HttpCacheBuilderError::from(e))
+        })
+        .map_err(HttpCacheBuilderError::DatabaseMemory)
     }
 
     fn validate(&self) -> Result<(), HttpCacheBuilderError> {
@@ -151,22 +162,10 @@ impl HttpCacheBuilder {
     }
 }
 
-// Opens the db at `path`, eagerly opening the initial connection so failures surface here.
-fn open_connection(
-    path: &Path,
-) -> Result<LazyDb<HttpCacheConnectionInitializer>, open_database::Error> {
-    let db = LazyDb::new(
-        path,
-        OpenFlags::default(),
-        HttpCacheConnectionInitializer {},
-    );
-    drop(db.lock()?);
-    Ok(db)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IN_MEMORY_DB_PATH;
 
     fn make_test_builder(path: &str) -> HttpCacheBuilder {
         HttpCacheBuilder::new(Some(path))

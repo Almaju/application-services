@@ -7,17 +7,19 @@ use crate::ads::{AdImage, AdImageOrSpoc, AdSpoc, AdTile};
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
-use crate::http_cache::{CachePolicy, HttpCache};
+use crate::db::AdsDb;
+use crate::http_cache::{CachePolicy, HttpCache, HttpCacheBuilderError};
 use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelevance};
 use crate::mars::ad_response::AdResponse;
 use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
 use crate::mars::{MARSClient, ReportReason};
 use crate::telemetry::{self, ClientOperation};
-use config::AdsClientConfig;
+use config::{AdsCacheConfig, AdsClientConfig};
 use context_id::{ContextIDComponent, DefaultContextIdCallback};
 use error::RequestAdsError;
 use sql_support::open_database;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -162,52 +164,21 @@ impl AdsClientInner {
 
         let environment = client_config.environment;
 
-        // Configure the cache if a path is provided.
-        // Defaults for ttl and cache size are also set if unspecified.
-        let http_cache = client_config
-            .cache_config
-            .and_then(|cache_cfg| {
-                let default_cache_ttl = Duration::from_secs(
-                    cache_cfg
-                        .default_cache_ttl_seconds
-                        .unwrap_or(DEFAULT_TTL_SECONDS),
-                );
-                let max_cache_size =
-                    ByteSize::mib(cache_cfg.max_size_mib.unwrap_or(DEFAULT_MAX_CACHE_SIZE_MIB));
-
-                match HttpCache::builder(cache_cfg.db_path)
-                    .max_size(max_cache_size)
-                    .default_ttl(default_cache_ttl)
-                    .build()
-                {
-                    Ok(cache) => Some(cache),
-                    Err(e) => {
-                        telemetry::record_build_cache_error(&e);
-                        None
-                    }
-                }
-            })
-            .or_else(|| {
-                // If no `cache_config` is provided, create an in-memory db with default parameters.
-                // TODO: the `build` function should be infallible, and no error would be needed here.
-                // (true for both memory and FS, because FS would default to memory)
-                HttpCache::builder_memory()
-                    .build()
-                    .inspect_err(telemetry::record_build_cache_error)
-                    .ok()
-            });
+        // One db for the whole client: the HTTP cache and the ads store are
+        // tables in it. Without a usable path, it lives in memory.
+        let cache_config = client_config.cache_config;
+        let db = open_db(cache_config.as_ref().map(|cfg| cfg.db_path.as_str()));
+        let http_cache = db
+            .clone()
+            .and_then(|db| build_http_cache(db, cache_config.as_ref()));
 
         #[cfg(feature = "stateful")]
-        let ads_store =
-            client_config
-                .store_config
-                .and_then(|x| match AdsStore::builder(x.db_path).build() {
-                    Ok(store) => Some(store),
-                    Err(e) => {
-                        telemetry::record_ads_store_error(&e);
-                        None
-                    }
-                });
+        let ads_store = db.and_then(|db| {
+            AdsStore::builder_with_db(db)
+                .build()
+                .inspect_err(telemetry::record_ads_store_error)
+                .ok()
+        });
 
         let client = MARSClient::new(environment, http_cache);
         telemetry::record_client_operation(ClientOperation::New);
@@ -454,6 +425,49 @@ impl AdsClientInner {
     }
 }
 
+// Opens the client's db at `path`, or in memory if there is no usable path.
+fn open_db(path: Option<&str>) -> Option<AdsDb> {
+    let path = path.filter(|path| {
+        let empty = path.trim().is_empty();
+        if empty {
+            telemetry::record_build_cache_error(&HttpCacheBuilderError::EmptyDbPath);
+        }
+        !empty
+    });
+    AdsDb::open_or_memory(path.map(Path::new), |e| {
+        telemetry::record_build_cache_error(&HttpCacheBuilderError::from(e))
+    })
+    .map_err(HttpCacheBuilderError::DatabaseMemory)
+    .inspect_err(telemetry::record_build_cache_error)
+    .ok()
+}
+
+// Builds the HTTP cache in `db` from `cache_config`, or with the defaults if
+// there is no config or it is invalid.
+fn build_http_cache(db: AdsDb, cache_config: Option<&AdsCacheConfig>) -> Option<HttpCache> {
+    if let Some(cache_cfg) = cache_config {
+        let default_cache_ttl = Duration::from_secs(
+            cache_cfg
+                .default_cache_ttl_seconds
+                .unwrap_or(DEFAULT_TTL_SECONDS),
+        );
+        let max_cache_size =
+            ByteSize::mib(cache_cfg.max_size_mib.unwrap_or(DEFAULT_MAX_CACHE_SIZE_MIB));
+        match HttpCache::builder_with_db(db.clone())
+            .max_size(max_cache_size)
+            .default_ttl(default_cache_ttl)
+            .build()
+        {
+            Ok(cache) => return Some(cache),
+            Err(e) => telemetry::record_build_cache_error(&e),
+        }
+    }
+    HttpCache::builder_with_db(db)
+        .build()
+        .inspect_err(telemetry::record_build_cache_error)
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -495,12 +509,35 @@ mod tests {
         let config = AdsClientConfig {
             cache_config: None,
             environment: Environment::Test,
-            #[cfg(feature = "stateful")]
-            store_config: None,
         };
         let client = AdsClient::new(config);
         let context_id = client.get_context_id().unwrap();
         assert!(!context_id.is_empty());
+    }
+
+    #[test]
+    fn test_cache_and_store_share_one_db_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("ads_client.sqlite");
+        let client = AdsClient::new(AdsClientConfig {
+            cache_config: Some(AdsCacheConfig {
+                db_path: db_path.to_string_lossy().into_owned(),
+                default_cache_ttl_seconds: None,
+                max_size_mib: None,
+            }),
+            environment: Environment::Test,
+        });
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(tables, ["ads", "http_cache"]);
+        client.shutdown();
     }
 
     #[test]
@@ -586,8 +623,6 @@ mod tests {
         let config = AdsClientConfig {
             cache_config: None,
             environment: Environment::Test,
-            #[cfg(feature = "stateful")]
-            store_config: None,
         };
         let client = AdsClient::new(config);
 
@@ -624,8 +659,6 @@ mod tests {
         let config = AdsClientConfig {
             cache_config: None,
             environment: Environment::Test,
-            #[cfg(feature = "stateful")]
-            store_config: None,
         };
         let client = AdsClient::new(config);
 

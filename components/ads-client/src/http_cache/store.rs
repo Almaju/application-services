@@ -6,13 +6,12 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::{
     clock::{CacheClock, Clock},
-    http_cache::{
-        connection_initializer::HttpCacheConnectionInitializer, request_hash::RequestHash, ByteSize,
-    },
+    db::AdsDb,
+    http_cache::{request_hash::RequestHash, ByteSize},
 };
 use error_support::warn;
 use rusqlite::{params, OptionalExtension};
-use sql_support::{open_database, LazyDb};
+use sql_support::open_database;
 use viaduct::{Header, Response};
 
 #[cfg(test)]
@@ -27,13 +26,13 @@ pub enum FaultKind {
 
 pub(super) struct HttpCacheStore {
     clock: Arc<dyn Clock>,
-    db: LazyDb<HttpCacheConnectionInitializer>,
+    db: AdsDb,
     #[cfg(test)]
     fault: parking_lot::Mutex<FaultKind>,
 }
 
 impl HttpCacheStore {
-    pub(super) fn new(db: LazyDb<HttpCacheConnectionInitializer>) -> Self {
+    pub(super) fn new(db: AdsDb) -> Self {
         Self {
             clock: Arc::new(CacheClock),
             db,
@@ -43,7 +42,7 @@ impl HttpCacheStore {
     }
 
     #[cfg(test)]
-    pub fn new_with_test_clock(db: LazyDb<HttpCacheConnectionInitializer>) -> Self {
+    pub fn new_with_test_clock(db: AdsDb) -> Self {
         use crate::clock::TestClock;
 
         Self {
@@ -66,9 +65,7 @@ impl HttpCacheStore {
 
     /// Returns whether the db is in memory rather than backed by a file.
     pub fn is_memory(&self) -> Result<bool, open_database::Error> {
-        let (conn, _) = self.db.lock()?;
-        // SQLite reports an empty path for in-memory dbs.
-        Ok(conn.path() == Some(""))
+        self.db.is_memory()
     }
 
     /// Returns total size of the cache in bytes.
@@ -295,10 +292,8 @@ impl HttpCacheStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_cache::connection_initializer::HttpCacheConnectionInitializer;
-    use rusqlite::OpenFlags;
     use sql_support::open_database;
-    use std::{path::Path, time::Duration};
+    use std::time::Duration;
     use viaduct::{header_names, Headers, Method, Request, Response};
 
     fn hash_for_request(req: &Request) -> RequestHash {
@@ -349,13 +344,7 @@ mod tests {
     }
 
     fn create_test_store() -> HttpCacheStore {
-        let initializer = HttpCacheConnectionInitializer {};
-        let db = LazyDb::new(
-            Path::new(crate::IN_MEMORY_DB_PATH),
-            OpenFlags::default(),
-            initializer,
-        );
-        HttpCacheStore::new_with_test_clock(db)
+        HttpCacheStore::new_with_test_clock(AdsDb::open_memory().unwrap())
     }
 
     #[test]

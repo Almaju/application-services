@@ -8,8 +8,6 @@ pub(crate) mod telemetry;
 use crate::ads::{
     AdCallbacks, AdImage, AdImageOrSpoc, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking,
 };
-#[cfg(feature = "stateful")]
-use crate::client::config::AdsStoreConfig;
 use crate::client::config::{AdsCacheConfig, AdsClientConfig};
 use crate::client::AdsClient;
 use crate::http_cache::CachePolicy;
@@ -94,8 +92,6 @@ pub struct MozAdsClientBuilder(Mutex<MozAdsClientBuilderInner>);
 struct MozAdsClientBuilderInner {
     cache_config: Option<MozAdsCacheConfig>,
     environment: Option<MozAdsEnvironment>,
-    #[cfg(feature = "stateful")]
-    store_config: Option<MozAdsStoreConfig>,
     telemetry: Option<Arc<dyn MozAdsTelemetry>>,
 }
 
@@ -125,8 +121,6 @@ impl MozAdsClientBuilder {
         let client_config = AdsClientConfig {
             cache_config: inner.cache_config.clone().map(Into::into),
             environment: inner.environment.clone().unwrap_or_default().into(),
-            #[cfg(feature = "stateful")]
-            store_config: inner.store_config.clone().map(Into::into),
         };
 
         let client = AdsClient::new(client_config);
@@ -134,8 +128,9 @@ impl MozAdsClientBuilder {
         MozAdsClient { inner }
     }
 
-    /// Enables the HTTP cache with this configuration. Without it, nothing is
-    /// cached.
+    /// Where the client keeps its database, and how the HTTP cache behaves.
+    /// Without it, the database lives in memory and nothing outlives the
+    /// client.
     pub fn cache_config(self: Arc<Self>, cache_config: MozAdsCacheConfig) -> Arc<Self> {
         self.0.lock().cache_config = Some(cache_config);
         self
@@ -151,17 +146,6 @@ impl MozAdsClientBuilder {
     /// [`MozAdsTelemetry`].
     pub fn telemetry(self: Arc<Self>, telemetry: Box<dyn MozAdsTelemetry>) -> Arc<Self> {
         self.0.lock().telemetry = Some(Arc::from(telemetry));
-        self
-    }
-}
-
-#[cfg(feature = "stateful")]
-#[uniffi::export]
-impl MozAdsClientBuilder {
-    /// Where the stateful client keeps its ads database.
-    #[cfg(feature = "stateful")]
-    pub fn store_config(self: Arc<Self>, store_config: MozAdsStoreConfig) -> Arc<Self> {
-        self.0.lock().store_config = Some(store_config);
         self
     }
 }
@@ -187,8 +171,9 @@ pub enum MozAdsEnvironment {
     Custom(AdsClientUrl),
 }
 
-/// The on-disk HTTP cache. `default_cache_ttl_seconds` defaults to 300 and
-/// `max_size_mib` to 10.
+/// The client's on-disk database. `db_path` holds both the HTTP cache and,
+/// for the stateful client, the ads store. `default_cache_ttl_seconds`
+/// defaults to 300 and `max_size_mib` (the HTTP cache's share) to 10.
 #[derive(Clone, uniffi::Record)]
 pub struct MozAdsCacheConfig {
     pub db_path: String,
@@ -196,12 +181,6 @@ pub struct MozAdsCacheConfig {
     pub default_cache_ttl_seconds: Option<u64>,
     #[uniffi(default = None)]
     pub max_size_mib: Option<u64>,
-}
-
-/// The SQLite database the stateful client keeps its ads in.
-#[derive(Clone, uniffi::Record)]
-pub struct MozAdsStoreConfig {
-    pub db_path: String,
 }
 
 /// IAB content categories, in one taxonomy version.
@@ -501,15 +480,6 @@ impl From<MozAdsCacheConfig> for AdsCacheConfig {
             db_path: config.db_path,
             default_cache_ttl_seconds: config.default_cache_ttl_seconds,
             max_size_mib: config.max_size_mib,
-        }
-    }
-}
-
-#[cfg(feature = "stateful")]
-impl From<MozAdsStoreConfig> for AdsStoreConfig {
-    fn from(config: MozAdsStoreConfig) -> Self {
-        Self {
-            db_path: config.db_path,
         }
     }
 }

@@ -3,13 +3,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 pub mod builder;
-pub mod connection_initializer;
 pub mod store;
 
 use crate::{
     ads::PlacementId,
     ads_store::{builder::AdsStoreBuilder, store::AdsStoreHolder},
     bytesize::ByteSize,
+    db::AdsDb,
 };
 use sql_support::open_database;
 use std::path::Path;
@@ -26,6 +26,10 @@ pub struct AdsStore {
 impl AdsStore {
     pub fn builder<P: AsRef<Path>>(db_path: P) -> AdsStoreBuilder {
         AdsStoreBuilder::new(db_path.as_ref())
+    }
+
+    pub(crate) fn builder_with_db(db: AdsDb) -> AdsStoreBuilder {
+        AdsStoreBuilder::with_db(db)
     }
 
     pub fn clear(&self) -> Result<(), open_database::Error> {

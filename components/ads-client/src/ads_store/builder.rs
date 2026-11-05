@@ -2,15 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use super::connection_initializer::AdsStoreConnectionInitializer;
 use crate::ads_store::store::AdsStoreHolder;
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
+use crate::db::AdsDb;
 use crate::telemetry;
-use crate::IN_MEMORY_DB_PATH;
-use rusqlite::OpenFlags;
-use sql_support::{open_database, LazyDb};
-use std::path::{Path, PathBuf};
+use sql_support::open_database;
+use std::path::PathBuf;
 
 const DEFAULT_MAX_SIZE: ByteSize = ByteSize::mib(10);
 const MIN_STORE_SIZE: ByteSize = ByteSize::kib(1);
@@ -33,26 +31,40 @@ pub enum AdsStoreBuilderError {
 }
 
 pub struct AdsStoreBuilder {
-    db_path: PathBuf,
+    db_path: Option<PathBuf>,
     max_size: Option<ByteSize>,
+    shared_db: Option<AdsDb>,
 }
 
 impl AdsStoreBuilder {
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
-            db_path: db_path.into(),
+            db_path: Some(db_path.into()),
             max_size: None,
+            shared_db: None,
+        }
+    }
+
+    /// A builder for a store kept in `db`, an already open db shared with the
+    /// rest of the client.
+    pub(crate) fn with_db(db: AdsDb) -> Self {
+        Self {
+            db_path: None,
+            max_size: None,
+            shared_db: Some(db),
         }
     }
 
     pub fn build(&self) -> Result<AdsStore, AdsStoreBuilderError> {
         self.validate()?;
 
-        // Fall back to a memory db if the file db fails to open.
-        let db = open_connection(&self.db_path)
-            .map_err(AdsStoreBuilderError::from)
-            .inspect_err(telemetry::record_ads_store_error)
-            .or_else(|_| open_connection(Path::new(IN_MEMORY_DB_PATH)))?;
+        let db = match &self.shared_db {
+            Some(db) => db.clone(),
+            // Fall back to a memory db if the file db fails to open.
+            None => AdsDb::open_or_memory(self.db_path.as_deref(), |e| {
+                telemetry::record_ads_store_error(&AdsStoreBuilderError::from(e))
+            })?,
+        };
         let holder = AdsStoreHolder::new(db);
         let max_size = self.max_size.unwrap_or(DEFAULT_MAX_SIZE);
         Ok(AdsStore { holder, max_size })
@@ -64,7 +76,11 @@ impl AdsStoreBuilder {
     }
 
     fn validate(&self) -> Result<(), AdsStoreBuilderError> {
-        if self.db_path.to_string_lossy().trim().is_empty() {
+        if self
+            .db_path
+            .as_ref()
+            .is_some_and(|p| p.to_string_lossy().trim().is_empty())
+        {
             return Err(AdsStoreBuilderError::EmptyDbPath);
         }
 
@@ -82,18 +98,10 @@ impl AdsStoreBuilder {
     }
 }
 
-// Opens the db at `path`, eagerly opening the initial connection so failures surface here.
-fn open_connection(
-    path: &Path,
-) -> Result<LazyDb<AdsStoreConnectionInitializer>, open_database::Error> {
-    let db = LazyDb::new(path, OpenFlags::default(), AdsStoreConnectionInitializer {});
-    drop(db.lock()?);
-    Ok(db)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IN_MEMORY_DB_PATH;
 
     fn make_test_builder(path: &str) -> AdsStoreBuilder {
         AdsStoreBuilder::new(path)
@@ -102,7 +110,7 @@ mod tests {
     #[test]
     fn test_store_builder_with_defaults() {
         let builder = make_test_builder(IN_MEMORY_DB_PATH);
-        assert_eq!(builder.db_path, PathBuf::from(IN_MEMORY_DB_PATH));
+        assert_eq!(builder.db_path, Some(PathBuf::from(IN_MEMORY_DB_PATH)));
         assert_eq!(builder.max_size, None);
         assert!(builder.build().is_ok());
     }
@@ -121,7 +129,7 @@ mod tests {
     fn test_cache_builder_valid_custom() {
         let builder = make_test_builder(IN_MEMORY_DB_PATH).max_size(ByteSize::b(1024));
 
-        assert_eq!(builder.db_path, PathBuf::from(IN_MEMORY_DB_PATH));
+        assert_eq!(builder.db_path, Some(PathBuf::from(IN_MEMORY_DB_PATH)));
         assert_eq!(builder.max_size, Some(ByteSize::b(1024)));
         assert!(builder.build().is_ok());
     }

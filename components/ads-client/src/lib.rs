@@ -19,6 +19,7 @@ pub mod ads_store;
 pub mod bytesize;
 mod client;
 pub mod clock;
+pub mod db;
 mod ffi;
 pub mod http_cache;
 mod mars;

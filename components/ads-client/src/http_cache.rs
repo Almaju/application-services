@@ -4,7 +4,6 @@
 
 mod builder;
 mod cache_control;
-mod connection_initializer;
 mod outcome;
 mod request_hash;
 mod store;
@@ -17,6 +16,7 @@ use self::{
     strategy::{CacheFirst, NetworkFirst},
 };
 use crate::bytesize::ByteSize;
+use crate::db::AdsDb;
 
 use sql_support::open_database;
 use std::hash::Hash;
@@ -55,6 +55,10 @@ impl HttpCache {
 
     pub fn builder_memory() -> HttpCacheBuilder {
         HttpCacheBuilder::new(None::<String>)
+    }
+
+    pub(crate) fn builder_with_db(db: AdsDb) -> HttpCacheBuilder {
+        HttpCacheBuilder::with_db(db)
     }
 
     pub fn is_memory(&self) -> Result<bool, open_database::Error> {
