@@ -96,8 +96,7 @@ impl HttpCacheStore {
         )?)
     }
 
-    #[cfg(test)]
-    pub fn get_clock(&self) -> &dyn Clock {
+    pub(super) fn get_clock(&self) -> &dyn Clock {
         &*self.clock
     }
 

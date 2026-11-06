@@ -5,6 +5,7 @@
 
 use super::cache_control::CacheControl;
 use super::request_hash::RequestHash;
+use super::response_age::ResponseAge;
 use super::store::HttpCacheStore;
 use super::ttl::EffectiveTtl;
 use super::{CacheOutcome, HttpCacheSendResult};
@@ -56,6 +57,7 @@ impl NetworkFirst {
                 default: self.default_ttl,
                 explicit: self.explicit_ttl,
                 server_max_age: cache_control.max_age_duration(),
+                current_age: ResponseAge::from(&response).at(store.get_clock()),
             }
             .resolve();
             if ttl.is_zero() {
