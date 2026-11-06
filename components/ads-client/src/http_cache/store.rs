@@ -112,6 +112,10 @@ impl HttpCacheStore {
         )?)
     }
 
+    pub(super) fn now_epoch_seconds(&self) -> i64 {
+        self.clock.now_epoch_seconds()
+    }
+
     /// Lookup is agnostic to expiration. If it exists in the store, it will return the result.
     pub(super) fn lookup(
         &self,
