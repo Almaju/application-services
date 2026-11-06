@@ -96,8 +96,7 @@ impl HttpCacheStore {
         )?)
     }
 
-    #[cfg(test)]
-    pub fn get_clock(&self) -> &dyn Clock {
+    pub(super) fn get_clock(&self) -> &dyn Clock {
         &*self.clock
     }
 
@@ -110,10 +109,6 @@ impl HttpCacheStore {
             "DELETE FROM http_cache WHERE request_hash = ?1",
             params![request_hash.to_string()],
         )?)
-    }
-
-    pub(super) fn now_epoch_seconds(&self) -> i64 {
-        self.clock.now_epoch_seconds()
     }
 
     /// Lookup is agnostic to expiration. If it exists in the store, it will return the result.

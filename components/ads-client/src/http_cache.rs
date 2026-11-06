@@ -2,12 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-mod age;
 mod builder;
 mod cache_control;
 mod connection_initializer;
 mod outcome;
 mod request_hash;
+mod response_age;
 mod store;
 mod strategy;
 mod ttl;
@@ -431,13 +431,6 @@ mod tests {
         TestRequest(Request::get(url))
     }
 
-    fn http_date(epoch_seconds: i64) -> String {
-        chrono::DateTime::from_timestamp(epoch_seconds, 0)
-            .unwrap()
-            .format("%a, %d %b %Y %H:%M:%S GMT")
-            .to_string()
-    }
-
     #[test]
     fn ttl_resolution_subtracts_age_header_from_server_max_age() {
         viaduct_dev::init_backend_dev();
@@ -481,7 +474,11 @@ mod tests {
         viaduct_dev::init_backend_dev();
 
         let cache = make_cache_with_ttl(300);
-        let date = http_date(cache.store.now_epoch_seconds() - 3000);
+        let date =
+            chrono::DateTime::from_timestamp(cache.store.get_clock().now_epoch_seconds() - 3000, 0)
+                .unwrap()
+                .format("%a, %d %b %Y %H:%M:%S GMT")
+                .to_string();
         let m = mockito::mock("GET", "/dated")
             .with_status(200)
             .with_header("content-type", "application/json")
