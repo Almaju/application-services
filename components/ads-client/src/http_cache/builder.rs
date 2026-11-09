@@ -5,14 +5,13 @@
 use super::connection_initializer::HttpCacheConnectionInitializer;
 use super::store::HttpCacheStore;
 use crate::bytesize::ByteSize;
-use crate::clock::{CacheClock, Clock};
+use crate::clock::Clock;
 use crate::http_cache::HttpCache;
 use crate::telemetry;
 use crate::IN_MEMORY_DB_PATH;
 use rusqlite::OpenFlags;
 use sql_support::{open_database, LazyDb};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 const DEFAULT_MAX_SIZE: ByteSize = ByteSize::mib(10);
@@ -67,14 +66,7 @@ impl HttpCacheBuilder {
     // Attempt to build the HttpCache. If a file path exists and can be built successfully, we build
     // a FS sqlite database. Otherwise, we fall back to memory.
     pub fn build(&self) -> Result<HttpCache, HttpCacheBuilderError> {
-        self.build_with_clock(Arc::new(CacheClock))
-    }
-
-    #[cfg(test)]
-    pub fn build_for_time_dependent_tests(&self) -> Result<HttpCache, HttpCacheBuilderError> {
-        use crate::clock::TestClock;
-
-        self.build_with_clock(Arc::new(TestClock::new(chrono::Utc::now().timestamp())))
+        self.build_with_clock(Clock::default())
     }
 
     pub fn default_ttl(mut self, ttl: Duration) -> Self {
@@ -87,7 +79,10 @@ impl HttpCacheBuilder {
         self
     }
 
-    fn build_with_clock(&self, clock: Arc<dyn Clock>) -> Result<HttpCache, HttpCacheBuilderError> {
+    pub(super) fn build_with_clock(
+        &self,
+        clock: Clock,
+    ) -> Result<HttpCache, HttpCacheBuilderError> {
         self.validate()?;
 
         Ok(HttpCache {

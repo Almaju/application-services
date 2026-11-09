@@ -25,7 +25,7 @@ impl CacheFirst {
         self,
         client: &Client,
         store: &HttpCacheStore,
-        clock: &dyn Clock,
+        clock: &Clock,
     ) -> HttpCacheSendResult {
         let mut outcomes = vec![];
         match store.lookup(&self.hash) {
@@ -58,7 +58,7 @@ impl NetworkFirst {
         self,
         client: &Client,
         store: &HttpCacheStore,
-        clock: &dyn Clock,
+        clock: &Clock,
     ) -> HttpCacheSendResult {
         let response = client.send_sync(self.request)?;
         let now = clock.now();
