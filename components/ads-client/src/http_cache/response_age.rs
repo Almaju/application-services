@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use crate::clock::Clock;
 use chrono::{DateTime, Utc};
 use std::time::Duration;
 use viaduct::{header_names, Response};
@@ -34,12 +33,11 @@ impl From<&Response> for ResponseAge {
 }
 
 impl ResponseAge {
-    /// The larger of `Age` and the time elapsed since `Date`, as of `clock`.
-    pub(super) fn at(&self, clock: &dyn Clock) -> Duration {
+    /// The larger of `Age` and the time elapsed since `Date`, as of `now`.
+    pub(super) fn at(&self, now: DateTime<Utc>) -> Duration {
         let since_date = self
             .date
-            .zip(DateTime::from_timestamp(clock.now_epoch_seconds(), 0))
-            .and_then(|(date, now)| (now - date).to_std().ok())
+            .and_then(|date| (now - date).to_std().ok())
             .unwrap_or_default();
         self.age.max(since_date)
     }
@@ -48,11 +46,7 @@ impl ResponseAge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::TestClock;
     use viaduct::{Headers, Method};
-
-    // Thu, 06 Nov 2025 08:49:37 GMT
-    const NOW: i64 = 1_762_418_977;
 
     fn age_at_now(headers: &[(&str, &str)]) -> Duration {
         let mut map = Headers::new();
@@ -66,7 +60,8 @@ mod tests {
             status: 200,
             url: "https://example.com".parse().unwrap(),
         };
-        ResponseAge::from(&response).at(&TestClock::new(NOW))
+        let now = "2025-11-06T08:49:37Z".parse().unwrap();
+        ResponseAge::from(&response).at(now)
     }
 
     #[test]

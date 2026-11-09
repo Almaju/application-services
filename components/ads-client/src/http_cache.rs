@@ -18,6 +18,7 @@ use self::{
     strategy::{CacheFirst, NetworkFirst},
 };
 use crate::bytesize::ByteSize;
+use crate::clock::Clock;
 
 use sql_support::open_database;
 use std::hash::Hash;
@@ -27,6 +28,7 @@ pub use self::builder::HttpCacheBuilderError;
 pub use self::outcome::CacheOutcome;
 pub use self::request_hash::RequestHash;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub type HttpCacheSendResult = Result<(Response, Vec<CacheOutcome>), viaduct::ViaductError>;
@@ -44,6 +46,7 @@ impl Default for CachePolicy {
 }
 
 pub struct HttpCache {
+    clock: Arc<dyn Clock>,
     default_ttl: Duration,
     max_size: ByteSize,
     store: HttpCacheStore,
@@ -86,7 +89,7 @@ impl HttpCache {
         let mut outcomes = vec![];
 
         // Clean up expired entries before applying the policy
-        if let Err(e) = self.store.delete_expired_entries() {
+        if let Err(e) = self.store.delete_expired_entries(self.clock.now()) {
             outcomes.push(CacheOutcome::CleanupFailed(e));
         }
 
@@ -98,14 +101,14 @@ impl HttpCache {
                 hash,
                 request,
             }
-            .apply(client, &self.store),
+            .apply(client, &self.store, &*self.clock),
             CachePolicy::NetworkFirst { ttl } => NetworkFirst {
                 default_ttl: self.default_ttl,
                 explicit_ttl: *ttl,
                 hash,
                 request,
             }
-            .apply(client, &self.store),
+            .apply(client, &self.store, &*self.clock),
         }?;
         outcomes.append(&mut strategy_outcomes);
 
@@ -180,6 +183,15 @@ mod tests {
             .expect("cache build should succeed")
     }
 
+    /// Moves the cache's clock forward, then drops what expired by then.
+    fn advance_and_expire(cache: &HttpCache, secs: i64) {
+        cache.clock.advance(secs);
+        cache
+            .store
+            .delete_expired_entries(cache.clock.now())
+            .unwrap();
+    }
+
     #[test]
     fn test_http_cache_creation() {
         // Test that HttpCache can be created successfully with test config
@@ -211,7 +223,12 @@ mod tests {
 
         cache
             .store
-            .store_with_ttl(&hash, &response, &Duration::from_secs(300))
+            .store_with_ttl(
+                &hash,
+                &response,
+                &Duration::from_secs(300),
+                cache.clock.now(),
+            )
             .unwrap();
 
         // Verify it's cached
@@ -380,13 +397,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Past the server max-age (1s) but still under the explicit TTL (20s) — entry is still there.
-        cache.store.get_clock().advance(2);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 2);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Past the explicit TTL — entry should be expired.
-        cache.store.get_clock().advance(20);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 20);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -415,13 +430,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Still cached at ~1s.
-        cache.store.get_clock().advance(1);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Expired after exceeding server max-age.
-        cache.store.get_clock().advance(2);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 2);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -459,12 +472,10 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Stored for the 14400s of freshness left, not for another 86400s.
-        cache.store.get_clock().advance(14_399);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 14_399);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
-        cache.store.get_clock().advance(1);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -474,11 +485,9 @@ mod tests {
         viaduct_dev::init_backend_dev();
 
         let cache = make_cache_with_ttl(300);
-        let date =
-            chrono::DateTime::from_timestamp(cache.store.get_clock().now_epoch_seconds() - 3000, 0)
-                .unwrap()
-                .format("%a, %d %b %Y %H:%M:%S GMT")
-                .to_string();
+        let date = (cache.clock.now() - Duration::from_secs(3000))
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
         let m = mockito::mock("GET", "/dated")
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -497,12 +506,10 @@ mod tests {
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-        cache.store.get_clock().advance(599);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 599);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
-        cache.store.get_clock().advance(1);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -560,8 +567,7 @@ mod tests {
         let (_, outcomes) = cache.send_with_policy(&client, req, &policy).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-        cache.store.get_clock().advance(19);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 19);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
         m.assert();
     }
@@ -590,13 +596,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired yet at ~1s
-        cache.store.get_clock().advance(1);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Expired after ~2s
-        cache.store.get_clock().advance(2);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 2);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -624,13 +628,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired at ~1s
-        cache.store.get_clock().advance(1);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Expired after ~3s
-        cache.store.get_clock().advance(3);
-        cache.store.delete_expired_entries().unwrap();
+        advance_and_expire(&cache, 3);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -657,7 +659,7 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Advance clock past the TTL
-        cache.store.get_clock().advance(3);
+        cache.clock.advance(3);
 
         // Second call: expired entry must be a miss, not a hit
         let (_, outcomes) = cache
@@ -684,12 +686,22 @@ mod tests {
 
         cache
             .store
-            .store_with_ttl(&hash1, &response, &Duration::from_secs(300))
+            .store_with_ttl(
+                &hash1,
+                &response,
+                &Duration::from_secs(300),
+                cache.clock.now(),
+            )
             .unwrap();
 
         cache
             .store
-            .store_with_ttl(&hash2, &response, &Duration::from_secs(300))
+            .store_with_ttl(
+                &hash2,
+                &response,
+                &Duration::from_secs(300),
+                cache.clock.now(),
+            )
             .unwrap();
 
         assert!(cache.store.lookup(&hash1).unwrap().is_some());

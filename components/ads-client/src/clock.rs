@@ -2,10 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use chrono::{DateTime, Utc};
+
 pub trait Clock: Send + Sync + 'static {
     #[cfg(test)]
     fn advance(&self, secs: i64);
-    fn now_epoch_seconds(&self) -> i64;
+    fn now(&self) -> DateTime<Utc>;
 }
 
 pub struct CacheClock;
@@ -20,8 +22,8 @@ impl Clock for CacheClock {
     "
         )
     }
-    fn now_epoch_seconds(&self) -> i64 {
-        chrono::Utc::now().timestamp()
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
     }
 }
 
@@ -45,7 +47,8 @@ impl Clock for TestClock {
         self.now
             .fetch_add(secs, std::sync::atomic::Ordering::Relaxed);
     }
-    fn now_epoch_seconds(&self) -> i64 {
-        self.now.load(std::sync::atomic::Ordering::Relaxed)
+    fn now(&self) -> DateTime<Utc> {
+        DateTime::from_timestamp(self.now.load(std::sync::atomic::Ordering::Relaxed), 0)
+            .expect("the test clock stays within chrono's range")
     }
 }
