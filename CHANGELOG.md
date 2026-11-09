@@ -7,7 +7,7 @@
 ### Ads-Client
 
 - OHTTP requests always send `X-User-Agent`: the preflight's, else the new `MozAdsClientBuilder.userAgent()`, else viaduct's global default user agent. With none, the request fails.
-- The HTTP cache subtracts a response's age (its `Age` header or the time since its `Date` header, whichever is larger) from its `Cache-Control: max-age`, and does not store a response that is already stale. A response that a platform cache such as necko had held for a while used to be cached for another full `max-age`, so the preflight's `geo_location` and `normalized_ua` could be used for up to 48 hours instead of 24.
+- The HTTP cache no longer keeps a response past its `Cache-Control: max-age` when the response was already old on arrival, for example a preflight served from the platform's HTTP cache.
 
 # v161.0 (_2026-11-05_)
 

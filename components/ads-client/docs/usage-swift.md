@@ -512,13 +512,12 @@ Each network response can be stored in the cache with an associated effective TT
 resolved by priority (highest to lowest):
 
 1. `per_request_ttl` — caller-provided override on `MozAdsRequestCachePolicy`.
-2. `server_max_age` — value of the HTTP `Cache-Control: max-age=N` header on the response,
-   minus the response's age: its `Age` header or the time since its `Date` header, whichever is larger.
+2. `server_max_age` — value of the HTTP `Cache-Control: max-age=N` header on the response.
 3. `client_default_ttl` — configured on `MozAdsCacheConfig`.
 
-If the effective TTL resolves to 0 seconds (e.g. `Cache-Control: max-age=0`, or a
-response already older than its `max-age`), the response is not cached. The
-resolved TTL is capped at 7 days regardless of source.
+If the effective TTL resolves to 0 seconds (e.g. `Cache-Control: max-age=0`),
+the response is not cached. The resolved TTL is capped at 7 days regardless
+of source.
 
 ### Configuring The Cache
 
