@@ -28,7 +28,6 @@ pub use self::builder::HttpCacheBuilderError;
 pub use self::outcome::CacheOutcome;
 pub use self::request_hash::RequestHash;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub type HttpCacheSendResult = Result<(Response, Vec<CacheOutcome>), viaduct::ViaductError>;
@@ -46,7 +45,7 @@ impl Default for CachePolicy {
 }
 
 pub struct HttpCache {
-    clock: Arc<dyn Clock>,
+    clock: Clock,
     default_ttl: Duration,
     max_size: ByteSize,
     store: HttpCacheStore,
@@ -101,14 +100,14 @@ impl HttpCache {
                 hash,
                 request,
             }
-            .apply(client, &self.store, &*self.clock),
+            .apply(client, &self.store, &self.clock),
             CachePolicy::NetworkFirst { ttl } => NetworkFirst {
                 default_ttl: self.default_ttl,
                 explicit_ttl: *ttl,
                 hash,
                 request,
             }
-            .apply(client, &self.store, &*self.clock),
+            .apply(client, &self.store, &self.clock),
         }?;
         outcomes.append(&mut strategy_outcomes);
 
@@ -136,6 +135,8 @@ mod tests {
     use std::hash::{Hash, Hasher};
 
     use super::*;
+    use crate::clock::MockClock;
+    use std::sync::Arc;
     use viaduct::ClientSettings;
 
     fn make_client() -> Client {
@@ -174,18 +175,20 @@ mod tests {
             .expect("cache build should succeed")
     }
 
-    fn make_cache_with_ttl(secs: u64) -> HttpCache {
+    fn make_cache_with_ttl(secs: u64) -> (HttpCache, Arc<MockClock>) {
+        let (clock, mock) = Clock::mock();
         // In tests our store uses an in-memory DB; filename is irrelevant.
-        HttpCache::builder_memory()
+        let cache = HttpCache::builder_memory()
             .default_ttl(Duration::from_secs(secs))
             .max_size(ByteSize::mib(4))
-            .build_for_time_dependent_tests()
-            .expect("cache build should succeed")
+            .build_with_clock(clock)
+            .expect("cache build should succeed");
+        (cache, mock)
     }
 
     /// Moves the cache's clock forward, then drops what expired by then.
-    fn advance_and_expire(cache: &HttpCache, secs: i64) {
-        cache.clock.advance(secs);
+    fn advance_and_expire(cache: &HttpCache, clock: &MockClock, secs: u64) {
+        clock.advance(Duration::from_secs(secs));
         cache
             .store
             .delete_expired_entries(cache.clock.now())
@@ -384,7 +387,7 @@ mod tests {
             .expect(1)
             .create();
 
-        let cache = make_cache_with_ttl(300);
+        let (cache, clock) = make_cache_with_ttl(300);
         let req = make_post_request();
         let hash = RequestHash::new(&req);
         let policy = CachePolicy::CacheFirst {
@@ -397,11 +400,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Past the server max-age (1s) but still under the explicit TTL (20s) — entry is still there.
-        advance_and_expire(&cache, 2);
+        advance_and_expire(&cache, &clock, 2);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Past the explicit TTL — entry should be expired.
-        advance_and_expire(&cache, 20);
+        advance_and_expire(&cache, &clock, 20);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -419,7 +422,7 @@ mod tests {
             .create();
 
         // Configured default is 300s — should be ignored in favor of server max-age.
-        let cache = make_cache_with_ttl(300);
+        let (cache, clock) = make_cache_with_ttl(300);
         let req = make_post_request();
         let hash = RequestHash::new(&req);
 
@@ -430,11 +433,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Still cached at ~1s.
-        advance_and_expire(&cache, 1);
+        advance_and_expire(&cache, &clock, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Expired after exceeding server max-age.
-        advance_and_expire(&cache, 2);
+        advance_and_expire(&cache, &clock, 2);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -461,7 +464,7 @@ mod tests {
             .expect(1)
             .create();
 
-        let cache = make_cache_with_ttl(300);
+        let (cache, clock) = make_cache_with_ttl(300);
         let req = make_get_request("/v1/ads-preflight");
         let hash = RequestHash::new(&req);
 
@@ -472,10 +475,10 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Stored for the 14400s of freshness left, not for another 86400s.
-        advance_and_expire(&cache, 14_399);
+        advance_and_expire(&cache, &clock, 14_399);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
-        advance_and_expire(&cache, 1);
+        advance_and_expire(&cache, &clock, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -484,7 +487,7 @@ mod tests {
     fn ttl_resolution_subtracts_time_since_date_from_server_max_age() {
         viaduct_dev::init_backend_dev();
 
-        let cache = make_cache_with_ttl(300);
+        let (cache, clock) = make_cache_with_ttl(300);
         let date = (cache.clock.now() - Duration::from_secs(3000))
             .format("%a, %d %b %Y %H:%M:%S GMT")
             .to_string();
@@ -506,10 +509,10 @@ mod tests {
             .unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-        advance_and_expire(&cache, 599);
+        advance_and_expire(&cache, &clock, 599);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
-        advance_and_expire(&cache, 1);
+        advance_and_expire(&cache, &clock, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -527,7 +530,7 @@ mod tests {
             .expect(2) // both calls go to the network: nothing was stored
             .create();
 
-        let cache = make_cache_with_ttl(300);
+        let (cache, _) = make_cache_with_ttl(300);
         let req = make_get_request("/stale");
         let hash = RequestHash::new(&req);
         let client = make_client();
@@ -556,7 +559,7 @@ mod tests {
             .expect(1)
             .create();
 
-        let cache = make_cache_with_ttl(300);
+        let (cache, clock) = make_cache_with_ttl(300);
         let req = make_get_request("/explicit-stale");
         let hash = RequestHash::new(&req);
         let policy = CachePolicy::CacheFirst {
@@ -567,7 +570,7 @@ mod tests {
         let (_, outcomes) = cache.send_with_policy(&client, req, &policy).unwrap();
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
-        advance_and_expire(&cache, 19);
+        advance_and_expire(&cache, &clock, 19);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
         m.assert();
     }
@@ -583,7 +586,7 @@ mod tests {
             .expect(1)
             .create();
 
-        let cache = make_cache_with_ttl(60);
+        let (cache, clock) = make_cache_with_ttl(60);
         let req = make_post_request();
         let hash = RequestHash::new(&req);
         let policy = CachePolicy::CacheFirst {
@@ -596,11 +599,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired yet at ~1s
-        advance_and_expire(&cache, 1);
+        advance_and_expire(&cache, &clock, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Expired after ~2s
-        advance_and_expire(&cache, 2);
+        advance_and_expire(&cache, &clock, 2);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -617,7 +620,7 @@ mod tests {
             .expect(1)
             .create();
 
-        let cache = make_cache_with_ttl(2);
+        let (cache, clock) = make_cache_with_ttl(2);
         let req = make_post_request();
         let hash = RequestHash::new(&req);
         let client = make_client();
@@ -628,11 +631,11 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Not expired at ~1s
-        advance_and_expire(&cache, 1);
+        advance_and_expire(&cache, &clock, 1);
         assert!(cache.store.lookup(&hash).unwrap().is_some());
 
         // Expired after ~3s
-        advance_and_expire(&cache, 3);
+        advance_and_expire(&cache, &clock, 3);
         assert!(cache.store.lookup(&hash).unwrap().is_none());
         m.assert();
     }
@@ -648,7 +651,7 @@ mod tests {
             .expect(2) // both calls should hit the network — second after the entry expires
             .create();
 
-        let cache = make_cache_with_ttl(2);
+        let (cache, clock) = make_cache_with_ttl(2);
         let req = make_post_request();
         let client = make_client();
 
@@ -659,7 +662,7 @@ mod tests {
         assert!(matches!(outcomes.last().unwrap(), CacheOutcome::MissStored));
 
         // Advance clock past the TTL
-        cache.clock.advance(3);
+        clock.advance(Duration::from_secs(3));
 
         // Second call: expired entry must be a miss, not a hit
         let (_, outcomes) = cache
