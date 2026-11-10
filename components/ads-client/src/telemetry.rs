@@ -29,10 +29,10 @@ use crate::http_cache::{CacheOutcome, HttpCacheBuilderError};
 
 mod backend;
 
-#[cfg(test)]
-pub(crate) use backend::test_lock;
 pub use backend::Telemetry;
 pub(crate) use backend::{install, uninstall};
+#[cfg(test)]
+pub(crate) use backend::{test_lock, RecordingTelemetry};
 
 /// A client operation, as labeled by `ads_client.client_operation_total` and
 /// `ads_client.client_error`.
@@ -60,7 +60,10 @@ impl ClientOperation {
 /// A label of `ads_client.build_cache_error`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildCacheErrorLabel {
+    /// The file db failed to open, so the cache fell back to a memory db.
     DatabaseError,
+    /// The memory db failed to open, so no cache was built.
+    DatabaseMemoryError,
     EmptyDbPath,
     InvalidMaxSize,
     InvalidTtl,
@@ -78,6 +81,7 @@ impl BuildCacheErrorLabel {
     fn as_str(self) -> &'static str {
         match self {
             Self::DatabaseError => "database_error",
+            Self::DatabaseMemoryError => "database_memory_error",
             Self::EmptyDbPath => "empty_db_path",
             Self::InvalidMaxSize => "invalid_max_size",
             Self::InvalidTtl => "invalid_ttl",
@@ -150,28 +154,34 @@ pub fn record_client_error(operation: ClientOperation, error: &impl Display) {
 // By design: a free function, so recording a metric is one call from anywhere.
 /// Records a failure to build the HTTP cache against
 /// `ads_client.build_cache_error`.
+///
+/// A file db that fails to open is labeled `database_error` and a memory db
+/// that fails to open is labeled `database_memory_error`, so the two can be
+/// told apart.
 pub fn record_build_cache_error(error: &HttpCacheBuilderError) {
     let label = match error {
-        HttpCacheBuilderError::Database(_) | HttpCacheBuilderError::DatabaseMemory(_) => {
-            BuildCacheErrorLabel::DatabaseError
-        }
+        HttpCacheBuilderError::Database(_) => BuildCacheErrorLabel::DatabaseError,
+        HttpCacheBuilderError::DatabaseMemory(_) => BuildCacheErrorLabel::DatabaseMemoryError,
         HttpCacheBuilderError::EmptyDbPath => BuildCacheErrorLabel::EmptyDbPath,
         HttpCacheBuilderError::InvalidMaxSize { .. } => BuildCacheErrorLabel::InvalidMaxSize,
         HttpCacheBuilderError::InvalidTtl { .. } => BuildCacheErrorLabel::InvalidTtl,
     };
     let value = match error {
-        HttpCacheBuilderError::Database(sql_support::open_database::Error::SqlError(
-            rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error {
-                    code: _,
-                    extended_code,
-                },
+        HttpCacheBuilderError::Database(db_error)
+        | HttpCacheBuilderError::DatabaseMemory(db_error) => {
+            // A SQLite error with a message shows only the message, so add
+            // the extended code it leaves out.
+            if let sql_support::open_database::Error::SqlError(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error { extended_code, .. },
                 Some(_),
-            ),
-        )) => format!("{error} ({extended_code})"),
-        HttpCacheBuilderError::Database(_)
-        | HttpCacheBuilderError::DatabaseMemory(_)
-        | HttpCacheBuilderError::EmptyDbPath
+            )) = db_error
+            {
+                format!("{error} ({extended_code})")
+            } else {
+                error.to_string()
+            }
+        }
+        HttpCacheBuilderError::EmptyDbPath
         | HttpCacheBuilderError::InvalidMaxSize { .. }
         | HttpCacheBuilderError::InvalidTtl { .. } => error.to_string(),
     };
@@ -255,5 +265,30 @@ mod test {
 
         // tear down test telemetry, locks drops out of scope
         backend::uninstall();
+    }
+
+    #[test]
+    fn test_record_build_cache_error_labels_file_and_memory_db_errors_apart() {
+        let _test_lock = backend::test_lock();
+        let recording = backend::RecordingTelemetry::default();
+        backend::install(recording.clone());
+
+        // SQLITE_CANTOPEN
+        let cant_open = || {
+            sql_support::open_database::Error::SqlError(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(14),
+                Some("unable to open database file".to_owned()),
+            ))
+        };
+        record_build_cache_error(&HttpCacheBuilderError::Database(cant_open()));
+        record_build_cache_error(&HttpCacheBuilderError::DatabaseMemory(cant_open()));
+        backend::uninstall();
+
+        // Other tests may record concurrently, so only look for ours.
+        let records = recording.build_cache_errors.lock();
+        assert!(records["database_error"].iter().any(|value| value
+            == "Database error: Error executing SQL: unable to open database file (14)"));
+        assert!(records["database_memory_error"].iter().any(|value| value
+            == "Database (memory) error: Error executing SQL: unable to open database file (14)"));
     }
 }
