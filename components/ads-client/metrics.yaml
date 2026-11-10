@@ -13,9 +13,13 @@ ads_client:
     description: >
       Errors encountered when building the HTTP cache, labeled by error type.
       The string value contains the error message or error type.
+      `database_error` means the file database failed to open and the cache
+      fell back to an in-memory database. `database_memory_error` means the
+      in-memory database failed to open too, so no cache was built.
     labels:
       - builder_error
       - database_error
+      - database_memory_error
       - empty_db_path
       - invalid_max_size
       - invalid_ttl

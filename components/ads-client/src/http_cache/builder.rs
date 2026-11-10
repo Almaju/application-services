@@ -26,8 +26,13 @@ const MAX_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 7 days
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpCacheBuilderError {
+    /// The file db failed to open. The builder falls back to a memory db, so
+    /// this is only recorded, never returned.
     #[error("Database error: {0}")]
     Database(#[from] open_database::Error),
+    /// The memory db failed to open, so the build failed. Recorded apart from
+    /// `Database`, as `database_memory_error`, to tell how often the fallback
+    /// fails too.
     // TODO: Remove this once memory dbs confirmed to be OK.
     #[error("Database (memory) error: {0}")]
     DatabaseMemory(open_database::Error),
@@ -54,6 +59,8 @@ pub struct HttpCacheBuilder {
     db_path: Option<PathBuf>,
     default_ttl: Option<Duration>,
     max_size: Option<ByteSize>,
+    /// Where the memory db opens. Only tests change it, to make it fail.
+    memory_db_path: PathBuf,
 }
 
 impl HttpCacheBuilder {
@@ -64,12 +71,23 @@ impl HttpCacheBuilder {
             db_path: db_path.map(Into::into),
             default_ttl: None,
             max_size: None,
+            memory_db_path: PathBuf::from(IN_MEMORY_DB_PATH),
         }
     }
 
-    // Attempt to build the HttpCache. If a file path exists and can be built successfully, we build
-    // a FS sqlite database. Otherwise, we fall back to memory.
+    /// Builds the cache on a file db at `db_path`, or on a memory db if there
+    /// is no path or the file db fails to open. If the memory db fails to open
+    /// too, the build fails.
+    ///
+    /// Every error is recorded against `ads_client.build_cache_error`: the
+    /// file db failing as `database_error`, even though the build goes on in
+    /// memory, and the memory db failing as `database_memory_error`.
     pub fn build(&self) -> Result<HttpCache, HttpCacheBuilderError> {
+        self.try_build()
+            .inspect_err(telemetry::record_build_cache_error)
+    }
+
+    fn try_build(&self) -> Result<HttpCache, HttpCacheBuilderError> {
         self.validate()?;
 
         Ok(HttpCache {
@@ -84,6 +102,13 @@ impl HttpCacheBuilder {
     #[cfg(test)]
     pub(crate) fn mock_clock(mut self, clock: MockClock) -> Self {
         self.clock = clock.into();
+        self
+    }
+
+    /// Opens the memory db at `path` instead, for tests that make it fail.
+    #[cfg(test)]
+    pub(crate) fn memory_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.memory_db_path = path.into();
         self
     }
 
@@ -102,12 +127,12 @@ impl HttpCacheBuilder {
         if let Some(db_path) = &self.db_path {
             match open_connection(db_path) {
                 Ok(db) => return Ok(db),
-                Err(e) => telemetry::record_build_cache_error(&HttpCacheBuilderError::from(e)),
+                // Not returned, since we fall back to memory, so record it here.
+                Err(e) => telemetry::record_build_cache_error(&HttpCacheBuilderError::Database(e)),
             }
         }
 
-        // TODO: This is cast to DatabaseMemory rather than Database. Remove this when DatabaseMemory is removed.
-        open_connection(Path::new(IN_MEMORY_DB_PATH)).map_err(HttpCacheBuilderError::DatabaseMemory)
+        open_connection(&self.memory_db_path).map_err(HttpCacheBuilderError::DatabaseMemory)
     }
 
     fn validate(&self) -> Result<(), HttpCacheBuilderError> {
@@ -159,9 +184,30 @@ fn open_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::telemetry::RecordingTelemetry;
+
+    /// A path no db can open, since its directories do not exist.
+    const UNOPENABLE_PATH: &str = "this/is/a/test/bad/path";
 
     fn make_test_builder(path: &str) -> HttpCacheBuilder {
         HttpCacheBuilder::new(Some(path))
+    }
+
+    /// Builds with `builder`, returning what it recorded against
+    /// `ads_client.build_cache_error`, by label.
+    fn build_recording(
+        builder: &HttpCacheBuilder,
+    ) -> (
+        Result<HttpCache, HttpCacheBuilderError>,
+        std::collections::HashMap<String, Vec<String>>,
+    ) {
+        let _lock = telemetry::test_lock();
+        let recording = RecordingTelemetry::default();
+        telemetry::install(recording.clone());
+        let result = builder.build();
+        telemetry::uninstall();
+        let records = recording.build_cache_errors.lock().clone();
+        (result, records)
     }
 
     #[test]
@@ -174,13 +220,77 @@ mod tests {
     }
 
     #[test]
+    fn test_openable_path_builds_file_db() {
+        let path = std::env::temp_dir().join(format!(
+            "ads_client_http_cache_builder_test_{}.db",
+            std::process::id()
+        ));
+        let (cache, records) = build_recording(&HttpCacheBuilder::new(Some(&path)));
+        let cache = cache.unwrap();
+        assert!(!cache.is_memory().unwrap());
+        // Only tests holding the telemetry lock fail to open a db, so no other
+        // test records these.
+        assert!(!records.contains_key("database_error"));
+        assert!(!records.contains_key("database_memory_error"));
+
+        drop(cache);
+        for suffix in ["", "-shm", "-wal"] {
+            let mut file = path.clone().into_os_string();
+            file.push(suffix);
+            // The db may not have created every file.
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    #[test]
     fn test_unopenable_path_falls_back_to_memory_db() {
-        // The fallback records telemetry, so don't race the telemetry tests.
-        let _lock = crate::telemetry::test_lock();
-        let cache = make_test_builder("this/is/a/test/bad/path")
-            .build()
-            .unwrap();
-        assert!(cache.is_memory().unwrap());
+        let (cache, records) = build_recording(&make_test_builder(UNOPENABLE_PATH));
+        assert!(cache.unwrap().is_memory().unwrap());
+        // The file db failure is recorded, even though the build went on in memory.
+        assert!(records["database_error"]
+            .iter()
+            .any(|value| value.starts_with("Database error: ")));
+        assert!(!records.contains_key("database_memory_error"));
+    }
+
+    #[test]
+    fn test_memory_db_failure_after_fallback_fails_the_build() {
+        let (result, records) =
+            build_recording(&make_test_builder(UNOPENABLE_PATH).memory_db_path(UNOPENABLE_PATH));
+        assert!(matches!(
+            result,
+            Err(HttpCacheBuilderError::DatabaseMemory(_))
+        ));
+        // Both failures are recorded, each under its own label.
+        assert!(records["database_error"]
+            .iter()
+            .any(|value| value.starts_with("Database error: ")));
+        assert!(records["database_memory_error"]
+            .iter()
+            .any(|value| value.starts_with("Database (memory) error: ")));
+    }
+
+    #[test]
+    fn test_memory_db_failure_without_path_fails_the_build() {
+        let (result, records) = build_recording(
+            &HttpCacheBuilder::new(None::<PathBuf>).memory_db_path(UNOPENABLE_PATH),
+        );
+        assert!(matches!(
+            result,
+            Err(HttpCacheBuilderError::DatabaseMemory(_))
+        ));
+        // There was no file db to fail.
+        assert!(!records.contains_key("database_error"));
+        assert!(records["database_memory_error"]
+            .iter()
+            .any(|value| value.starts_with("Database (memory) error: ")));
+    }
+
+    #[test]
+    fn test_validation_error_is_recorded() {
+        let (result, records) = build_recording(&make_test_builder("   "));
+        assert!(matches!(result, Err(HttpCacheBuilderError::EmptyDbPath)));
+        assert!(records.contains_key("empty_db_path"));
     }
 
     #[test]

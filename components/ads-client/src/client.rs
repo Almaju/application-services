@@ -7,7 +7,7 @@ use crate::ads::{AdImage, AdImageOrSpoc, AdSpoc, AdTile};
 #[cfg(feature = "stateful")]
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
-use crate::http_cache::{CachePolicy, HttpCache};
+use crate::http_cache::{CachePolicy, HttpCache, HttpCacheBuilderError};
 use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelevance};
 use crate::mars::ad_response::AdResponse;
 use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
@@ -164,9 +164,10 @@ impl AdsClientInner {
 
         // Configure the cache if a path is provided.
         // Defaults for ttl and cache size are also set if unspecified.
-        let http_cache = client_config
-            .cache_config
-            .and_then(|cache_cfg| {
+        // The builder records its own errors, and falls back to memory if the
+        // file db fails to open.
+        let http_cache = match client_config.cache_config {
+            Some(cache_cfg) => {
                 let default_cache_ttl = Duration::from_secs(
                     cache_cfg
                         .default_cache_ttl_seconds
@@ -175,27 +176,28 @@ impl AdsClientInner {
                 let max_cache_size =
                     ByteSize::mib(cache_cfg.max_size_mib.unwrap_or(DEFAULT_MAX_CACHE_SIZE_MIB));
 
-                match HttpCache::builder(cache_cfg.db_path)
+                HttpCache::builder(cache_cfg.db_path)
                     .max_size(max_cache_size)
                     .default_ttl(default_cache_ttl)
                     .build()
-                {
-                    Ok(cache) => Some(cache),
-                    Err(e) => {
-                        telemetry::record_build_cache_error(&e);
-                        None
-                    }
-                }
-            })
-            .or_else(|| {
-                // If no `cache_config` is provided, create an in-memory db with default parameters.
-                // TODO: the `build` function should be infallible, and no error would be needed here.
-                // (true for both memory and FS, because FS would default to memory)
-                HttpCache::builder_memory()
-                    .build()
-                    .inspect_err(telemetry::record_build_cache_error)
-                    .ok()
-            });
+                    .or_else(|e| match e {
+                        // The builder already tried a memory db, and it failed too.
+                        HttpCacheBuilderError::Database(_)
+                        | HttpCacheBuilderError::DatabaseMemory(_) => Err(e),
+                        // An invalid config falls back to an in-memory db with
+                        // default parameters.
+                        HttpCacheBuilderError::EmptyDbPath
+                        | HttpCacheBuilderError::InvalidMaxSize { .. }
+                        | HttpCacheBuilderError::InvalidTtl { .. } => {
+                            HttpCache::builder_memory().build()
+                        }
+                    })
+            }
+            // If no `cache_config` is provided, create an in-memory db with default parameters.
+            None => HttpCache::builder_memory().build(),
+        };
+        // Without a cache, requests go straight to the network.
+        let http_cache = http_cache.ok();
 
         #[cfg(feature = "stateful")]
         let ads_store =

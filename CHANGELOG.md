@@ -11,6 +11,7 @@
 ### Ads-Client
 
 - OHTTP requests always send `X-User-Agent`: the preflight's, else the new `MozAdsClientBuilder.userAgent()`, else viaduct's global default user agent. With none, the request fails.
+- When the in-memory fallback for the HTTP cache fails too, it is recorded under the new `build_cache_error/database_memory_error` label instead of `database_error`, which now only means the file database failed to open and the cache fell back to memory. The client no longer tries a second in-memory database after that failure, and goes on without a cache.
 
 ### Merino
 
