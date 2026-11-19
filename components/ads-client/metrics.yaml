@@ -8,120 +8,116 @@ $schema: moz://mozilla.org/schemas/glean/metrics/2-0-0
 
 
 ads_client:
-  build_cache_error:
-    type: labeled_string
+  cache_hit_rate:
+    type: rate
     description: >
-      Errors encountered when building the HTTP cache, labeled by error type.
-      The string value contains the error message or error type.
-    labels:
-      - builder_error
-      - database_error
-      - empty_db_path
-      - invalid_max_size
-      - invalid_ttl
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - technical
-    notification_emails:
+      Cache-first MARS requests answered from the HTTP cache, out of all cache-first MARS requests.
+    data_sensitivity: [technical]
+    bugs: &bugs
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    data_reviews: &data_reviews
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2047640
+    notification_emails: &emails
       - ahanot@mozilla.com
       - llisi@mozilla.com
       - toast@mozilla.com
     expires: never
 
-  client_error:
-    type: labeled_string
+  click_success_rate:
+    type: rate
     description: >
-      Errors encountered when using the ads client, labeled by operation type.
-      The string value contains the error message or error type. Errors are
-      recorded even if they are propagated to the consumer.
-    labels:
-      - record_click
-      - record_impression
-      - report_ad
-      - request_ads
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - interaction
-    notification_emails:
-      - ahanot@mozilla.com
-      - llisi@mozilla.com
-      - toast@mozilla.com
+      Click callbacks answered with a success, out of all `record_click` calls.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
     expires: never
 
-  client_operation_total:
-    type: labeled_counter
+  expected_error:
+    type: event
     description: >
-      The total number of operations attempted by the ads client, labeled by
-      operation type. Used as the denominator for client_operation_success_rate.
-    labels:
-      - new
-      - record_click
-      - record_impression
-      - report_ad
-      - request_ads
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - interaction
-    notification_emails:
-      - ahanot@mozilla.com
-      - llisi@mozilla.com
-      - toast@mozilla.com
+      An error that a healthy device, network and server can still produce,
+      such as a timeout or a 5xx response.
+    extra_keys:
+      operation:
+        type: string
+        description: The public method that failed, if the error failed one.
+      kind:
+        type: string
+        description: What went wrong, such as `timeout`.
+      code:
+        type: string
+        description: The HTTP status, network error code or SQLite code, if any.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
     expires: never
 
-  deserialization_error:
-    type: labeled_string
+  impression_success_rate:
+    type: rate
     description: >
-      Deserialization errors encountered when parsing AdResponse data,
-      labeled by error type. The string value contains the error message or
-      details. Invalid ad items are skipped but these errors are tracked for
-      monitoring data quality issues.
-    labels:
-      - invalid_ad_item
-      - invalid_array
-      - invalid_structure
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - technical
-    notification_emails:
-      - ahanot@mozilla.com
-      - llisi@mozilla.com
-      - toast@mozilla.com
+      Impression callbacks answered with a success, out of all `record_impression` calls.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
     expires: never
 
-  http_cache_outcome:
-    type: labeled_string
+  request_duration_direct:
+    type: timing_distribution
+    time_unit: millisecond
     description: >
-      The total number of outcomes encountered during read operations on the
-      http cache, labeled by type. The string value contains the error message or
-      error type.
-    labels:
-      - cleanup_failed
-      - hit
-      - lookup_failed
-      - miss_not_cacheable
-      - miss_stored
-      - no_cache
-      - store_failed
-    bugs:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_reviews:
-      - https://github.com/mozilla/application-services/pull/7111
-    data_sensitivity:
-      - technical
-    notification_emails:
-      - ahanot@mozilla.com
-      - llisi@mozilla.com
-      - toast@mozilla.com
+      How long callers wait for ads requested without OHTTP, successful or not.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  request_duration_ohttp:
+    type: timing_distribution
+    time_unit: millisecond
+    description: >
+      How long callers wait for ads requested through OHTTP, successful or not.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  request_success_rate:
+    type: rate
+    description: >
+      Ad requests that succeeded, out of all ad requests.
+    data_sensitivity: [technical, interaction]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
+    expires: never
+
+  unexpected_error:
+    type: event
+    description: >
+      An error that points to a bug or a broken contract, such as a response
+      that does not deserialize or an SQL error.
+    extra_keys:
+      operation:
+        type: string
+        description: The public method that failed, if the error failed one.
+      kind:
+        type: string
+        description: What went wrong, such as `invalid_response`.
+      code:
+        type: string
+        description: The HTTP status or SQLite code, if any.
+      detail:
+        type: string
+        description: >
+          More about the error, without values from the user or the server,
+          such as the category of a JSON error.
+    data_sensitivity: [technical]
+    bugs: *bugs
+    data_reviews: *data_reviews
+    notification_emails: *emails
     expires: never

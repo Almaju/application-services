@@ -111,7 +111,7 @@ def generate_glean_metrics(args):
     firefox_glean_files = map(
         str,
         [
-            ROOT_DIR / "components/ads-client/metrics.yaml",
+            ROOT_DIR / "components/ads-client/callback_metrics.yaml",
             ROOT_DIR / "components/nimbus/metrics.yaml",
             ROOT_DIR / "components/nimbus/pings.yaml",
             ROOT_DIR / "components/logins/metrics.yaml",

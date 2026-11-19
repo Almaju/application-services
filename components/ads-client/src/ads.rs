@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
 
+use crate::telemetry::ErrorEvent;
+
 /// Identification of placement sent and returned from MARS (eg: `mock_spoc_1`)
 #[cfg(feature = "stateful")]
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -157,6 +159,12 @@ impl Ad {
 pub struct UnexpectedAdKind {
     expected: &'static str,
     format: String,
+}
+
+impl From<&UnexpectedAdKind> for ErrorEvent {
+    fn from(error: &UnexpectedAdKind) -> Self {
+        Self::unexpected_with_detail("invalid_ad_item", format!("expected {}", error.expected))
+    }
 }
 
 impl TryFrom<Ad> for AdImage {

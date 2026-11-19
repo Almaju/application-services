@@ -3,11 +3,8 @@
 * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-use std::sync::Arc;
-
-use crate::telemetry::{self, Telemetry};
-
-/// Receives the ads client's metrics, for the app to record in Glean.
+/// Deprecated: the client records its metrics itself and never calls this.
+/// It stays until apps stop passing one to `MozAdsClientBuilder::telemetry()`.
 #[uniffi::export(callback_interface)]
 pub trait MozAdsTelemetry: Send + Sync {
     /// The HTTP cache could not be built (`ads_client.build_cache_error`).
@@ -21,34 +18,4 @@ pub trait MozAdsTelemetry: Send + Sync {
     fn record_deserialization_error(&self, label: String, value: String);
     /// The outcome of a read from the HTTP cache (`ads_client.http_cache_outcome`).
     fn record_http_cache_outcome(&self, label: String, value: String);
-}
-
-/// Makes the consumer's callback the destination of every metric recorded from now on.
-pub(crate) fn install(callback: Arc<dyn MozAdsTelemetry>) {
-    telemetry::install(MozAdsTelemetryWrapper(callback));
-}
-
-/// Adapts the consumer's [`MozAdsTelemetry`] callback to the core [`Telemetry`] trait.
-struct MozAdsTelemetryWrapper(Arc<dyn MozAdsTelemetry>);
-
-impl Telemetry for MozAdsTelemetryWrapper {
-    fn record_build_cache_error(&self, label: &str, value: String) {
-        self.0.record_build_cache_error(label.to_owned(), value);
-    }
-
-    fn record_client_error(&self, label: &str, value: String) {
-        self.0.record_client_error(label.to_owned(), value);
-    }
-
-    fn record_client_operation_total(&self, label: &str) {
-        self.0.record_client_operation_total(label.to_owned());
-    }
-
-    fn record_deserialization_error(&self, label: &str, value: String) {
-        self.0.record_deserialization_error(label.to_owned(), value);
-    }
-
-    fn record_http_cache_outcome(&self, label: &str, value: String) {
-        self.0.record_http_cache_outcome(label.to_owned(), value);
-    }
 }

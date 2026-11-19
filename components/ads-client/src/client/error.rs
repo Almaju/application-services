@@ -4,6 +4,7 @@
 */
 
 use crate::mars::error::{FetchAdsError, RecordClickError, RecordImpressionError, ReportAdError};
+use crate::telemetry::ErrorEvent;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -27,6 +28,20 @@ pub enum ComponentError {
     RequestAds(#[from] RequestAdsError),
 }
 
+impl From<&ComponentError> for ErrorEvent {
+    fn from(error: &ComponentError) -> Self {
+        match error {
+            #[cfg(feature = "stateful")]
+            ComponentError::BackgroundWorker(_) => Self::unexpected("worker_closed"),
+            ComponentError::ClearCache(e) => e.into(),
+            ComponentError::RecordClick(RecordClickError::CallbackRequest(e))
+            | ComponentError::RecordImpression(RecordImpressionError::CallbackRequest(e))
+            | ComponentError::ReportAd(ReportAdError::CallbackRequest(e)) => e.into(),
+            ComponentError::RequestAds(e) => e.into(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RequestAdsError {
     #[error(transparent)]
@@ -34,6 +49,15 @@ pub enum RequestAdsError {
 
     #[error("Error requesting ads from MARS: {0}")]
     FetchAds(#[from] FetchAdsError),
+}
+
+impl From<&RequestAdsError> for ErrorEvent {
+    fn from(error: &RequestAdsError) -> Self {
+        match error {
+            RequestAdsError::ContextId(_) => Self::unexpected("context_id"),
+            RequestAdsError::FetchAds(e) => e.into(),
+        }
+    }
 }
 
 #[cfg(feature = "stateful")]

@@ -2,6 +2,14 @@
 
 [Full Changelog](In progress)
 
+## ✨ What's Changed ✨
+
+### Ads-Client
+
+- The client records its metrics itself, straight from Rust: with glean-sym on Android and iOS, and with Firefox-on-Glean on Desktop when built with the new `glean-fog` feature.
+- The five labeled `ads_client` metrics are replaced by success rates for ad requests, clicks and impressions, a cache hit rate for cache-first requests, request durations with and without OHTTP, and `expected_error` and `unexpected_error` events.
+- `MozAdsTelemetry`, `MozAdsClientBuilder.telemetry()` and Android's `AdsClientTelemetry` are deprecated and no longer called. Apps can drop their `.telemetry(...)` call; these will be removed afterwards.
+
 # v162.0 (_2026-11-19_)
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v161.0...v162.0)

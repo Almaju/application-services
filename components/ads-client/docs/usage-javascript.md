@@ -98,7 +98,7 @@ builder.build()
 - **`MozAdsClientBuilder()`** - Creates a new builder with default values
 - **`environment(environment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig)`** - Sets the cache configuration
-- **`telemetry(telemetry)`** - Sets the telemetry implementation
+- **`telemetry(telemetry)`** - Deprecated and ignored: the client records its metrics itself
 - **`userAgent(userAgent)`** - Sets the browser's user agent
 - **`build()`** - Builds and returns the configured client
 
@@ -106,14 +106,14 @@ builder.build()
 | -------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `environment`  | `MozAdsEnvironment`        | Selects which MARS environment to connect to. Unless in a dev build, this value can only ever be Prod. Defaults to Prod. |
 | `cacheConfig`  | `MozAdsCacheConfig \| null`| Optional configuration for the internal cache.                                                         |
-| `telemetry`    | `MozAdsTelemetry \| null`  | Optional telemetry instance for recording metrics. Telemetry is process-wide: the most recently built client's instance receives metrics from every client.    |
+| `telemetry`    | `MozAdsTelemetry \| null`  | Deprecated and ignored: the client records its metrics itself.    |
 | `userAgent`    | `string \| null`           | The browser's user agent, for OHTTP requests (see the OHTTP note). |
 
 ---
 
 ## `MozAdsTelemetry`
 
-Telemetry interface for recording ads client metrics. You must provide an implementation of this interface to the `MozAdsClientBuilder` to enable telemetry collection. Telemetry is process-wide and meant to be set up once: building a client with a telemetry instance makes it the destination for metrics from every client in the process, replacing any instance installed before it. It is dropped when any client shuts down. Until an instance is installed, no metrics are recorded.
+Deprecated: the client records its metrics itself, straight from Rust, and never calls this interface. `telemetry()` drops an instance right away. Both will be removed once apps stop passing one.
 
 ```javascript
 /**

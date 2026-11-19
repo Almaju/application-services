@@ -12,7 +12,7 @@ use crate::mars::ad_request::{AdPlacementRequest, AdRequestFlags, AdRequestRelev
 use crate::mars::ad_response::AdResponse;
 use crate::mars::error::{RecordClickError, RecordImpressionError, ReportAdError};
 use crate::mars::{MARSClient, ReportReason};
-use crate::telemetry::{self, ClientOperation};
+use crate::telemetry::ErrorEvent;
 use config::AdsClientConfig;
 use context_id::{ContextIDComponent, DefaultContextIdCallback};
 use error::RequestAdsError;
@@ -176,7 +176,7 @@ impl AdsClientInner {
         let http_cache = match http_cache.build() {
             Ok(cache) => Some(cache),
             Err(e) => {
-                telemetry::record_build_cache_error(&e);
+                ErrorEvent::from(&e).record(None);
                 None
             }
         };
@@ -192,13 +192,12 @@ impl AdsClientInner {
         let ads_store = match ads_store.build() {
             Ok(store) => Some(store),
             Err(e) => {
-                telemetry::record_ads_store_error(&e);
+                ErrorEvent::from(&e).record(None);
                 None
             }
         };
 
         let client = MARSClient::new(environment, http_cache, client_config.user_agent);
-        telemetry::record_client_operation(ClientOperation::New);
         Self {
             #[cfg(feature = "stateful")]
             ads_store: Arc::new(ads_store),
@@ -222,14 +221,7 @@ impl AdsClientInner {
         // if let Some(request_hash) = RequestHash::pop_from_url(&mut click_url) {
         //     let _ = self.client.invalidate_cache_by_hash(&request_hash);
         // }
-        self.client
-            .record_click(click_url, ohttp)
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::RecordClick, e);
-            })
-            .inspect(|_| {
-                telemetry::record_client_operation(ClientOperation::RecordClick);
-            })
+        self.client.record_click(click_url, ohttp)
     }
 
     pub(crate) fn record_impression(
@@ -266,14 +258,7 @@ impl AdsClientInner {
             impression_url
         };
 
-        self.client
-            .record_impression(impression_url, ohttp)
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::RecordImpression, e);
-            })
-            .inspect(|_| {
-                telemetry::record_client_operation(ClientOperation::RecordImpression);
-            })
+        self.client.record_impression(impression_url, ohttp)
     }
 
     pub(crate) fn report_ad(
@@ -282,14 +267,7 @@ impl AdsClientInner {
         reason: ReportReason,
         ohttp: bool,
     ) -> Result<(), ReportAdError> {
-        self.client
-            .report_ad(report_url, reason, ohttp)
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::ReportAd, e);
-            })
-            .inspect(|_| {
-                telemetry::record_client_operation(ClientOperation::ReportAd);
-            })
+        self.client.report_ad(report_url, reason, ohttp)
     }
 
     // relevance is not implemented for image ads, using an empty HashMap.
@@ -301,19 +279,14 @@ impl AdsClientInner {
         ohttp: bool,
         blocks: Vec<String>,
     ) -> Result<HashMap<String, AdImage>, RequestAdsError> {
-        let response = self
-            .request_ads(
-                ad_placement_requests,
-                flags,
-                options,
-                ohttp,
-                blocks,
-                AdRequestRelevance::default(),
-            )
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::RequestAds, e);
-            })?;
-        telemetry::record_client_operation(ClientOperation::RequestAds);
+        let response = self.request_ads(
+            ad_placement_requests,
+            flags,
+            options,
+            ohttp,
+            blocks,
+            AdRequestRelevance::default(),
+        )?;
         Ok(response.take_first::<AdImage>())
     }
 
@@ -334,14 +307,7 @@ impl AdsClientInner {
             blocks,
             AdRequestRelevance::default(),
         );
-        result
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::RequestAds, e);
-            })
-            .map(|response| {
-                telemetry::record_client_operation(ClientOperation::RequestAds);
-                response.into_kind::<AdSpoc>()
-            })
+        result.map(|response| response.into_kind::<AdSpoc>())
     }
 
     // Sometimes, spoc array requests can return multiple types of ads for specific placements.
@@ -364,14 +330,7 @@ impl AdsClientInner {
             blocks,
             AdRequestRelevance::default(),
         );
-        result
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::RequestAds, e);
-            })
-            .map(|response| {
-                telemetry::record_client_operation(ClientOperation::RequestAds);
-                response.into_kind::<AdImageOrSpoc>()
-            })
+        result.map(|response| response.into_kind::<AdImageOrSpoc>())
     }
 
     pub(crate) fn request_tile_ads(
@@ -391,19 +350,10 @@ impl AdsClientInner {
             blocks,
             relevance,
         );
-        result
-            .inspect_err(|e| {
-                telemetry::record_client_error(ClientOperation::RequestAds, e);
-            })
-            .map(|response| {
-                telemetry::record_client_operation(ClientOperation::RequestAds);
-                response.take_first::<AdTile>()
-            })
+        result.map(|response| response.take_first::<AdTile>())
     }
 
     pub(crate) fn shutdown(&self) {
-        telemetry::uninstall();
-
         #[cfg(feature = "stateful")]
         if let Some(ads_store) = self.ads_store.as_ref() {
             ads_store.shutdown_db();
