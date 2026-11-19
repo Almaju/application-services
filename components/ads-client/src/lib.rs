@@ -13,6 +13,7 @@ pub use url::Url as AdsClientUrl;
 use client::AdsClient;
 use http_cache::CachePolicy;
 use mars::ad_request::{AdPlacementRequest, AdRequestFlags};
+use telemetry::Operation;
 mod ads;
 #[cfg(feature = "stateful")]
 pub mod ads_store;
@@ -56,7 +57,7 @@ impl MozAdsClient {
     /// Deletes everything in the HTTP cache.
     #[handle_error(ComponentError)]
     pub fn clear_cache(&self) -> AdsClientApiResult<()> {
-        self.inner.clear_cache().map_err(ComponentError::ClearCache)
+        Operation::ClearCache.record(self.inner.clear_cache().map_err(ComponentError::ClearCache))
     }
 
     /// Records a click on an ad, from its `callbacks.click` URL.
@@ -67,12 +68,15 @@ impl MozAdsClient {
         click_url: String,
         options: Option<MozAdsCallbackOptions>,
     ) -> AdsClientApiResult<()> {
-        let url = AdsClientUrl::parse(&click_url)
-            .map_err(|e| ComponentError::RecordClick(CallbackRequestError::InvalidUrl(e).into()))?;
         let ohttp = options.is_some_and(|o| o.ohttp);
-        self.inner
-            .record_click(url, ohttp)
-            .map_err(ComponentError::RecordClick)
+        let result = AdsClientUrl::parse(&click_url)
+            .map_err(|e| ComponentError::RecordClick(CallbackRequestError::InvalidUrl(e).into()))
+            .and_then(|url| {
+                self.inner
+                    .record_click(url, ohttp)
+                    .map_err(ComponentError::RecordClick)
+            });
+        Operation::RecordClick.record(result)
     }
 
     /// Records an impression of an ad, from its `callbacks.impression` URL.
@@ -83,13 +87,17 @@ impl MozAdsClient {
         impression_url: String,
         options: Option<MozAdsCallbackOptions>,
     ) -> AdsClientApiResult<()> {
-        let url = AdsClientUrl::parse(&impression_url).map_err(|e| {
-            ComponentError::RecordImpression(CallbackRequestError::InvalidUrl(e).into())
-        })?;
         let ohttp = options.is_some_and(|o| o.ohttp);
-        self.inner
-            .record_impression(url, ohttp)
-            .map_err(ComponentError::RecordImpression)
+        let result = AdsClientUrl::parse(&impression_url)
+            .map_err(|e| {
+                ComponentError::RecordImpression(CallbackRequestError::InvalidUrl(e).into())
+            })
+            .and_then(|url| {
+                self.inner
+                    .record_impression(url, ohttp)
+                    .map_err(ComponentError::RecordImpression)
+            });
+        Operation::RecordImpression.record(result)
     }
 
     /// Reports an ad, from its `callbacks.report` URL.
@@ -101,12 +109,15 @@ impl MozAdsClient {
         reason: MozAdsReportReason,
         options: Option<MozAdsCallbackOptions>,
     ) -> AdsClientApiResult<()> {
-        let url = AdsClientUrl::parse(&report_url)
-            .map_err(|e| ComponentError::ReportAd(CallbackRequestError::InvalidUrl(e).into()))?;
         let ohttp = options.is_some_and(|o| o.ohttp);
-        self.inner
-            .report_ad(url, reason.into(), ohttp)
-            .map_err(ComponentError::ReportAd)
+        let result = AdsClientUrl::parse(&report_url)
+            .map_err(|e| ComponentError::ReportAd(CallbackRequestError::InvalidUrl(e).into()))
+            .and_then(|url| {
+                self.inner
+                    .report_ad(url, reason.into(), ohttp)
+                    .map_err(ComponentError::ReportAd)
+            });
+        Operation::ReportAd.record(result)
     }
 
     /// Requests one image ad per placement. The result is keyed by
@@ -124,10 +135,11 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let response = self
-            .inner
-            .request_image_ads(requests, flags, cache_policy, ohttp, blocks)
-            .map_err(ComponentError::RequestAds)?;
+        let response = Operation::RequestImageAds.time_ad_request(ohttp, || {
+            self.inner
+                .request_image_ads(requests, flags, cache_policy, ohttp, blocks)
+                .map_err(ComponentError::RequestAds)
+        })?;
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 
@@ -146,10 +158,11 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let response = self
-            .inner
-            .request_spoc_ads(requests, flags, cache_policy, ohttp, blocks)
-            .map_err(ComponentError::RequestAds)?;
+        let response = Operation::RequestSpocAds.time_ad_request(ohttp, || {
+            self.inner
+                .request_spoc_ads(requests, flags, cache_policy, ohttp, blocks)
+                .map_err(ComponentError::RequestAds)
+        })?;
         Ok(response
             .into_iter()
             .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
@@ -172,10 +185,11 @@ impl MozAdsClient {
         let ohttp = options.ohttp;
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
-        let response = self
-            .inner
-            .request_spoc_or_image_ads(requests, flags, cache_policy, ohttp, blocks)
-            .map_err(ComponentError::RequestAds)?;
+        let response = Operation::RequestSpocOrImageAds.time_ad_request(ohttp, || {
+            self.inner
+                .request_spoc_or_image_ads(requests, flags, cache_policy, ohttp, blocks)
+                .map_err(ComponentError::RequestAds)
+        })?;
         Ok(response
             .into_iter()
             .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
@@ -198,10 +212,11 @@ impl MozAdsClient {
         let cache_policy = options.cache_policy.map(CachePolicy::from);
         let blocks = options.blocks;
         let relevance = options.relevance;
-        let response = self
-            .inner
-            .request_tile_ads(requests, flags, cache_policy, ohttp, blocks, relevance)
-            .map_err(ComponentError::RequestAds)?;
+        let response = Operation::RequestTileAds.time_ad_request(ohttp, || {
+            self.inner
+                .request_tile_ads(requests, flags, cache_policy, ohttp, blocks, relevance)
+                .map_err(ComponentError::RequestAds)
+        })?;
         Ok(response.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 

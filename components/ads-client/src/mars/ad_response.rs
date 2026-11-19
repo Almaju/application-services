@@ -5,7 +5,7 @@
 
 use crate::ads::{Ad, UnexpectedAdKind};
 use crate::http_cache::RequestHash;
-use crate::telemetry;
+use crate::telemetry::ErrorEvent;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
@@ -29,7 +29,7 @@ impl<'de> Deserialize<'de> for AdResponse {
                     .into_iter()
                     .filter_map(|item| {
                         serde_json::from_value(item)
-                            .inspect_err(telemetry::record_invalid_ad_item)
+                            .inspect_err(|e| ErrorEvent::unparsable_ad(e).record(None))
                             .ok()
                     })
                     .collect();
@@ -93,7 +93,7 @@ impl AdResponse {
                     .into_iter()
                     .filter_map(|ad| {
                         A::try_from(ad)
-                            .inspect_err(telemetry::record_invalid_ad_item)
+                            .inspect_err(|e| ErrorEvent::from(e).record(None))
                             .ok()
                     })
                     .collect();
@@ -119,11 +119,8 @@ mod tests {
     use crate::ads::{AdCallbacks, AdImage, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking};
 
     use super::*;
-    use crate::telemetry::Telemetry;
     use crate::test_utils::{get_example_happy_image_response, get_example_happy_uatile_response};
-    use parking_lot::Mutex;
     use serde_json::{from_str, json};
-    use std::sync::Arc;
     use url::Url;
     use url_macro::url;
 
@@ -629,33 +626,9 @@ mod tests {
             .contains("request_hash=abc123def456"));
     }
 
-    #[derive(Clone, Default)]
-    struct RecordingTelemetry(Arc<Mutex<Vec<(String, String)>>>);
-
-    impl Telemetry for RecordingTelemetry {
-        fn record_build_cache_error(&self, _label: &str, _value: String) {}
-        fn record_client_error(&self, _label: &str, _value: String) {}
-        fn record_client_operation_total(&self, _label: &str) {}
-        fn record_deserialization_error(&self, label: &str, value: String) {
-            self.0.lock().push((label.to_string(), value));
-        }
-        fn record_http_cache_outcome(&self, _label: &str, _value: String) {}
-    }
-
     #[test]
-    fn test_into_kind_records_ads_of_another_kind() {
-        let _lock = telemetry::test_lock();
-        let recording = RecordingTelemetry::default();
-        telemetry::install(recording.clone());
-
+    fn test_into_kind_skips_ads_of_another_kind() {
         let tiles = get_example_happy_image_response().into_kind::<AdTile>();
-        telemetry::uninstall();
-
         assert!(tiles.is_empty());
-        // Other tests may record concurrently, so only look for ours.
-        assert!(recording.0.lock().iter().any(|(label, value)| {
-            label == "invalid_ad_item"
-                && value == "Expected a tile, got an ad with format `billboard`"
-        }));
     }
 }

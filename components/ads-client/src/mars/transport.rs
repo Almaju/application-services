@@ -10,7 +10,7 @@ use viaduct::{Client, ClientSettings, Request, Response};
 
 use super::error::{HTTPError, TransportError};
 use crate::{
-    http_cache::{HttpCache, RequestHash},
+    http_cache::{CacheOutcome, HttpCache, RequestHash},
     telemetry, CachePolicy,
 };
 
@@ -59,7 +59,12 @@ impl MARSTransport {
         if let Some(cache) = self.http_cache.as_ref() {
             let (response, outcomes) = cache.send_with_policy(&client, request, policy)?;
             for outcome in &outcomes {
-                telemetry::record_http_cache_outcome(outcome);
+                outcome.record_failure();
+            }
+            if let CachePolicy::CacheFirst { .. } = policy {
+                telemetry::record_cache_hit(
+                    outcomes.iter().any(|o| matches!(o, CacheOutcome::Hit)),
+                );
             }
             HTTPError::check(&response)?;
             Ok(response)

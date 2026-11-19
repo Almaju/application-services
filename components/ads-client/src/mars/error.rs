@@ -6,6 +6,8 @@
 use sql_support::open_database;
 use viaduct::Response;
 
+use crate::telemetry::ErrorEvent;
+
 #[derive(Debug, thiserror::Error)]
 pub enum BuildRequestError {
     #[error("Duplicate placement_id found: {placement_id}. Placement_ids must be unique.")]
@@ -33,6 +35,23 @@ pub enum CallbackRequestError {
     Request(#[from] viaduct::ViaductError),
 }
 
+impl From<&CallbackRequestError> for ErrorEvent {
+    fn from(error: &CallbackRequestError) -> Self {
+        match error {
+            // MARS no longer knows this ad.
+            CallbackRequestError::HTTPError(HTTPError::Unexpected {
+                code: code @ (404 | 410),
+                ..
+            }) => Self::expected("callback_gone").code(code),
+            CallbackRequestError::HTTPError(e) => e.into(),
+            CallbackRequestError::InvalidUrl(_) => Self::unexpected("invalid_callback_url"),
+            CallbackRequestError::Json(e) => Self::invalid_response(e),
+            CallbackRequestError::MissingUserAgent => Self::unexpected("missing_user_agent"),
+            CallbackRequestError::Request(e) => e.into(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FetchAdsError {
     #[error("Error building ad request: {0}")]
@@ -57,6 +76,20 @@ pub enum FetchAdsError {
     UrlParse(#[from] url::ParseError),
 }
 
+impl From<&FetchAdsError> for ErrorEvent {
+    fn from(error: &FetchAdsError) -> Self {
+        match error {
+            FetchAdsError::BuildRequest(_) => Self::unexpected("invalid_request_config"),
+            FetchAdsError::HTTPError(e) => e.into(),
+            FetchAdsError::Json(e) => Self::invalid_response(e),
+            FetchAdsError::Preflight(e) => e.into(),
+            FetchAdsError::Request(e) => e.into(),
+            FetchAdsError::Sqlite(e) => e.into(),
+            FetchAdsError::UrlParse(_) => Self::unexpected("invalid_url"),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum HTTPError {
     #[error("Bad request ({code}): {message}")]
@@ -67,6 +100,20 @@ pub enum HTTPError {
 
     #[error("Unexpected error ({code}): {message}")]
     Unexpected { code: u16, message: String },
+}
+
+impl From<&HTTPError> for ErrorEvent {
+    fn from(error: &HTTPError) -> Self {
+        match error {
+            HTTPError::BadRequest { code, .. } => Self::unexpected("http_bad_request").code(code),
+            HTTPError::Server { code, .. } => Self::expected("http_server").code(code),
+            HTTPError::Unexpected { code: 408, .. } => Self::expected("timeout").code(408),
+            HTTPError::Unexpected { code: 429, .. } => Self::expected("http_throttled").code(429),
+            HTTPError::Unexpected { code, .. } => {
+                Self::unexpected("http_unexpected_status").code(code)
+            }
+        }
+    }
 }
 
 impl HTTPError {
@@ -173,6 +220,32 @@ mod tests {
         let result = HTTPError::check(&response);
         assert!(
             matches!(result, Err(HTTPError::BadRequest { code, message }) if code == 400 && message == "Bad input")
+        );
+    }
+
+    #[test]
+    fn test_http_statuses_are_classified() {
+        let event = |error: HTTPError| ErrorEvent::from(&FetchAdsError::from(error));
+        let unexpected = |code| HTTPError::Unexpected {
+            code,
+            message: "body".into(),
+        };
+        let server = HTTPError::Server {
+            code: 503,
+            message: "body".into(),
+        };
+        assert_eq!(event(server), ErrorEvent::expected("http_server").code(503));
+        assert_eq!(
+            event(unexpected(429)),
+            ErrorEvent::expected("http_throttled").code(429)
+        );
+        assert_eq!(
+            event(unexpected(404)),
+            ErrorEvent::unexpected("http_unexpected_status").code(404)
+        );
+        assert_eq!(
+            ErrorEvent::from(&CallbackRequestError::from(unexpected(404))),
+            ErrorEvent::expected("callback_gone").code(404)
         );
     }
 

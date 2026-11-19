@@ -10,6 +10,9 @@ import org.mozilla.appservices.adsclient.GleanMetrics.AdsClient
 /**
  * AdsClientTelemetry is a thin wrapper used to expose
  * callbacks used to emit telemetry events to Glean.
+ *
+ * Deprecated: the ads client records its metrics itself and never calls this.
+ * It stays until callers stop passing it to `MozAdsClientBuilder.telemetry()`.
  */
 class AdsClientTelemetry : MozAdsTelemetry {
     override fun recordBuildCacheError(label: String, value: String) {

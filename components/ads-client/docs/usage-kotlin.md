@@ -69,7 +69,7 @@ class MozAdsClientBuilder {
 - **`MozAdsClientBuilder()`** - Creates a new builder with default values
 - **`environment(environment: MozAdsEnvironment)`** - Sets the MARS environment (Prod, Staging, or Test)
 - **`cacheConfig(cacheConfig: MozAdsCacheConfig)`** - Sets the cache configuration
-- **`telemetry(telemetry: MozAdsTelemetry)`** - Sets the telemetry implementation
+- **`telemetry(telemetry: MozAdsTelemetry)`** - Deprecated and ignored: the client records its metrics itself
 - **`userAgent(userAgent: String)`** - Sets the browser's user agent
 - **`build()`** - Builds and returns the configured client
 
@@ -77,14 +77,14 @@ class MozAdsClientBuilder {
 | -------------- | --------------------- | ------------------------------------------------------------------------------------------------------ |
 | `environment`  | `MozAdsEnvironment`   | Selects which MARS environment to connect to. Unless in a dev build, this value can only ever be Prod. Defaults to Prod. |
 | `cacheConfig`  | `MozAdsCacheConfig?`  | Optional configuration for the internal cache.                                                         |
-| `telemetry`    | `MozAdsTelemetry?`    | Optional telemetry instance for recording metrics. Telemetry is process-wide: the most recently built client's instance receives metrics from every client.    |
+| `telemetry`    | `MozAdsTelemetry?`    | Deprecated and ignored: the client records its metrics itself.    |
 | `userAgent`    | `String?`             | The browser's user agent, for OHTTP requests (see the OHTTP note). |
 
 ---
 
 ## `MozAdsTelemetry`
 
-Telemetry interface for recording ads client metrics. You must provide an implementation of this interface to the `MozAdsClientBuilder` to enable telemetry collection. Telemetry is process-wide and meant to be set up once: building a client with a telemetry instance makes it the destination for metrics from every client in the process, replacing any instance installed before it. It is dropped when any client shuts down. Until an instance is installed, no metrics are recorded.
+Deprecated: the client records its metrics itself, straight from Rust, and never calls this interface. `telemetry()` drops an instance right away. Both will be removed once apps stop passing one.
 
 ```kotlin
 interface MozAdsTelemetry {

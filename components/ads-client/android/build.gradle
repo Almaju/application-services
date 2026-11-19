@@ -26,7 +26,7 @@ apply from: "$publishDir/publish.gradle"
 
 ext {
     gleanNamespace = "mozilla.telemetry.glean"
-    gleanYamlFiles = ["${project.projectDir}/../metrics.yaml"]
+    gleanYamlFiles = ["${project.projectDir}/../callback_metrics.yaml"]
     if (gradle.hasProperty("mozconfig")) {
         gleanPythonEnvDir = gradle.mozconfig.substs.GRADLE_GLEAN_PARSER_VENV
     }

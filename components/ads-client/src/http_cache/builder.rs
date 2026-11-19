@@ -9,7 +9,7 @@ use crate::clock::Clock;
 #[cfg(test)]
 use crate::clock::MockClock;
 use crate::http_cache::HttpCache;
-use crate::telemetry;
+use crate::telemetry::ErrorEvent;
 use crate::IN_MEMORY_DB_PATH;
 use rusqlite::OpenFlags;
 use sql_support::{open_database, LazyDb};
@@ -47,6 +47,19 @@ pub enum HttpCacheBuilderError {
         min_ttl: String,
         ttl: u64,
     },
+}
+
+impl From<&HttpCacheBuilderError> for ErrorEvent {
+    fn from(error: &HttpCacheBuilderError) -> Self {
+        match error {
+            HttpCacheBuilderError::Database(e) | HttpCacheBuilderError::DatabaseMemory(e) => {
+                e.into()
+            }
+            HttpCacheBuilderError::EmptyDbPath
+            | HttpCacheBuilderError::InvalidMaxSize { .. }
+            | HttpCacheBuilderError::InvalidTtl { .. } => Self::unexpected("cache_config"),
+        }
+    }
 }
 
 pub struct HttpCacheBuilder {
@@ -109,7 +122,7 @@ impl HttpCacheBuilder {
         if let Some(db_path) = &self.db_path {
             match open_connection(db_path) {
                 Ok(db) => return Ok(db),
-                Err(e) => telemetry::record_build_cache_error(&HttpCacheBuilderError::from(e)),
+                Err(e) => ErrorEvent::from(&e).record(None),
             }
         }
 
@@ -182,8 +195,6 @@ mod tests {
 
     #[test]
     fn test_unopenable_path_falls_back_to_memory_db() {
-        // The fallback records telemetry, so don't race the telemetry tests.
-        let _lock = crate::telemetry::test_lock();
         let cache = make_test_builder("this/is/a/test/bad/path")
             .build()
             .unwrap();

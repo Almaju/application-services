@@ -8,12 +8,17 @@ exclude = ["/android"]
 [features]
 dev = []
 default = []
+# Use Firefox-on-Glean to publish metrics (Desktop)
+# Note: if set, we will not use `glean-sym`
+glean-fog = ["dep:glean"]
 stateful = []
 
 [dependencies]
 chrono = "0.4"
 context_id = { path = "../context_id" }
 error-support = { path = "../support/error" }
+glean = { version = "71", optional = true }
+glean-sym = "71"
 parking_lot = "0.12"
 rusqlite = { version = "0.37.0", features = [
   "functions",
@@ -32,6 +37,10 @@ uuid = { version = "1.3", features = ["v4"] }
 viaduct = { path = "../viaduct", features = ["ohttp"] }
 sql-support = { path = "../support/sql" }
 
+[build-dependencies]
+glean-build = { git = "https://github.com/mozilla/glean", tag = "v71.0.0" }
+
 [dev-dependencies]
 mockito = { version = "0.31", default-features = false }
+tempfile = "3"
 viaduct-dev = { path = "../support/viaduct-dev" }

@@ -6,7 +6,7 @@ use super::connection_initializer::AdsStoreConnectionInitializer;
 use crate::ads_store::store::AdsStoreHolder;
 use crate::ads_store::AdsStore;
 use crate::bytesize::ByteSize;
-use crate::telemetry;
+use crate::telemetry::ErrorEvent;
 use crate::IN_MEMORY_DB_PATH;
 use rusqlite::OpenFlags;
 use sql_support::{open_database, LazyDb};
@@ -33,6 +33,17 @@ pub enum AdsStoreBuilderError {
         min_size: String,
         size_bytes: u64,
     },
+}
+
+impl From<&AdsStoreBuilderError> for ErrorEvent {
+    fn from(error: &AdsStoreBuilderError) -> Self {
+        match error {
+            AdsStoreBuilderError::Database(e) | AdsStoreBuilderError::DatabaseMemory(e) => e.into(),
+            AdsStoreBuilderError::EmptyDbPath | AdsStoreBuilderError::InvalidMaxSize { .. } => {
+                Self::unexpected("cache_config")
+            }
+        }
+    }
 }
 
 pub struct AdsStoreBuilder {
@@ -76,7 +87,7 @@ impl AdsStoreBuilder {
         if let Some(db_path) = &self.db_path {
             match open_connection(db_path) {
                 Ok(db) => return Ok(db),
-                Err(e) => telemetry::record_ads_store_error(&AdsStoreBuilderError::from(e)),
+                Err(e) => ErrorEvent::from(&e).record(None),
             }
         }
         // TODO: This is cast to DatabaseMemory rather than Database. Remove this when DatabaseMemory is removed.
@@ -133,8 +144,6 @@ mod tests {
 
     #[test]
     fn test_unopenable_path_falls_back_to_memory_db() {
-        // The fallback records telemetry, so don't race the telemetry tests.
-        let _lock = crate::telemetry::test_lock();
         let store = make_test_builder("this/is/a/test/bad/path")
             .build()
             .unwrap();

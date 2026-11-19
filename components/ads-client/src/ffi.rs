@@ -4,7 +4,7 @@
 */
 
 pub mod error;
-pub(crate) mod telemetry;
+mod telemetry;
 use crate::ads::{
     AdCallbacks, AdImage, AdImageOrSpoc, AdSpoc, AdTile, SpocFrequencyCaps, SpocRanking,
 };
@@ -24,8 +24,6 @@ use crate::MozAdsClient;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Weak;
 
 pub use error::{AdsClientApiResult, MozAdsClientApiError};
 pub use telemetry::MozAdsTelemetry;
@@ -97,7 +95,6 @@ struct MozAdsClientBuilderInner {
     environment: Option<MozAdsEnvironment>,
     #[cfg(feature = "stateful")]
     store_config: Option<MozAdsStoreConfig>,
-    telemetry: Option<Arc<dyn MozAdsTelemetry>>,
     user_agent: Option<NonEmptyString>,
 }
 
@@ -109,21 +106,15 @@ impl Default for MozAdsClientBuilder {
 
 #[uniffi::export]
 impl MozAdsClientBuilder {
-    /// A builder with the defaults: the production environment, no cache and
-    /// no telemetry.
+    /// A builder with the defaults: the production environment and no cache.
     #[uniffi::constructor]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Builds the client. A telemetry instance set on the builder becomes the
-    /// destination of every client's metrics in the process.
+    /// Builds the client.
     pub fn build(&self) -> MozAdsClient {
-        let mut inner = self.0.lock();
-        // Taken so the builder does not keep the callback alive.
-        if let Some(callback) = inner.telemetry.take() {
-            telemetry::install(callback);
-        }
+        let inner = self.0.lock();
         let client_config = AdsClientConfig {
             cache_config: inner.cache_config.clone().map(Into::into),
             environment: inner.environment.clone().unwrap_or_default().into(),
@@ -150,10 +141,10 @@ impl MozAdsClientBuilder {
         self
     }
 
-    /// Where the client records its metrics. Telemetry is process-wide: see
-    /// [`MozAdsTelemetry`].
+    /// Deprecated and ignored: the client records its metrics itself, and
+    /// drops `telemetry` right away without calling it.
     pub fn telemetry(self: Arc<Self>, telemetry: Box<dyn MozAdsTelemetry>) -> Arc<Self> {
-        self.0.lock().telemetry = Some(Arc::from(telemetry));
+        drop(telemetry);
         self
     }
 
@@ -173,13 +164,6 @@ impl MozAdsClientBuilder {
     pub fn store_config(self: Arc<Self>, store_config: MozAdsStoreConfig) -> Arc<Self> {
         self.0.lock().store_config = Some(store_config);
         self
-    }
-}
-
-impl MozAdsClientBuilder {
-    #[cfg(test)]
-    pub fn fetch_telemetry(&self) -> Option<Weak<dyn MozAdsTelemetry>> {
-        self.0.lock().telemetry.as_ref().map(Arc::downgrade)
     }
 }
 
@@ -546,96 +530,45 @@ impl From<&MozAdsPlacementRequestWithCount> for AdPlacementRequest {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        telemetry, test_utils::NoopMozAdsTelemetry, MozAdsCacheConfig, MozAdsClientBuilder,
-    };
+    use crate::{MozAdsCacheConfig, MozAdsClientBuilder, MozAdsTelemetry};
     use std::sync::Arc;
 
     #[test]
-    fn test_telemetry_not_held_by_builder() {
-        let _lock = telemetry::test_lock();
-        // Related to Bug 2064543
-        // The builder can hold a reference to the passed telemetry, meaning that if the builder still exists, `shutdown` doesn't drop all references.
+    fn test_telemetry_callback_is_dropped_unused() {
+        struct Callback {
+            _alive: Arc<()>,
+        }
 
-        // Make a builder and pass in telemetry.
-        let builder = Arc::new(MozAdsClientBuilder::new());
-        assert!(builder.fetch_telemetry().is_none());
-        let builder = MozAdsClientBuilder::telemetry(builder, Box::new(NoopMozAdsTelemetry));
-        let weak_telemetry = builder
-            .fetch_telemetry()
-            .expect("Telemetry should be set in builder after being passed");
-        assert_eq!(weak_telemetry.strong_count(), 1);
+        impl MozAdsTelemetry for Callback {
+            fn record_build_cache_error(&self, _label: String, _value: String) {}
+            fn record_client_error(&self, _label: String, _value: String) {}
+            fn record_client_operation_total(&self, _label: String) {}
+            fn record_deserialization_error(&self, _label: String, _value: String) {}
+            fn record_http_cache_outcome(&self, _label: String, _value: String) {}
+        }
 
-        // Building the MozAdsClient should pass the telemetry, not clone it.
-        let built_client = builder.build();
-        assert_eq!(weak_telemetry.strong_count(), 1);
-
-        // Shutting down, even though the builder still exists, should successfully shutdown all telemetry references.
-        built_client.shutdown().unwrap();
-        assert_eq!(weak_telemetry.strong_count(), 0);
-        builder.build();
-        assert_eq!(weak_telemetry.strong_count(), 0);
-    }
-
-    #[test]
-    fn test_shutdown_telemetry_basic() {
-        let _lock = telemetry::test_lock();
-        viaduct_dev::init_backend_dev();
-
-        // test with client created from config with no cache
-        let builder = Arc::new(MozAdsClientBuilder::new()).telemetry(Box::new(NoopMozAdsTelemetry));
-        let weak_reference = builder
-            .fetch_telemetry()
-            .expect("Inner telemetry should be Some in builder");
-        let client = builder.build();
-
-        // weak ref will show 0 strong references when the Arc<dyn MozAdsTelemetry> is gone.
-        assert_ne!(weak_reference.strong_count(), 0);
-        client.shutdown().unwrap();
-        assert_eq!(weak_reference.strong_count(), 0);
-
-        // test also with http cache
-        let builder = Arc::new(MozAdsClientBuilder::new())
-            .telemetry(Box::new(NoopMozAdsTelemetry))
-            .cache_config(MozAdsCacheConfig {
-                db_path: crate::IN_MEMORY_DB_PATH.to_string(),
-                default_cache_ttl_seconds: None,
-                max_size_mib: None,
-            });
-        let weak_reference = builder
-            .fetch_telemetry()
-            .expect("Inner telemetry should be Some in builder");
-        let client = builder.build();
-
-        // weak ref will show 0 strong references when the Arc<dyn MozAdsTelemetry> is gone.
-        assert_ne!(weak_reference.strong_count(), 0);
-        client.shutdown().unwrap();
-        assert_eq!(weak_reference.strong_count(), 0);
+        let alive = Arc::new(());
+        let builder = Arc::new(MozAdsClientBuilder::new()).telemetry(Box::new(Callback {
+            _alive: alive.clone(),
+        }));
+        assert_eq!(Arc::strong_count(&alive), 1);
+        builder.build().shutdown().unwrap();
     }
 
     #[test]
     fn test_shutdown_is_idempotent() {
-        let _lock = telemetry::test_lock();
         viaduct_dev::init_backend_dev();
 
-        let builder = Arc::new(MozAdsClientBuilder::new())
-            .telemetry(Box::new(NoopMozAdsTelemetry))
-            .cache_config(MozAdsCacheConfig {
-                db_path: crate::IN_MEMORY_DB_PATH.to_string(),
-                default_cache_ttl_seconds: None,
-                max_size_mib: None,
-            });
-        let weak_reference = builder
-            .fetch_telemetry()
-            .expect("Inner telemetry should be Some in builder");
+        let builder = Arc::new(MozAdsClientBuilder::new()).cache_config(MozAdsCacheConfig {
+            db_path: crate::IN_MEMORY_DB_PATH.to_string(),
+            default_cache_ttl_seconds: None,
+            max_size_mib: None,
+        });
         let client = builder.build();
-
-        client.shutdown().unwrap();
-        assert_eq!(weak_reference.strong_count(), 0);
 
         // Repeated shutdowns must not error or re-close an already closed connection.
         client.shutdown().unwrap();
         client.shutdown().unwrap();
-        assert_eq!(weak_reference.strong_count(), 0);
+        client.shutdown().unwrap();
     }
 }
