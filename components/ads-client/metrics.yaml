@@ -114,6 +114,7 @@ ads_client:
       - miss_stored
       - no_cache
       - store_failed
+      - trim_failed
     bugs:
       - https://github.com/mozilla/application-services/pull/7111
     data_reviews:

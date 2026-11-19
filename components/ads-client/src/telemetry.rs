@@ -18,6 +18,9 @@
 //! glean-sym means swapping that backend for one that talks to the generated
 //! metrics, and none of the recording sites have to change.
 //!
+//! glean-sym does not run on Desktop. There, the `glean-fog` feature records
+//! straight into Firefox-on-Glean whenever no callback is installed.
+//!
 //! Every function here is infallible and silent by design. Telemetry must never
 //! change the outcome of the operation it is describing.
 //!
