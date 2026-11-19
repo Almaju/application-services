@@ -11,8 +11,8 @@
 //! [`uninstall`] exist only because the FFI layer hands us a UniFFI callback
 //! that has to be dropped again before shutdown; glean-sym needs none of them.
 //!
-//! Until a callback is installed, and after it is uninstalled, recording is a
-//! no-op.
+//! Until a callback is installed, and after it is uninstalled, recording goes
+//! to Firefox-on-Glean with the `glean-fog` feature, and nowhere without it.
 
 #[cfg(test)]
 use std::collections::HashMap;
@@ -23,6 +23,13 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 
 use crate::bytesize::ByteSize;
+
+#[cfg(feature = "glean-fog")]
+mod glean_metrics {
+    include!(concat!(env!("OUT_DIR"), "/glean_metrics.rs"));
+}
+#[cfg(feature = "glean-fog")]
+use glean_metrics::ads_client;
 
 /// Receives the ads client's metrics.
 pub trait Telemetry: Send + Sync {
@@ -56,9 +63,40 @@ fn with_callback(f: impl FnOnce(&dyn Telemetry)) {
     // Clone out of the lock so a slow callback never holds up `install` or
     // `uninstall`.
     let Some(callback) = CALLBACK.read().clone() else {
+        #[cfg(feature = "glean-fog")]
+        f(&Fog);
         return;
     };
     f(callback.as_ref());
+}
+
+/// Records into Firefox-on-Glean, through the bindings `build.rs` generates
+/// from `metrics.yaml`. Only the parent process has a Glean to record into,
+/// which is where Desktop runs the ads client.
+#[cfg(feature = "glean-fog")]
+struct Fog;
+
+#[cfg(feature = "glean-fog")]
+impl Telemetry for Fog {
+    fn record_build_cache_error(&self, label: &str, value: String) {
+        ads_client::build_cache_error.get(label).set(value);
+    }
+
+    fn record_client_error(&self, label: &str, value: String) {
+        ads_client::client_error.get(label).set(value);
+    }
+
+    fn record_client_operation_total(&self, label: &str) {
+        ads_client::client_operation_total.get(label).add(1);
+    }
+
+    fn record_deserialization_error(&self, label: &str, value: String) {
+        ads_client::deserialization_error.get(label).set(value);
+    }
+
+    fn record_http_cache_outcome(&self, label: &str, value: String) {
+        ads_client::http_cache_outcome.get(label).set(value);
+    }
 }
 
 /// Glean drops the end of longer string values and records an
@@ -189,5 +227,26 @@ mod tests {
         recording.client_operation_totals.lock().clear();
         record_client_operation(ClientOperation::ReportAd);
         assert!(recording.client_operation_totals.lock().is_empty());
+    }
+
+    #[cfg(feature = "glean-fog")]
+    #[test]
+    fn test_records_into_glean_while_no_callback_is_installed() {
+        use glean::TestGetValue;
+
+        let _lock = test_lock();
+        let data_dir = tempfile::tempdir().unwrap();
+        glean::test_reset_glean(
+            glean::ConfigurationBuilder::new(true, data_dir.path(), "ads-client-test").build(),
+            glean::ClientInfoMetrics::unknown(),
+            true,
+        );
+
+        record_client_operation(ClientOperation::ReportAd);
+
+        assert!(ads_client::client_operation_total
+            .get("report_ad")
+            .test_get_value(None)
+            .is_some());
     }
 }

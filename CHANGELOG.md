@@ -2,6 +2,13 @@
 
 [Full Changelog](In progress)
 
+## ✨ What's Changed ✨
+
+### Ads-Client
+
+- New `glean-fog` feature for Desktop: while no `MozAdsTelemetry` is set, metrics are recorded directly from Rust with Firefox-on-Glean, so Desktop can stop passing one.
+- `ads_client.http_cache_outcome` declares the `trim_failed` label, which Android recorded as `__other__`.
+
 # v162.0 (_2026-11-19_)
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v161.0...v162.0)
