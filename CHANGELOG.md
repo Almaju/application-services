@@ -2,6 +2,10 @@
 
 [Full Changelog](In progress)
 
+### Sync Manager
+
+- Added the `sync_settings.engine_toggled` metric for per-device syncing, which records each time the user toggles an individual sync engine on or off ([#7813](https://github.com/mozilla/application-services/pull/7813)).
+
 # v162.0 (_2026-11-19_)
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v161.0...v162.0)
@@ -21,6 +25,10 @@ parses them directly with `clap::Parser::parse`. ([#7784](https://github.com/moz
 - Removed the deprecated `FxaRustAuthState` struct and the `get_auth_state()` method.
   Changed `FxaState::Authenticating::initial_state` to store a `FxaState` value.
 
+### Error support
+- Removed the `RustComponentsErrorTelemetry` type.  The Rust code now reports telemetry itself.
+  Use `error_support::report_error` if you want to manually trigger the ping.
+
 ## ✨ What's Changed ✨
 
 ### Android
@@ -33,6 +41,7 @@ parses them directly with `clap::Parser::parse`. ([#7784](https://github.com/moz
 
 - OHTTP requests always send `X-User-Agent`: the preflight's, else the new `MozAdsClientBuilder.userAgent()`, else viaduct's global default user agent. With none, the request fails.
 - The HTTP cache no longer keeps a response past its `Cache-Control: max-age` when the response was already old on arrival, for example a preflight served from the platform's HTTP cache.
+- An invalid `MozAdsCacheConfig` setting (a TTL or size out of range, or a blank path) now falls back to its own default and keeps the others, instead of dropping the whole configuration for a cache in memory. It is still recorded in `build_cache_error`.
 
 ### Autofill
 
